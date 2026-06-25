@@ -12,6 +12,7 @@ import { EngagementsModule } from './modules/engagements/engagements.module';
 import { MilestonesModule } from './modules/milestones/milestones.module';
 import { EventsModule } from './modules/events/events.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { UsersModule } from './modules/users/users.module';
 import { HealthModule } from './modules/health/health.module';
 
 @Module({
@@ -40,6 +41,7 @@ import { HealthModule } from './modules/health/health.module';
     MilestonesModule,
     EventsModule,
     NotificationsModule,
+    UsersModule,
     HealthModule,
   ],
 })

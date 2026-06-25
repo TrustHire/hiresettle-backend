@@ -71,12 +71,25 @@ model User {
   updatedAt      DateTime  @updatedAt
 
   // Relations
-  companyEngagements   Engagement[]   @relation("CompanyEngagements")
-  recruiterEngagements Engagement[]   @relation("RecruiterEngagements")
-  arbiterEngagements   Engagement[]   @relation("ArbiterEngagements")
-  notifications        Notification[]
+  companyEngagements      Engagement[]             @relation("CompanyEngagements")
+  recruiterEngagements    Engagement[]             @relation("RecruiterEngagements")
+  arbiterEngagements      Engagement[]             @relation("ArbiterEngagements")
+  notifications           Notification[]
+  notificationPreferences NotificationPreference[]
 
   @@map("users")
+}
+
+model NotificationPreference {
+  id           String           @id @default(uuid())
+  userId       String
+  type         NotificationType
+  emailEnabled Boolean          @default(true)
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, type])
+  @@map("notification_preferences")
 }
 
 model Engagement {
