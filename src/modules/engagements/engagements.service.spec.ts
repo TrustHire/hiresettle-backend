@@ -15,7 +15,7 @@ const mockPrisma = {
   retentionSchedule: {
     create: jest.fn(),
   },
-  $transaction: jest.fn(),
+  $transaction: jest.fn((fn) => fn(mockPrisma)),
 };
 
 const mockStellar = {
@@ -23,6 +23,8 @@ const mockStellar = {
   ledgerToDateTime: jest.fn().mockReturnValue(new Date('2026-07-15')),
   simulateContractCall: jest.fn(),
   stroopsToUsdc: jest.fn().mockReturnValue('500.00'),
+  checkTokenBalance: jest.fn().mockResolvedValue({ sufficient: true, balance: BigInt('10000000000') }),
+  submitCreateEngagement: jest.fn().mockResolvedValue({ txHash: 'abc123', ledger: 1000001 }),
 };
 
 describe('EngagementsService', () => {

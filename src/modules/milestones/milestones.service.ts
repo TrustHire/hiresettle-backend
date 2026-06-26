@@ -74,7 +74,7 @@ export class MilestonesService {
     if (!milestone) return;
 
     try {
-      await this.stellar.unlockRetentionMilestone(
+      const txHash = await this.stellar.unlockRetentionMilestone(
         milestone.engagementId,
         milestone.milestoneIndex,
       );
@@ -105,7 +105,7 @@ export class MilestonesService {
 
     await this.prisma.milestone.update({
       where: { id: milestoneId },
-      data: { approachingNotificationSent: true } as any,
+      data: { approachingNotificationSent: true } as any, // fallback handling if field is implicit
     });
 
     await this.prisma.retentionSchedule.updateMany({
@@ -292,6 +292,10 @@ export class MilestonesService {
         ...(approved && paymentReleased ? { paymentReleased, confirmedAt: new Date() } : {}),
       },
     });
+  }
+
+  async resolveDispute(engagementId: string, milestoneIndex: number, approved: boolean) {
+    return this.markResolved(engagementId, milestoneIndex, approved);
   }
 
   /**

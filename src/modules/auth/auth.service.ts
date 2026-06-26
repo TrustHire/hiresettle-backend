@@ -2,7 +2,7 @@ import { Injectable, UnauthorizedException, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { LoginDto } from './dto/login.dto';
-import { UserRole } from '@prisma/client';
+import { Keypair } from '@stellar/stellar-sdk';
 
 @Injectable()
 export class AuthService {
@@ -14,7 +14,7 @@ export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
-  ) {}
+  ) { }
 
   generateNonce(stellarAddress: string): string {
     const nonce = `hiresettle:${stellarAddress}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
@@ -25,7 +25,7 @@ export class AuthService {
     return nonce;
   }
 
-  async login(dto: LoginDto): Promise<{ accessToken: string; user: any }> {
+  async walletLogin(dto: LoginDto): Promise<{ accessToken: string; user: any }> {
     const { stellarAddress, signedNonce, signature } = dto;
 
     const stored = this.nonces.get(stellarAddress);
@@ -33,13 +33,29 @@ export class AuthService {
       throw new UnauthorizedException('Nonce expired or not found. Request a new one.');
     }
 
-    // TODO: wire up Keypair.verify() before production
-    // const keypair = Keypair.fromPublicKey(stellarAddress);
-    // const isValid = keypair.verify(Buffer.from(stored.nonce), Buffer.from(signature, 'base64'));
-    // if (!isValid) throw new UnauthorizedException('Invalid signature');
-    const isValid = true; // STUB
+    if (signedNonce !== stored.nonce) {
+      throw new UnauthorizedException('Signed nonce does not match the challenge.');
+    }
 
-    if (!isValid) throw new UnauthorizedException('Signature verification failed');
+    let sigBytes: Uint8Array;
+    try {
+      sigBytes = Uint8Array.from(Buffer.from(signature, 'base64'));
+    } catch {
+      throw new UnauthorizedException('Invalid signature encoding (expected base64).');
+    }
+
+    let keypair: Keypair;
+    try {
+      keypair = Keypair.fromPublicKey(stellarAddress);
+    } catch {
+      throw new UnauthorizedException('Invalid Stellar address.');
+    }
+
+    const msgBytes = Buffer.from(stored.nonce, 'utf8');
+    const isValid = keypair.verify(msgBytes, sigBytes);
+    if (!isValid) {
+      throw new UnauthorizedException('Invalid signature');
+    }
 
     this.nonces.delete(stellarAddress);
 
@@ -58,4 +74,19 @@ export class AuthService {
     this.logger.log(`User authenticated: ${stellarAddress}`);
     return { accessToken, user };
   }
+
+  async updateProfile(userId: string, dto: any) {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        ...(dto.name !== undefined ? { name: dto.name } : {}),
+        ...(dto.company !== undefined ? { company: dto.company } : {}),
+        ...(dto.webhookUrl !== undefined ? { webhookUrl: dto.webhookUrl } : {}),
+      },
+    });
+  // Backward-compatible method name
+  login(dto: LoginDto): Promise<{ accessToken: string; user: any }> {
+    return this.walletLogin(dto);
+  }
 }
+

@@ -6,6 +6,7 @@ import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
+import { TooManyRequestsHeadersFilter } from './common/filters/too-many-requests-headers.filter';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
@@ -36,8 +37,16 @@ async function bootstrap() {
     }),
   );
 
-  app.useGlobalFilters(new HttpExceptionFilter());
   app.useGlobalInterceptors(new TransformInterceptor());
+
+  // Ensure TooManyRequests always has required headers.
+  // Keep HttpExceptionFilter as the primary formatter.
+  app.useGlobalFilters(new TooManyRequestsHeadersFilter());
+  app.useGlobalFilters(new HttpExceptionFilter());
+
+
+
+
 
   const swaggerConfig = new DocumentBuilder()
     .setTitle('HireSettle API')

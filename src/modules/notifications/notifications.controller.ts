@@ -3,13 +3,17 @@ import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger'
 import { NotificationsService } from './notifications.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { Throttle } from '@nestjs/throttler';
+import { UserJwtSubThrottlerGuard } from '../../common/guards/user-jwt-sub-throttler.guard';
 
 @ApiTags('notifications')
 @ApiBearerAuth()
+@UseGuards(UserJwtSubThrottlerGuard)
 @UseGuards(JwtAuthGuard)
+@Throttle({ limit: 100, ttl: 60 })
 @Controller('notifications')
 export class NotificationsController {
-  constructor(private readonly notificationsService: NotificationsService) {}
+  constructor(private readonly notificationsService: NotificationsService) { }
 
   @Get()
   @ApiOperation({ summary: 'Get notifications for the authenticated user' })

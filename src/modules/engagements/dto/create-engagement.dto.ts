@@ -1,9 +1,30 @@
 import {
   IsString, IsNotEmpty, IsArray, ValidateNested,
-  IsInt, Min, Max, IsOptional, IsIn,
+  IsInt, Min, Max, IsOptional, IsIn, registerDecorator, ValidationOptions, ValidationArguments,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
+
+export function MilestonesSum100(validationOptions?: ValidationOptions) {
+  return function (object: Object, propertyName: string) {
+    registerDecorator({
+      name: 'milestonesSum100',
+      target: object.constructor,
+      propertyName: propertyName,
+      options: validationOptions,
+      validator: {
+        validate(value: any, args: ValidationArguments) {
+          if (!Array.isArray(value)) return false;
+          const sum = value.reduce((acc, m) => acc + (m.paymentPercent || 0), 0);
+          return sum === 100;
+        },
+        defaultMessage(args: ValidationArguments) {
+          return 'Milestone paymentPercent values must sum to exactly 100';
+        },
+      },
+    });
+  };
+}
 
 export class MilestoneInputDto {
   @ApiProperty({ example: 'Candidate Placed' })
@@ -64,6 +85,7 @@ export class CreateEngagementDto {
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => MilestoneInputDto)
+  @MilestonesSum100()
   milestones: MilestoneInputDto[];
 
   @ApiProperty({
@@ -75,12 +97,4 @@ export class CreateEngagementDto {
   @IsOptional()
   @IsArray()
   retentionDays?: number[];
-
-  @ApiProperty({ required: false })
-  @IsOptional() @IsString()
-  txHash?: string;
-
-  @ApiProperty({ required: false })
-  @IsOptional() @IsInt()
-  createdLedger?: number;
 }

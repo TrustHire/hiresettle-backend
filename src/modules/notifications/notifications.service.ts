@@ -43,11 +43,18 @@ export class NotificationsService {
       });
 
       if (user.email) {
-        await this.sendEmail(user.email, title, message, type);
-        await this.prisma.notification.update({
-          where: { id: notification.id },
-          data: { emailSent: true },
+        const pref = await this.prisma.notificationPreference.findUnique({
+          where: { userId_type: { userId: user.id, type } },
         });
+        const emailEnabled = pref ? pref.emailEnabled : true;
+
+        if (emailEnabled) {
+          await this.sendEmail(user.email, title, message, type);
+          await this.prisma.notification.update({
+            where: { id: notification.id },
+            data: { emailSent: true },
+          });
+        }
       }
 
       return notification;

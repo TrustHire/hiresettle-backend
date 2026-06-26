@@ -1,11 +1,10 @@
 import {
-  Injectable, NotFoundException, ConflictException, Logger,
+  Injectable, NotFoundException, ConflictException, BadRequestException, Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
 import { CreateEngagementDto } from './dto/create-engagement.dto';
 import { EngagementStatus, MilestoneKind, MilestoneStatus } from '@prisma/client';
-import { addDays } from '../../common/utils/date.util';
 
 @Injectable()
 export class EngagementsService {
@@ -17,14 +16,9 @@ export class EngagementsService {
   ) {}
 
   // ----------------------------------------------------------
-  // CREATE — called after the on-chain tx is confirmed
+  // CREATE — validates, checks balance, submits on-chain, persists
   // ----------------------------------------------------------
 
-  /**
-   * Registers a new engagement in the DB after the company has
-   * submitted the create_engagement tx on-chain via Freighter.
-   * Also creates RetentionSchedule records for the cron job.
-   */
   async create(dto: CreateEngagementDto) {
     const existing = await this.prisma.engagement.findUnique({
       where: { id: dto.engagementId },
@@ -33,20 +27,47 @@ export class EngagementsService {
       throw new ConflictException(`Engagement ${dto.engagementId} already exists`);
     }
 
+    // 1. Check company has sufficient token balance
+    const { sufficient, balance } = await this.stellar.checkTokenBalance(
+      dto.companyAddress,
+      dto.tokenAddress,
+      BigInt(dto.totalAmount),
+    );
+    if (!sufficient) {
+      throw new BadRequestException(
+        `Insufficient token balance. Required: ${dto.totalAmount} stroops, available: ${balance.toString()}`,
+      );
+    }
+
+    // 2. Submit on-chain create_engagement transaction
+    const retentionMilestones = dto.milestones.filter((m) => m.kind === 'RETENTION');
+    const { txHash, ledger: createdLedger } = await this.stellar.submitCreateEngagement({
+      engagementId: dto.engagementId,
+      companyAddress: dto.companyAddress,
+      recruiterAddress: dto.recruiterAddress,
+      arbiterAddress: dto.arbiterAddress,
+      tokenAddress: dto.tokenAddress,
+      totalAmount: dto.totalAmount,
+      milestones: dto.milestones.map((m, index) => ({
+        name: m.name,
+        paymentPercent: m.paymentPercent,
+        kind: m.kind,
+        retentionDays: m.kind === 'RETENTION'
+          ? dto.retentionDays?.[retentionMilestones.indexOf(m)] ?? undefined
+          : undefined,
+      })),
+    });
+
     const currentLedger = await this.stellar.getLatestLedger();
 
-    // Build milestone records with unlock estimates for Retention milestones
+    // 3. Build milestone data with unlock estimates
+    let retentionIdx = 0;
     const milestoneData = dto.milestones.map((m, index) => {
       const isRetention = m.kind === 'RETENTION';
-      const retentionDays = isRetention && dto.retentionDays?.[
-        dto.milestones.filter((x, i) => x.kind === 'RETENTION' && i <= index).length - 1
-      ];
-
-      // valid_after_ledger = creation_ledger + (days × 17280)
+      const retentionDays = isRetention ? (dto.retentionDays?.[retentionIdx++] ?? null) : null;
       const validAfterLedger = isRetention && retentionDays
-        ? (dto.createdLedger ?? currentLedger) + (retentionDays * 17_280)
+        ? createdLedger + (retentionDays * 17_280)
         : null;
-
       const unlockEstimatedAt = validAfterLedger
         ? this.stellar.ledgerToDateTime(validAfterLedger, currentLedger)
         : null;
@@ -56,50 +77,52 @@ export class EngagementsService {
         name: m.name,
         kind: m.kind as MilestoneKind,
         paymentPercent: m.paymentPercent,
-        retentionDays: isRetention ? retentionDays : null,
+        retentionDays,
         validAfterLedger: validAfterLedger ?? null,
         unlockEstimatedAt,
-        status: isRetention
-          ? MilestoneStatus.LOCKED
-          : MilestoneStatus.PENDING,
+        status: isRetention ? MilestoneStatus.LOCKED : MilestoneStatus.PENDING,
       };
     });
 
-    const engagement = await this.prisma.engagement.create({
-      data: {
-        id: dto.engagementId,
-        companyAddress: dto.companyAddress,
-        recruiterAddress: dto.recruiterAddress,
-        arbiterAddress: dto.arbiterAddress,
-        tokenAddress: dto.tokenAddress,
-        totalAmount: BigInt(dto.totalAmount),
-        jobTitle: dto.jobTitle,
-        jobDescription: dto.jobDescription,
-        salaryRange: dto.salaryRange,
-        location: dto.location,
-        txHash: dto.txHash,
-        createdLedger: dto.createdLedger ?? currentLedger,
-        milestones: { create: milestoneData },
-      },
-      include: { milestones: { orderBy: { milestoneIndex: 'asc' } } },
+    // 4. Persist engagement + milestones + retention schedules atomically
+    const engagement = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.engagement.create({
+        data: {
+          id: dto.engagementId,
+          companyAddress: dto.companyAddress,
+          recruiterAddress: dto.recruiterAddress,
+          arbiterAddress: dto.arbiterAddress,
+          tokenAddress: dto.tokenAddress,
+          totalAmount: BigInt(dto.totalAmount),
+          jobTitle: dto.jobTitle,
+          jobDescription: dto.jobDescription,
+          salaryRange: dto.salaryRange,
+          location: dto.location,
+          txHash,
+          createdLedger,
+          milestones: { create: milestoneData },
+        },
+        include: { milestones: { orderBy: { milestoneIndex: 'asc' } } },
+      });
+
+      for (const m of created.milestones) {
+        if (m.kind === MilestoneKind.RETENTION && m.unlockEstimatedAt && m.validAfterLedger) {
+          await tx.retentionSchedule.create({
+            data: {
+              engagementId: created.id,
+              milestoneIndex: m.milestoneIndex,
+              validAfterLedger: m.validAfterLedger,
+              unlockAt: m.unlockEstimatedAt,
+              notifyAt: new Date(m.unlockEstimatedAt.getTime() - 3 * 24 * 60 * 60 * 1000),
+            },
+          });
+        }
+      }
+
+      return created;
     });
 
-    // Create retention schedule entries for the cron job
-    for (const m of engagement.milestones) {
-      if (m.kind === MilestoneKind.RETENTION && m.unlockEstimatedAt) {
-        await this.prisma.retentionSchedule.create({
-          data: {
-            engagementId: engagement.id,
-            milestoneIndex: m.milestoneIndex,
-            validAfterLedger: m.validAfterLedger!,
-            unlockAt: m.unlockEstimatedAt,
-            notifyAt: new Date(m.unlockEstimatedAt.getTime() - 3 * 24 * 60 * 60 * 1000), // 3 days before
-          },
-        });
-      }
-    }
-
-    this.logger.log(`Engagement created: ${engagement.id}`);
+    this.logger.log(`Engagement created on-chain and persisted: ${engagement.id} (tx: ${txHash})`);
     return this.serialize(engagement);
   }
 
@@ -110,16 +133,33 @@ export class EngagementsService {
   async findAll(filters: {
     companyAddress?: string;
     recruiterAddress?: string;
-    status?: EngagementStatus;
+    status?: string;       // single value or comma-separated list
+    search?: string;       // partial case-insensitive match on jobTitle
+    createdFrom?: string;  // ISO date string
+    createdTo?: string;    // ISO date string
     page?: number;
     limit?: number;
   }) {
-    const { companyAddress, recruiterAddress, status, page = 1, limit = 20 } = filters;
+    const { companyAddress, recruiterAddress, status, search, createdFrom, createdTo, page = 1, limit = 20 } = filters;
 
     const where: any = {};
     if (companyAddress) where.companyAddress = companyAddress;
     if (recruiterAddress) where.recruiterAddress = recruiterAddress;
-    if (status) where.status = status;
+
+    if (status) {
+      const statuses = status.split(',').map((s) => s.trim()) as EngagementStatus[];
+      where.status = statuses.length === 1 ? statuses[0] : { in: statuses };
+    }
+
+    if (search) {
+      where.jobTitle = { contains: search, mode: 'insensitive' };
+    }
+
+    if (createdFrom || createdTo) {
+      where.createdAt = {};
+      if (createdFrom) where.createdAt.gte = new Date(createdFrom);
+      if (createdTo) where.createdAt.lte = new Date(createdTo);
+    }
 
     const [engagements, total] = await this.prisma.$transaction([
       this.prisma.engagement.findMany({

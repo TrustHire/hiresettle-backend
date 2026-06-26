@@ -5,6 +5,7 @@ import { StellarService } from '../../common/stellar/stellar.service';
 import { MilestonesService } from '../milestones/milestones.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { EngagementsService } from '../engagements/engagements.service';
+import { WebhooksService } from '../webhooks/webhooks.service';
 import { NotificationType } from '@prisma/client';
 
 /**
@@ -12,20 +13,11 @@ import { NotificationType } from '@prisma/client';
  *
  * Polls the Stellar RPC every 5 seconds for HireSettle contract events.
  * When events are detected:
- *   1. Routes each event to the correct handler
- *   2. Updates Prisma DB records (engagement status, milestone status)
- *   3. Dispatches notifications to company, recruiter, or arbiter
- *   4. Saves raw event to chain_events for audit trail
- *
- * HireSettle events (from the contract):
- *   - engagement_created
- *   - milestone_unlocked
- *   - proof_submitted
- *   - milestone_confirmed
- *   - dispute_raised
- *   - dispute_resolved
- *   - replacement_requested
- *   - engagement_cancelled
+ * 1. Routes each event to the correct handler
+ * 2. Updates Prisma DB records (engagement status, milestone status)
+ * 3. Dispatches notifications to company, recruiter, or arbiter
+ * 4. Dispatches background HTTP webhooks to company-registered URLs
+ * 5. Saves raw event to chain_events for audit trail
  */
 @Injectable()
 export class EventsService implements OnModuleInit {
@@ -38,6 +30,7 @@ export class EventsService implements OnModuleInit {
     private readonly milestones: MilestonesService,
     private readonly notifications: NotificationsService,
     private readonly engagements: EngagementsService,
+    private readonly webhooks: WebhooksService,
   ) {}
 
   async onModuleInit() {
@@ -96,14 +89,43 @@ export class EventsService implements OnModuleInit {
   }
 
   // ----------------------------------------------------------
+  // WEBHOOK DISPATCH HELPER
+  // ----------------------------------------------------------
+
+  private async dispatchWebhookIfConfigured(
+    companyAddress: string,
+    eventDetails: {
+      event: 'COMPLETED' | 'CANCELLED' | 'REPLACEMENT_REQUESTED' | 'DISPUTE_RAISED' | 'PAYMENT_RELEASED';
+      engagementId: string;
+      status: string;
+    }
+  ) {
+    try {
+      const companyUser = await this.prisma.user.findFirst({
+        where: { stellarAddress: companyAddress },
+        select: { webhookUrl: true },
+      });
+
+      if (companyUser?.webhookUrl) {
+        await this.webhooks.sendWebhook(companyUser.webhookUrl, {
+          event: eventDetails.event,
+          engagementId: eventDetails.engagementId,
+          status: eventDetails.status,
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (err) {
+      this.logger.error(`Webhook runtime dispatcher encounter error for engagement ${eventDetails.engagementId}:`, err.message);
+    }
+  }
+
+  // ----------------------------------------------------------
   // EVENT HANDLERS
   // ----------------------------------------------------------
 
   private async handleEngagementCreated(payload: any) {
     const engagementId = String(payload);
     this.logger.log(`Engagement created on-chain: ${engagementId}`);
-    // The record is created by POST /engagements from the frontend.
-    // This handler is a safety net in case the frontend call was missed.
   }
 
   private async handleMilestoneUnlocked(payload: any) {
@@ -112,7 +134,6 @@ export class EventsService implements OnModuleInit {
 
     await this.milestones.markUnlocked(String(engagementId), Number(milestoneIndex));
 
-    // Mark the retention schedule as unlocked
     await this.prisma.retentionSchedule.updateMany({
       where: { engagementId: String(engagementId), milestoneIndex: Number(milestoneIndex) },
       data: { unlocked: true },
@@ -178,6 +199,13 @@ export class EventsService implements OnModuleInit {
         `$${usdcAmount} USDC has been released for milestone ${milestoneIndex} on engagement ${engagementId}.`,
         { engagementId, milestoneIndex, amount: usdcAmount },
       );
+
+      // Trigger Outgoing Webhook Event
+      await this.dispatchWebhookIfConfigured(engagement.companyAddress, {
+        event: 'PAYMENT_RELEASED',
+        engagementId: String(engagementId),
+        status: engagement.status,
+      });
     }
   }
 
@@ -200,6 +228,13 @@ export class EventsService implements OnModuleInit {
           { engagementId, milestoneIndex },
         );
       }
+
+      // Trigger Outgoing Webhook Event
+      await this.dispatchWebhookIfConfigured(engagement.companyAddress, {
+        event: 'DISPUTE_RAISED',
+        engagementId: String(engagementId),
+        status: 'DISPUTED',
+      });
     }
   }
 
@@ -225,6 +260,13 @@ export class EventsService implements OnModuleInit {
           { engagementId, milestoneIndex, approved },
         );
       }
+
+      // Trigger Outgoing Webhook Event
+      await this.dispatchWebhookIfConfigured(engagement.companyAddress, {
+        event: approved ? 'COMPLETED' : 'PAYMENT_RELEASED',
+        engagementId: String(engagementId),
+        status: engagement.status,
+      });
     }
   }
 
@@ -251,6 +293,13 @@ export class EventsService implements OnModuleInit {
         `The company has requested a replacement candidate for engagement ${engagementId}. Please submit proof for the new placement when ready.`,
         { engagementId },
       );
+
+      // Trigger Outgoing Webhook Event
+      await this.dispatchWebhookIfConfigured(engagement.companyAddress, {
+        event: 'REPLACEMENT_REQUESTED',
+        engagementId: engagementId,
+        status: 'REPLACEMENT_REQUESTED',
+      });
     }
   }
 
@@ -274,6 +323,13 @@ export class EventsService implements OnModuleInit {
         `Engagement ${engagementId} has been cancelled by the company. No further payments will be made.`,
         { engagementId },
       );
+
+      // Trigger Outgoing Webhook Event
+      await this.dispatchWebhookIfConfigured(engagement.companyAddress, {
+        event: 'CANCELLED',
+        engagementId: String(engagementId),
+        status: 'CANCELLED',
+      });
     }
   }
 

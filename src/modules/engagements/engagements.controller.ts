@@ -9,48 +9,69 @@ import {
 import { EngagementsService } from './engagements.service';
 import { CreateEngagementDto } from './dto/create-engagement.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { Roles } from '../../common/decorators/roles.decorator';
+import { UserRole } from '@prisma/client';
 import { EngagementStatus } from '@prisma/client';
+import { Throttle } from '@nestjs/throttler';
+import { UserJwtSubThrottlerGuard } from '../../common/guards/user-jwt-sub-throttler.guard';
 
 @ApiTags('engagements')
 @ApiBearerAuth()
+@UseGuards(UserJwtSubThrottlerGuard)
 @UseGuards(JwtAuthGuard)
+@Throttle({ limit: 100, ttl: 60 })
 @Controller('engagements')
 export class EngagementsController {
-  constructor(private readonly engagementsService: EngagementsService) {}
+  constructor(private readonly engagementsService: EngagementsService) { }
 
-  /**
-   * POST /api/v1/engagements
-   * Called by the frontend after the company has signed and broadcast
-   * the create_engagement tx via Freighter.
-   */
   @Post()
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.COMPANY)
   @HttpCode(HttpStatus.CREATED)
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.COMPANY)
   @ApiOperation({ summary: 'Register a newly created on-chain engagement' })
+  @ApiOperation({ summary: 'Create engagement with on-chain escrow (COMPANY only)' })
   create(@Body() dto: CreateEngagementDto) {
     return this.engagementsService.create(dto);
   }
 
   /**
    * GET /api/v1/engagements
-   * List with optional filters. Company sees their posted roles.
-   * Recruiter sees their assigned engagements.
+   * List with optional filters: search, status (single/multi), date range, pagination.
    */
   @Get()
-  @ApiOperation({ summary: 'List engagements with filters and pagination' })
+  @ApiOperation({ summary: 'List engagements with flexible filters and pagination' })
   @ApiQuery({ name: 'companyAddress', required: false })
   @ApiQuery({ name: 'recruiterAddress', required: false })
-  @ApiQuery({ name: 'status', required: false, enum: EngagementStatus })
+  @ApiQuery({ name: 'status', required: false, description: 'Single value or comma-separated (e.g., ACTIVE,COMPLETED)' })
+  @ApiQuery({ name: 'search', required: false, description: 'Case-insensitive partial match on jobTitle' })
+  @ApiQuery({ name: 'createdFrom', required: false, description: 'ISO date string (e.g., 2026-01-01)' })
+  @ApiQuery({ name: 'createdTo', required: false, description: 'ISO date string (e.g., 2026-12-31)' })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   findAll(
     @Query('companyAddress') companyAddress?: string,
     @Query('recruiterAddress') recruiterAddress?: string,
-    @Query('status') status?: EngagementStatus,
+    @Query('status') status?: string,
+    @Query('search') search?: string,
+    @Query('createdFrom') createdFrom?: string,
+    @Query('createdTo') createdTo?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
   ) {
-    return this.engagementsService.findAll({ companyAddress, recruiterAddress, status, page, limit });
+    return this.engagementsService.findAll({
+      companyAddress,
+      recruiterAddress,
+      status,
+      search,
+      createdFrom,
+      createdTo,
+      page,
+      limit,
+    });
   }
 
   /**
