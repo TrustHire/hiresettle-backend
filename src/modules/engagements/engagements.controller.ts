@@ -32,24 +32,38 @@ export class EngagementsController {
 
   /**
    * GET /api/v1/engagements
-   * List with optional filters. Company sees their posted roles.
-   * Recruiter sees their assigned engagements.
+   * List with optional filters: search, status (single/multi), date range, pagination.
    */
   @Get()
-  @ApiOperation({ summary: 'List engagements with filters and pagination' })
+  @ApiOperation({ summary: 'List engagements with flexible filters and pagination' })
   @ApiQuery({ name: 'companyAddress', required: false })
   @ApiQuery({ name: 'recruiterAddress', required: false })
-  @ApiQuery({ name: 'status', required: false, enum: EngagementStatus })
+  @ApiQuery({ name: 'status', required: false, description: 'Single value or comma-separated (e.g., ACTIVE,COMPLETED)' })
+  @ApiQuery({ name: 'search', required: false, description: 'Case-insensitive partial match on jobTitle' })
+  @ApiQuery({ name: 'createdFrom', required: false, description: 'ISO date string (e.g., 2026-01-01)' })
+  @ApiQuery({ name: 'createdTo', required: false, description: 'ISO date string (e.g., 2026-12-31)' })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   findAll(
     @Query('companyAddress') companyAddress?: string,
     @Query('recruiterAddress') recruiterAddress?: string,
-    @Query('status') status?: EngagementStatus,
+    @Query('status') status?: string,
+    @Query('search') search?: string,
+    @Query('createdFrom') createdFrom?: string,
+    @Query('createdTo') createdTo?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
   ) {
-    return this.engagementsService.findAll({ companyAddress, recruiterAddress, status, page, limit });
+    return this.engagementsService.findAll({
+      companyAddress,
+      recruiterAddress,
+      status,
+      search,
+      createdFrom,
+      createdTo,
+      page,
+      limit,
+    });
   }
 
   /**

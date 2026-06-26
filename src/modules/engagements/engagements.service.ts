@@ -133,16 +133,33 @@ export class EngagementsService {
   async findAll(filters: {
     companyAddress?: string;
     recruiterAddress?: string;
-    status?: EngagementStatus;
+    status?: string;       // single value or comma-separated list
+    search?: string;       // partial case-insensitive match on jobTitle
+    createdFrom?: string;  // ISO date string
+    createdTo?: string;    // ISO date string
     page?: number;
     limit?: number;
   }) {
-    const { companyAddress, recruiterAddress, status, page = 1, limit = 20 } = filters;
+    const { companyAddress, recruiterAddress, status, search, createdFrom, createdTo, page = 1, limit = 20 } = filters;
 
     const where: any = {};
     if (companyAddress) where.companyAddress = companyAddress;
     if (recruiterAddress) where.recruiterAddress = recruiterAddress;
-    if (status) where.status = status;
+
+    if (status) {
+      const statuses = status.split(',').map((s) => s.trim()) as EngagementStatus[];
+      where.status = statuses.length === 1 ? statuses[0] : { in: statuses };
+    }
+
+    if (search) {
+      where.jobTitle = { contains: search, mode: 'insensitive' };
+    }
+
+    if (createdFrom || createdTo) {
+      where.createdAt = {};
+      if (createdFrom) where.createdAt.gte = new Date(createdFrom);
+      if (createdTo) where.createdAt.lte = new Date(createdTo);
+    }
 
     const [engagements, total] = await this.prisma.$transaction([
       this.prisma.engagement.findMany({
