@@ -52,6 +52,9 @@ export class MilestonesController {
     @Param('index', ParseIntPipe) index: number,
     @Body() dto: ResolveDisputeDto,
   ) {
-    return this.milestonesService.resolveDispute(engagementId, index, dto.approved);
+    if (req.user.role !== UserRole.ARBITER) {
+      throw new ForbiddenException('Only assigned arbiters can resolve structural disputes.');
+    }
+    return this.milestonesService.resolveDisputeFlow(engagementId, index, dto.resolution);
   }
 }

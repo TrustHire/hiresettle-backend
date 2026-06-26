@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, Logger, UnprocessableEntityException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
 import { MilestoneStatus } from '@prisma/client';
@@ -124,6 +124,126 @@ export class MilestonesService {
   }
 
   // ----------------------------------------------------------
+  // MILESTONE STATE MACHINE TRANSITIONS (Issue #44)
+  // ----------------------------------------------------------
+
+  async submitProofFlow(engagementId: string, milestoneIndex: number, proofHash: string) {
+    const milestone = await this.findOne(engagementId, milestoneIndex);
+    if (milestone.status !== MilestoneStatus.PENDING) {
+      throw new UnprocessableEntityException('Milestone must be PENDING to submit proof.');
+    }
+
+    const updated = await this.markProofSubmitted(engagementId, milestoneIndex, proofHash);
+
+    const engagement = await this.prisma.engagement.findUnique({ where: { id: engagementId } });
+    if (engagement) {
+      await this.prisma.notification.create({
+        data: {
+          userId: engagement.companyId || '', 
+          type: 'PROOF_SUBMITTED',
+          title: 'Proof Submitted',
+          message: `Proof documentation has been submitted for milestone ${milestoneIndex}. Please confirm or dispute.`,
+        } as any
+      });
+    }
+
+    return updated;
+  }
+
+  async confirmFlow(engagementId: string, milestoneIndex: number) {
+    const milestone = await this.findOne(engagementId, milestoneIndex);
+    if (milestone.status !== MilestoneStatus.PROOF_SUBMITTED) {
+      throw new UnprocessableEntityException('Milestone proof must be submitted before confirmation.');
+    }
+
+    await this.stellar.releaseMilestonePayment(engagementId, milestoneIndex);
+
+    const paymentReleased = BigInt(milestone.amount || 0);
+    const updated = await this.markConfirmed(engagementId, milestoneIndex, paymentReleased);
+
+    const engagement = await this.prisma.engagement.findUnique({ where: { id: engagementId } });
+    if (engagement) {
+      await this.prisma.notification.create({
+        data: {
+          userId: engagement.recruiterId || '',
+          type: 'PAYMENT_RELEASED',
+          title: 'Payment Released',
+          message: `Payment released for milestone ${milestoneIndex} on engagement ${engagementId}.`,
+        } as any
+      });
+    }
+
+    return updated;
+  }
+
+  async disputeFlow(engagementId: string, milestoneIndex: number, reason: string) {
+    const milestone = await this.findOne(engagementId, milestoneIndex);
+    if (milestone.status !== MilestoneStatus.PROOF_SUBMITTED) {
+      throw new UnprocessableEntityException('Can only dispute milestones that have proof submitted.');
+    }
+
+    const updated = await this.prisma.milestone.update({
+      where: { engagementId_milestoneIndex: { engagementId, milestoneIndex } },
+      data: { 
+        status: MilestoneStatus.DISPUTED,
+        disputeReason: reason,
+      } as any,
+    });
+
+    const engagement = await this.prisma.engagement.findUnique({ where: { id: engagementId } });
+    if (engagement) {
+      const targets = [engagement.companyId, engagement.recruiterId, engagement.arbiterId].filter(Boolean);
+      for (const target of targets) {
+        await this.prisma.notification.create({
+          data: {
+            userId: target,
+            type: 'DISPUTE_RAISED',
+            title: 'Dispute Raised',
+            message: `A dispute has been raised on milestone ${milestoneIndex}.`,
+          } as any
+        });
+      }
+    }
+
+    return updated;
+  }
+
+  async resolveDisputeFlow(engagementId: string, milestoneIndex: number, resolution: string) {
+    const milestone = await this.findOne(engagementId, milestoneIndex);
+    if (milestone.status !== MilestoneStatus.DISPUTED) {
+      throw new UnprocessableEntityException('Milestone is not under an active dispute phase.');
+    }
+
+    const approved = resolution === 'RELEASE';
+    
+    await this.stellar.resolveMilestoneDispute(engagementId, milestoneIndex, approved);
+
+    const updated = await this.markResolved(
+      engagementId, 
+      milestoneIndex, 
+      approved, 
+      approved ? BigInt(milestone.amount || 0) : undefined
+    );
+
+    const engagement = await this.prisma.engagement.findUnique({ where: { id: engagementId } });
+    if (engagement) {
+      const targets = [engagement.companyId, engagement.recruiterId];
+      for (const target of targets) {
+        await this.prisma.notification.create({
+          data: {
+            userId: target,
+            type: 'DISPUTE_RESOLVED',
+            title: 'Dispute Resolved',
+            message: `The milestone ${milestoneIndex} dispute has been resolved: ${resolution}.`,
+          } as any
+        });
+      }
+    }
+
+    return updated;
+  }
+
+  // ----------------------------------------------------------
   // State update methods — called by EventsService
   // ----------------------------------------------------------
 
@@ -220,7 +340,6 @@ export class MilestonesService {
           },
         });
 
-        // Update retention schedule so the cron job fires at the new time
         await this.prisma.retentionSchedule.upsert({
           where: { engagementId_milestoneIndex: { engagementId, milestoneIndex: m.milestoneIndex } },
           create: {
