@@ -62,8 +62,9 @@ enum UserRole {
 
 model User {
   id             String    @id @default(uuid())
-  stellarAddress String    @unique
+  stellarAddress String?   @unique
   email          String?   @unique
+  passwordHash   String?
   name           String?
   company        String?   // company name (for COMPANY role users)
   role           UserRole  @default(COMPANY)
@@ -75,8 +76,28 @@ model User {
   recruiterEngagements Engagement[]   @relation("RecruiterEngagements")
   arbiterEngagements   Engagement[]   @relation("ArbiterEngagements")
   notifications        Notification[]
+  refreshTokens        RefreshToken[]
 
   @@map("users")
+}
+
+model RefreshToken {
+  id         String    @id @default(uuid())
+  userId     String
+  tokenHash  String    @unique
+  familyId   String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([familyId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
 }
 
 model Engagement {

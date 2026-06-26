@@ -50,7 +50,7 @@ async function bootstrap() {
     .addTag('milestones', 'Milestone proof, unlock, and confirmation')
     .addTag('events', 'On-chain Stellar event feed')
     .addTag('notifications', 'User notifications')
-    .addTag('auth', 'Stellar address authentication')
+    .addTag('auth', 'Email/password authentication')
     .addTag('health', 'Health check endpoints')
     .build();
 
