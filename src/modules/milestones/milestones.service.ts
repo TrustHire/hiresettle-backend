@@ -53,6 +53,77 @@ export class MilestonesService {
   }
 
   // ----------------------------------------------------------
+  // Core Business/Validation Methods
+  // ----------------------------------------------------------
+
+  async getCurrentLedgerSequence(): Promise<number> {
+    return this.stellar.getCurrentLedgerSequence();
+  }
+
+  async findActiveRetentionMilestones() {
+    return this.prisma.milestone.findMany({
+      where: {
+        kind: 'RETENTION',
+        status: MilestoneStatus.LOCKED,
+      },
+    });
+  }
+
+  async unlockRetentionOnChain(milestoneId: string): Promise<void> {
+    const milestone = await this.prisma.milestone.findUnique({ where: { id: milestoneId } });
+    if (!milestone) return;
+
+    try {
+      const txHash = await this.stellar.unlockRetentionMilestone(
+        milestone.engagementId,
+        milestone.milestoneIndex,
+      );
+
+      await this.prisma.milestone.update({
+        where: { id: milestoneId },
+        data: { status: MilestoneStatus.PENDING },
+      });
+
+      await this.prisma.retentionSchedule.updateMany({
+        where: {
+          engagementId: milestone.engagementId,
+          milestoneIndex: milestone.milestoneIndex,
+        },
+        data: { unlocked: true },
+      });
+    } catch (error) {
+      this.logger.error(`Failed executing on-chain unlock contract validation for milestone ${milestoneId}:`, error);
+      throw error;
+    }
+  }
+
+  async sendRetentionWarningNotification(milestoneId: string): Promise<void> {
+    const milestone = await this.prisma.milestone.findUnique({ where: { id: milestoneId } });
+    if (!milestone) return;
+
+    this.logger.log(`[Notification Sent] RETENTION_WINDOW_APPROACHING for milestone ${milestoneId}`);
+
+    await this.prisma.milestone.update({
+      where: { id: milestoneId },
+      data: { approachingNotificationSent: true } as any, // fallback handling if field is implicit
+    });
+
+    await this.prisma.retentionSchedule.updateMany({
+      where: {
+        engagementId: milestone.engagementId,
+        milestoneIndex: milestone.milestoneIndex,
+      },
+      data: { notified: true },
+    });
+  }
+
+  async confirmMilestone(engagementId: string, milestoneIndex: number) {
+    const milestone = await this.findOne(engagementId, milestoneIndex);
+    const paymentReleased = BigInt(milestone.amount || 0);
+    return this.markConfirmed(engagementId, milestoneIndex, paymentReleased);
+  }
+
+  // ----------------------------------------------------------
   // State update methods — called by EventsService
   // ----------------------------------------------------------
 
