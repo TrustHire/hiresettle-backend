@@ -94,7 +94,7 @@ export class NotificationsService {
         const emailEnabled = pref ? pref.emailEnabled : true;
 
         if (emailEnabled) {
-          await this.sendEmail(user.email, title, message, type);
+          await this.sendEmail(user.email, title, message, type, data);
           await this.prisma.notification.update({
             where: { id: notification.id },
             data: { emailSent: true },
@@ -147,19 +147,21 @@ export class NotificationsService {
   private async sendEmail(
     to: string,
     subject: string,
-    text: string,
+    message: string,
     type: NotificationType,
+    data?: Record<string, any>,
   ) {
     // Pick an emoji for the email subject based on notification type
     const typeEmoji: Partial<Record<NotificationType, string>> = {
-      PAYMENT_RELEASED:            '💰',
-      MILESTONE_UNLOCKED:          '🔓',
-      PROOF_SUBMITTED:             '📄',
-      DISPUTE_RAISED:              '⚠️',
-      DISPUTE_RESOLVED:            '⚖️',
-      REPLACEMENT_REQUESTED:       '🔄',
-      RETENTION_WINDOW_APPROACHING:'⏰',
-      ENGAGEMENT_CANCELLED:        '❌',
+      PAYMENT_RELEASED: '💰',
+      MILESTONE_UNLOCKED: '🔓',
+      PROOF_SUBMITTED: '📄',
+      DISPUTE_RAISED: '⚠️',
+      DISPUTE_RESOLVED: '⚖️',
+      REPLACEMENT_REQUESTED: '🔄',
+      RETENTION_WINDOW_APPROACHING: '⏰',
+      ENGAGEMENT_CANCELLED: '❌',
+      ENGAGEMENT_CREATED: '🎉', // Added for completeness
     };
 
     try {
@@ -167,17 +169,15 @@ export class NotificationsService {
         from: this.config.get('EMAIL_FROM', 'noreply@hiresettle.com'),
         to,
         subject: `${typeEmoji[type] ?? '📬'} HireSettle — ${subject}`,
-        text,
-        html: `
-          <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-            <h2 style="color: #1a1a2e; margin-bottom: 8px;">HireSettle</h2>
-            <p style="color: #444; line-height: 1.6;">${text}</p>
-            <hr style="border: none; border-top: 1px solid #eee; margin: 24px 0;" />
-            <small style="color: #999;">
-              You're receiving this because you're a participant on HireSettle.
-            </small>
-          </div>
-        `,
+        template: type.toLowerCase(), // Use the notification type as the template name
+        context: {
+          subject: `HireSettle — ${subject}`,
+          message,
+          ctaLink: data?.ctaLink,
+          year: new Date().getFullYear(),
+          // Pass all data properties to the template context
+          ...data,
+        },
       });
       this.logger.log(`Email sent to ${to}: ${subject}`);
     } catch (error) {

@@ -4,7 +4,8 @@ import {
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
 import { CreateEngagementDto } from './dto/create-engagement.dto';
-import { EngagementStatus, MilestoneKind, MilestoneStatus } from '@prisma/client';
+import { EngagementStatus, MilestoneKind, MilestoneStatus, NotificationType } from '@prisma/client';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class EngagementsService {
@@ -13,6 +14,7 @@ export class EngagementsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly stellar: StellarService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   // ----------------------------------------------------------
@@ -241,5 +243,68 @@ export class EngagementsService {
         paymentReleased: m.paymentReleased?.toString() ?? null,
       })),
     };
+  }
+
+  // ----------------------------------------------------------
+  // ADMIN OVERRIDES
+  // ----------------------------------------------------------
+
+  async updateEngagementStatusByAdmin(
+    engagementId: string,
+    newStatus: EngagementStatus,
+    reason: string,
+    adminId: string,
+  ) {
+    const engagement = await this.prisma.engagement.findUnique({
+      where: { id: engagementId },
+    });
+
+    if (!engagement) {
+      throw new NotFoundException(`Engagement ${engagementId} not found`);
+    }
+
+    const oldStatus = engagement.status;
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.engagement.update({
+        where: { id: engagementId },
+        data: { status: newStatus },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          entityType: 'Engagement',
+          entityId: engagementId,
+          action: 'STATUS_OVERRIDE',
+          oldValue: oldStatus,
+          newValue: newStatus,
+          reason,
+          changedBy: adminId,
+        },
+      });
+
+      // Notify all parties involved in the engagement
+      const usersToNotify = [
+        engagement.companyAddress,
+        engagement.recruiterAddress,
+        engagement.arbiterAddress,
+      ];
+
+      for (const address of usersToNotify) {
+        await this.notifications.notifyUser(
+          address,
+          NotificationType.ENGAGEMENT_CANCELLED, // Using CANCELLED as a generic override notification type for now
+          `Engagement ${engagementId} status updated by Admin`,
+          `The status of engagement ${engagementId} has been manually changed from ${oldStatus} to ${newStatus} by an administrator. Reason: ${reason}`,
+          { engagementId, oldStatus, newStatus, reason },
+        );
+      }
+    });
+
+    this.logger.log(
+      `Admin ${adminId} updated engagement ${engagementId} status from ${oldStatus} to ${newStatus}. Reason: ${reason}`,
+    );
+
+    return this.findOne(engagementId);
   }
 }

@@ -21,22 +21,16 @@ import { AdminModule } from './modules/admin/admin.module';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true, envFilePath: '.env' }),
-
+    ConfigModule.forRoot({ isGlobal: true }),
     ThrottlerModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => [
-        {
-          ttl: config.get<number>('THROTTLE_TTL', 60) * 1000,
-          limit: config.get<number>('THROTTLE_LIMIT', 100),
-          // headers: true is supported in newer @nestjs/throttler versions.
-          // If not supported, the TooManyRequestsHeadersFilter will fill required headers.
-          headers: true,
-        },
-      ],
+      useFactory: (config: ConfigService) => ({
+        ttl: config.get<number>('THROTTLE_TTL', 60),
+        limit: config.get<number>('THROTTLE_LIMIT', 100),
+        ignoreRoutes: ['/health'],
+      }),
     }),
-
     ScheduleModule.forRoot(),
     TerminusModule,
     CacheModule.register({
@@ -47,7 +41,6 @@ import { AdminModule } from './modules/admin/admin.module';
     PrismaModule,
     CommonStellarModule,
     StellarModule,
-
     AuthModule,
     EngagementsModule,
     MilestonesModule,

@@ -8,6 +8,7 @@ import { UserRole } from '@prisma/client';
 import { ResolveDisputeDto } from './dto/resolve-dispute.dto';
 import { Throttle } from '@nestjs/throttler';
 import { UserJwtSubThrottlerGuard } from '../../common/guards/user-jwt-sub-throttler.guard';
+import { UpdateMilestoneStatusDto } from './dto/update-milestone-status.dto';
 
 @ApiTags('milestones')
 @ApiBearerAuth()
@@ -56,5 +57,24 @@ export class MilestonesController {
       throw new ForbiddenException('Only assigned arbiters can resolve structural disputes.');
     }
     return this.milestonesService.resolveDisputeFlow(engagementId, index, dto.resolution);
+  }
+
+  @Patch(':index/status')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Admin override: Force update milestone status' })
+  updateMilestoneStatus(
+    @Param('engagementId') engagementId: string,
+    @Param('index', ParseIntPipe) index: number,
+    @Body() dto: UpdateMilestoneStatusDto,
+    @CurrentUser('id') adminId: string,
+  ) {
+    return this.milestonesService.updateMilestoneStatusByAdmin(
+      engagementId,
+      index,
+      dto.status,
+      dto.reason,
+      adminId,
+    );
   }
 }
