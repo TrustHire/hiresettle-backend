@@ -46,7 +46,10 @@ enum NotificationType {
   REPLACEMENT_REQUESTED
   ENGAGEMENT_CANCELLED
   PAYMENT_RELEASED
-  RETENTION_WINDOW_APPROACHING  // sent 3 days before unlock
+  RETENTION_WINDOW_APPROACHING
+  ARBITER_ASSIGNED
+  ARBITER_REASSIGNED
+  ARBITER_RECUSAL_REQUESTED
 }
 
 enum UserRole {
@@ -192,6 +195,22 @@ model Notification {
   @@map("notifications")
 }
 
+model AuditLog {
+  id          String    @id @default(uuid())
+  entityType  String    // e.g., "Engagement", "Milestone"
+  entityId    String
+  action      String    // e.g., "STATUS_OVERRIDE"
+  oldValue    String?
+  newValue    String
+  reason      String
+  changedBy   String    // userId of the admin who made the change
+  createdAt   DateTime  @default(now())
+
+  @@index([entityType, entityId])
+  @@index([changedBy])
+  @@map("audit_logs")
+}
+
 // Tracks retention milestones that need to be unlocked.
 // The RetentionSchedulerService queries this table every hour.
 model RetentionSchedule {
@@ -210,4 +229,39 @@ model RetentionSchedule {
   @@index([notifyAt])
   @@index([unlocked])
   @@map("retention_schedules")
+}
+
+model MilestoneAuditLog {
+  id          String        @id @default(uuid())
+  milestoneId String
+  fromStatus  MilestoneStatus
+  toStatus    MilestoneStatus
+  changedBy   String
+  createdAt   DateTime      @default(now())
+
+  milestone   Milestone     @relation(fields: [milestoneId], references: [id])
+  user        User          @relation(fields: [changedBy], references: [id])
+
+  @@index([milestoneId])
+  @@index([changedBy])
+  @@map("milestone_audit_logs")
+}
+
+model DisputeEvidence {
+  id          String    @id @default(uuid())
+  milestoneId String
+  uploadedBy  String
+  fileName    String
+  fileSize    Int       // in bytes
+  mimeType    String
+  s3Path      String    // path in S3 bucket
+  s3Url       String?   // presigned URL (optional, can be generated on the fly)
+  uploadedAt  DateTime  @default(now())
+
+  milestone   Milestone @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [uploadedBy], references: [id])
+
+  @@index([milestoneId])
+  @@index([uploadedBy])
+  @@map("dispute_evidence")
 }

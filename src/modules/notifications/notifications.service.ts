@@ -2,12 +2,13 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { NotificationType } from '@prisma/client';
+import { NotificationType, Notification } from '@prisma/client';
 
 @Injectable()
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
   private transporter: nodemailer.Transporter;
+  private userConnections: Map<string, any[]> = new Map();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -24,6 +25,48 @@ export class NotificationsService {
     });
   }
 
+  addConnection(userId: string, res: any) {
+    if (!this.userConnections.has(userId)) {
+      this.userConnections.set(userId, []);
+    }
+    this.userConnections.get(userId)!.push(res);
+    
+    res.on('close', () => {
+      const connections = this.userConnections.get(userId);
+      if (connections) {
+        const index = connections.indexOf(res);
+        if (index > -1) {
+          connections.splice(index, 1);
+        }
+        if (connections.length === 0) {
+          this.userConnections.delete(userId);
+        }
+      }
+    });
+  }
+
+  removeConnection(userId: string, res: any) {
+    const connections = this.userConnections.get(userId);
+    if (connections) {
+      const index = connections.indexOf(res);
+      if (index > -1) {
+        connections.splice(index, 1);
+      }
+      if (connections.length === 0) {
+        this.userConnections.delete(userId);
+      }
+    }
+  }
+
+  private pushToConnections(notification: Notification) {
+    const connections = this.userConnections.get(notification.userId);
+    if (connections) {
+      connections.forEach(res => {
+        res.write(`data: ${JSON.stringify(notification)}\n\n`);
+      });
+    }
+  }
+
   async notifyUser(
     stellarAddress: string,
     type: NotificationType,
@@ -38,18 +81,40 @@ export class NotificationsService {
         return;
       }
 
+      return this.notifyUserById(user.id, type, title, message, data);
+    } catch (error) {
+      this.logger.error(`Failed to notify ${stellarAddress}`, error.message);
+    }
+  }
+
+  async notifyUserById(
+    userId: string,
+    type: NotificationType,
+    title: string,
+    message: string,
+    data?: Record<string, any>,
+  ) {
+    try {
+      const user = await this.prisma.user.findUnique({ where: { id: userId } });
+      if (!user) {
+        this.logger.warn(`No user found for id ${userId} — skipping notification`);
+        return;
+      }
+
       const notification = await this.prisma.notification.create({
-        data: { userId: user.id, type, title, message, data: data ?? {} },
+        data: { userId, type, title, message, data: data ?? {} },
       });
+
+      this.pushToConnections(notification);
 
       if (user.email) {
         const pref = await this.prisma.notificationPreference.findUnique({
-          where: { userId_type: { userId: user.id, type } },
+          where: { userId_type: { userId, type } },
         });
         const emailEnabled = pref ? pref.emailEnabled : true;
 
         if (emailEnabled) {
-          await this.sendEmail(user.email, title, message, type);
+          await this.sendEmail(user.email, title, message, type, data);
           await this.prisma.notification.update({
             where: { id: notification.id },
             data: { emailSent: true },
@@ -59,7 +124,7 @@ export class NotificationsService {
 
       return notification;
     } catch (error) {
-      this.logger.error(`Failed to notify ${stellarAddress}`, error.message);
+      this.logger.error(`Failed to notify user ${userId}`, error.message);
     }
   }
 
@@ -67,7 +132,7 @@ export class NotificationsService {
     const where: any = { userId };
     if (unreadOnly) where.read = false;
 
-    const [notifications, total] = await this.prisma.$transaction([
+    const [notifications, total, unreadCount] = await this.prisma.$transaction([
       this.prisma.notification.findMany({
         where,
         orderBy: { createdAt: 'desc' },
@@ -75,9 +140,14 @@ export class NotificationsService {
         take: limit,
       }),
       this.prisma.notification.count({ where }),
+      this.prisma.notification.count({ where: { userId, read: false } }),
     ]);
 
-    return { data: notifications, meta: { total, page, limit } };
+    return { data: notifications, meta: { total, page, limit, unreadCount } };
+  }
+
+  async getUnreadCount(userId: string) {
+    return { unreadCount: await this.prisma.notification.count({ where: { userId, read: false } }) };
   }
 
   async markRead(notificationId: string, userId: string) {
@@ -97,19 +167,21 @@ export class NotificationsService {
   private async sendEmail(
     to: string,
     subject: string,
-    text: string,
+    message: string,
     type: NotificationType,
+    data?: Record<string, any>,
   ) {
     // Pick an emoji for the email subject based on notification type
     const typeEmoji: Partial<Record<NotificationType, string>> = {
-      PAYMENT_RELEASED:            '💰',
-      MILESTONE_UNLOCKED:          '🔓',
-      PROOF_SUBMITTED:             '📄',
-      DISPUTE_RAISED:              '⚠️',
-      DISPUTE_RESOLVED:            '⚖️',
-      REPLACEMENT_REQUESTED:       '🔄',
-      RETENTION_WINDOW_APPROACHING:'⏰',
-      ENGAGEMENT_CANCELLED:        '❌',
+      PAYMENT_RELEASED: '💰',
+      MILESTONE_UNLOCKED: '🔓',
+      PROOF_SUBMITTED: '📄',
+      DISPUTE_RAISED: '⚠️',
+      DISPUTE_RESOLVED: '⚖️',
+      REPLACEMENT_REQUESTED: '🔄',
+      RETENTION_WINDOW_APPROACHING: '⏰',
+      ENGAGEMENT_CANCELLED: '❌',
+      ENGAGEMENT_CREATED: '🎉', // Added for completeness
     };
 
     try {
@@ -117,17 +189,15 @@ export class NotificationsService {
         from: this.config.get('EMAIL_FROM', 'noreply@hiresettle.com'),
         to,
         subject: `${typeEmoji[type] ?? '📬'} HireSettle — ${subject}`,
-        text,
-        html: `
-          <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-            <h2 style="color: #1a1a2e; margin-bottom: 8px;">HireSettle</h2>
-            <p style="color: #444; line-height: 1.6;">${text}</p>
-            <hr style="border: none; border-top: 1px solid #eee; margin: 24px 0;" />
-            <small style="color: #999;">
-              You're receiving this because you're a participant on HireSettle.
-            </small>
-          </div>
-        `,
+        template: type.toLowerCase(), // Use the notification type as the template name
+        context: {
+          subject: `HireSettle — ${subject}`,
+          message,
+          ctaLink: data?.ctaLink,
+          year: new Date().getFullYear(),
+          // Pass all data properties to the template context
+          ...data,
+        },
       });
       this.logger.log(`Email sent to ${to}: ${subject}`);
     } catch (error) {

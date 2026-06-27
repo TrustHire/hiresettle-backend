@@ -1,14 +1,17 @@
-import { Controller, Get, Param, ParseIntPipe, UseGuards, Patch, UnprocessableEntityException, Post, Body, ForbiddenException } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiResponse } from '@nestjs/swagger';
+import { Controller, Get, Param, ParseIntPipe, UseGuards, Patch, UnprocessableEntityException, Post, UseInterceptors, UploadedFile, ForbiddenException, Body } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import { MilestonesService } from './milestones.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
 import { ResolveDisputeDto } from './dto/resolve-dispute.dto';
 import { Throttle } from '@nestjs/throttler';
 import { UserJwtSubThrottlerGuard } from '../../common/guards/user-jwt-sub-throttler.guard';
-import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
+import { UpdateMilestoneStatusDto } from './dto/update-milestone-status.dto';
 
 @ApiTags('milestones')
 @ApiBearerAuth()
@@ -67,9 +70,25 @@ export class MilestonesController {
     @Body() dto: ResolveDisputeDto,
     @CurrentUser() user: any,
   ) {
-    if (user.role !== UserRole.ARBITER) {
-      throw new ForbiddenException('Only assigned arbiters can resolve structural disputes.');
-    }
     return this.milestonesService.resolveDisputeFlow(engagementId, index, dto.resolution);
+  }
+
+  @Patch(':index/status')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Admin override: Force update milestone status' })
+  updateMilestoneStatus(
+    @Param('engagementId') engagementId: string,
+    @Param('index', ParseIntPipe) index: number,
+    @Body() dto: UpdateMilestoneStatusDto,
+    @CurrentUser('id') adminId: string,
+  ) {
+    return this.milestonesService.updateMilestoneStatusByAdmin(
+      engagementId,
+      index,
+      dto.status,
+      dto.reason,
+      adminId,
+    );
   }
 }

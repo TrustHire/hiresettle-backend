@@ -1,5 +1,5 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery, ApiResponse } from '@nestjs/swagger';
+import { Controller, Get, Query, UseGuards, Post } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { EventsService } from './events.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { Throttle } from '@nestjs/throttler';
@@ -27,5 +27,11 @@ export class EventsController {
     @Query('limit') limit?: number,
   ) {
     return this.eventsService.findAll(engagementId, page, limit);
+  }
+
+  @Post('process-unprocessed')
+  @ApiOperation({ summary: 'Manually trigger processing of unprocessed chain events' })
+  processUnprocessed() {
+    return this.eventsService.processUnprocessedEvents();
   }
 }

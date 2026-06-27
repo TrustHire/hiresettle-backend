@@ -3,6 +3,8 @@ import { ValidationPipe, Logger } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import helmet from 'helmet';
+import * as Sentry from '@sentry/node';
+import { Integrations } from '@sentry/tracing';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
@@ -14,14 +16,55 @@ async function bootstrap() {
 
   const config = app.get(ConfigService);
   const port = config.get<number>('PORT', 3000);
-  const apiPrefix = config.get<string>('API_PREFIX', 'v1');
-  const corsOrigin = config.get<string>('CORS_ORIGIN', 'http://localhost:3001');
-  const nodeEnv = config.get<string>('NODE_ENV', 'development');
+  const apiPrefix = config.get<string>('API_PREFIX', 'api/v1');
+  const allowedOriginsStr = config.get<string>('ALLOWED_ORIGINS', 'http://localhost:3001');
+  const allowedOrigins = allowedOriginsStr.split(',').map(origin => origin.trim());
+  const sentryDsn = config.get<string>('SENTRY_DSN');
+  const nodeEnv = config.get<string>('NODE_ENV');
 
-  app.use(helmet());
+  if (sentryDsn && !['test', 'ci'].includes(nodeEnv)) {
+    Sentry.init({
+      dsn: sentryDsn,
+      integrations: [
+        new Integrations.Http({ tracing: true }),
+        new Integrations.Express(),
+      ],
+      tracesSampleRate: 1.0,
+    });
+    app.use(Sentry.Handlers.requestHandler());
+    app.use(Sentry.Handlers.errorHandler());
+  }
+
+  // Configure Helmet security headers
+  app.use(
+    helmet({
+      contentSecurityPolicy: false, // Disable CSP for API context
+      hsts: {
+        maxAge: 31536000, // 1 year in seconds
+        includeSubDomains: true,
+        preload: true,
+      },
+      frameguard: {
+        action: 'deny', // X-Frame-Options: DENY
+      },
+    }),
+  );
+
+  // Configure CORS
+  const corsOriginValidator = (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+    // Allow requests with no origin (like curl, Postman, etc.)
+    if (!origin) {
+      return callback(null, true);
+    }
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    const msg = 'The CORS policy for this site does not allow access from the specified origin.';
+    return callback(new Error(msg), false);
+  };
 
   app.enableCors({
-    origin: corsOrigin,
+    origin: corsOriginValidator,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true,
@@ -34,6 +77,9 @@ async function bootstrap() {
       { path: 'docs-json', method: 'GET' },
     ],
   });
+
+  // Enable graceful shutdown hooks
+  app.enableShutdownHooks();
 
   app.useGlobalPipes(
     new ValidationPipe({

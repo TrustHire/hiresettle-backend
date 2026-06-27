@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -11,6 +12,7 @@ import { Prisma, User } from '@prisma/client';
 import { randomBytes, scrypt as scryptCallback, timingSafeEqual, createHash } from 'crypto';
 import { promisify } from 'util';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { StellarService } from '../../common/stellar/stellar.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 
@@ -31,6 +33,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
+    private readonly stellar: StellarService,
   ) {}
 
   generateNonce(stellarAddress: string): string {
@@ -45,6 +48,16 @@ export class AuthService {
   async register(dto: RegisterDto) {
     const email = dto.email.toLowerCase();
     const passwordHash = await this.hashPassword(dto.password);
+
+    if (dto.stellarAddress) {
+      const skipAccountValidation = this.config.get<boolean>('SKIP_ACCOUNT_VALIDATION');
+      if (!skipAccountValidation) {
+        const accountExists = await this.stellar.accountExists(dto.stellarAddress);
+        if (!accountExists) {
+          throw new BadRequestException('Stellar address does not exist or is not funded.');
+        }
+      }
+    }
 
     try {
       const user = await this.prisma.user.create({

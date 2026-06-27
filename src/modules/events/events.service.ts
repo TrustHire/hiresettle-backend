@@ -72,19 +72,74 @@ export class EventsService implements OnModuleInit {
   private async processEvent(event: any) {
     const eventName = this.extractEventName(event);
     const payload = this.extractPayload(event);
+    const txHash = event.txHash ?? '';
 
-    await this.saveRawEvent(eventName, event, payload);
+    // Idempotency check: check if we already processed this txHash
+    const existingEvent = await this.prisma.chainEvent.findFirst({
+      where: { txHash, processed: true }
+    });
+    if (existingEvent) {
+      this.logger.log(`Event with txHash ${txHash} already processed — skipping`);
+      return;
+    }
 
-    switch (eventName) {
-      case 'engagement_created':    return this.handleEngagementCreated(payload);
-      case 'milestone_unlocked':    return this.handleMilestoneUnlocked(payload);
-      case 'proof_submitted':       return this.handleProofSubmitted(payload);
-      case 'milestone_confirmed':   return this.handleMilestoneConfirmed(payload);
-      case 'dispute_raised':        return this.handleDisputeRaised(payload);
-      case 'dispute_resolved':      return this.handleDisputeResolved(payload);
-      case 'replacement_requested': return this.handleReplacementRequested(payload);
-      case 'engagement_cancelled':  return this.handleEngagementCancelled(payload);
-      default: this.logger.warn(`Unknown event: ${eventName}`);
+    // Save or get the ChainEvent
+    let chainEvent = await this.prisma.chainEvent.findFirst({
+      where: { txHash, eventName }
+    });
+    if (!chainEvent) {
+      chainEvent = await this.saveRawEvent(eventName, event, payload);
+    }
+
+    if (chainEvent.processed) {
+      return;
+    }
+
+    // Process the event inside a transaction
+    await this.prisma.$transaction(async (tx) => {
+      // Handle the event with our existing handlers
+      switch (eventName) {
+        case 'engagement_created':    await this.handleEngagementCreated(payload, tx); break;
+        case 'milestone_unlocked':    await this.handleMilestoneUnlocked(payload, tx); break;
+        case 'proof_submitted':       await this.handleProofSubmitted(payload, tx); break;
+        case 'milestone_confirmed':   await this.handleMilestoneConfirmed(payload, tx); break;
+        case 'dispute_raised':        await this.handleDisputeRaised(payload, tx); break;
+        case 'dispute_resolved':      await this.handleDisputeResolved(payload, tx); break;
+        case 'replacement_requested': await this.handleReplacementRequested(payload, tx); break;
+        case 'engagement_cancelled':  await this.handleEngagementCancelled(payload, tx); break;
+        default: this.logger.warn(`Unknown event: ${eventName}`);
+      }
+
+      // Mark ChainEvent as processed
+      await tx.chainEvent.update({
+        where: { id: chainEvent.id },
+        data: { processed: true }
+      });
+    });
+  }
+
+  async processUnprocessedEvents() {
+    const unprocessedEvents = await this.prisma.chainEvent.findMany({
+      where: { processed: false },
+      orderBy: { ledger: 'asc' }
+    });
+
+    for (const chainEvent of unprocessedEvents) {
+      try {
+        // Create a pseudo-event object from the stored ChainEvent
+        const pseudoEvent = {
+          ledger: chainEvent.ledger,
+          txHash: chainEvent.txHash,
+          topic: [chainEvent.eventName],
+          value: chainEvent.payload
+        };
+
+        // Process it (reuses existing logic)
+        await this.processEvent(pseudoEvent);
+        this.logger.log(`Processed unprocessed event: ${chainEvent.id} (${chainEvent.eventName})`);
+      } catch (error) {
+        this.logger.error(`Failed to process unprocessed event ${chainEvent.id}`, error.message);
+      }
     }
   }
 
@@ -123,23 +178,39 @@ export class EventsService implements OnModuleInit {
   // EVENT HANDLERS
   // ----------------------------------------------------------
 
-  private async handleEngagementCreated(payload: any) {
+  private async handleEngagementCreated(payload: any, tx?: any) {
     const engagementId = String(payload);
     this.logger.log(`Engagement created on-chain: ${engagementId}`);
+    
+    // We already create engagement in EngagementsService.create, so just sync if needed
+    await this.engagements.syncFromChain(engagementId);
+
+    const engagement = await (tx || this.prisma).engagement.findUnique({
+      where: { id: engagementId },
+    });
+    if (engagement) {
+      await this.notifications.notifyUser(
+        engagement.recruiterAddress,
+        NotificationType.ENGAGEMENT_CREATED,
+        'New engagement created',
+        `A new engagement (${engagementId}) has been created for you.`,
+        { engagementId },
+      );
+    }
   }
 
-  private async handleMilestoneUnlocked(payload: any) {
+  private async handleMilestoneUnlocked(payload: any, tx?: any) {
     const [engagementId, milestoneIndex] = this.destructurePayload(payload);
     this.logger.log(`Milestone unlocked: ${engagementId}[${milestoneIndex}]`);
 
     await this.milestones.markUnlocked(String(engagementId), Number(milestoneIndex));
 
-    await this.prisma.retentionSchedule.updateMany({
+    await (tx || this.prisma).retentionSchedule.updateMany({
       where: { engagementId: String(engagementId), milestoneIndex: Number(milestoneIndex) },
       data: { unlocked: true },
     });
 
-    const engagement = await this.prisma.engagement.findUnique({
+    const engagement = await (tx || this.prisma).engagement.findUnique({
       where: { id: String(engagementId) },
     });
     if (engagement) {
@@ -153,7 +224,7 @@ export class EventsService implements OnModuleInit {
     }
   }
 
-  private async handleProofSubmitted(payload: any) {
+  private async handleProofSubmitted(payload: any, tx?: any) {
     const [engagementId, milestoneIndex] = this.destructurePayload(payload);
     this.logger.log(`Proof submitted: ${engagementId}[${milestoneIndex}]`);
 
@@ -161,7 +232,7 @@ export class EventsService implements OnModuleInit {
       String(engagementId), Number(milestoneIndex), '',
     );
 
-    const engagement = await this.prisma.engagement.findUnique({
+    const engagement = await (tx || this.prisma).engagement.findUnique({
       where: { id: String(engagementId) },
     });
     if (engagement) {
@@ -175,7 +246,7 @@ export class EventsService implements OnModuleInit {
     }
   }
 
-  private async handleMilestoneConfirmed(payload: any) {
+  private async handleMilestoneConfirmed(payload: any, tx?: any) {
     const [engagementId, milestoneIndex, paymentAmount] = this.destructurePayload(payload);
     this.logger.log(`Milestone confirmed: ${engagementId}[${milestoneIndex}] — ${paymentAmount} released`);
 
@@ -187,7 +258,7 @@ export class EventsService implements OnModuleInit {
 
     await this.engagements.syncFromChain(String(engagementId));
 
-    const engagement = await this.prisma.engagement.findUnique({
+    const engagement = await (tx || this.prisma).engagement.findUnique({
       where: { id: String(engagementId) },
     });
     if (engagement) {
@@ -209,13 +280,13 @@ export class EventsService implements OnModuleInit {
     }
   }
 
-  private async handleDisputeRaised(payload: any) {
+  private async handleDisputeRaised(payload: any, tx?: any) {
     const [engagementId, milestoneIndex] = this.destructurePayload(payload);
     this.logger.log(`Dispute raised: ${engagementId}[${milestoneIndex}]`);
 
     await this.milestones.markDisputed(String(engagementId), Number(milestoneIndex));
 
-    const engagement = await this.prisma.engagement.findUnique({
+    const engagement = await (tx || this.prisma).engagement.findUnique({
       where: { id: String(engagementId) },
     });
     if (engagement) {
@@ -238,7 +309,7 @@ export class EventsService implements OnModuleInit {
     }
   }
 
-  private async handleDisputeResolved(payload: any) {
+  private async handleDisputeResolved(payload: any, tx?: any) {
     const [engagementId, milestoneIndex, approved] = this.destructurePayload(payload);
     this.logger.log(`Dispute resolved: ${engagementId}[${milestoneIndex}] approved=${approved}`);
 
@@ -247,7 +318,7 @@ export class EventsService implements OnModuleInit {
     );
     await this.engagements.syncFromChain(String(engagementId));
 
-    const engagement = await this.prisma.engagement.findUnique({
+    const engagement = await (tx || this.prisma).engagement.findUnique({
       where: { id: String(engagementId) },
     });
     if (engagement) {
@@ -270,19 +341,19 @@ export class EventsService implements OnModuleInit {
     }
   }
 
-  private async handleReplacementRequested(payload: any) {
+  private async handleReplacementRequested(payload: any, tx?: any) {
     const engagementId = String(Array.isArray(payload) ? payload[0] : payload);
     this.logger.log(`Replacement requested: ${engagementId}`);
 
     const currentLedger = await this.stellar.getLatestLedger();
     await this.milestones.resetForReplacement(engagementId, currentLedger);
 
-    await this.prisma.engagement.update({
+    await (tx || this.prisma).engagement.update({
       where: { id: engagementId },
       data: { status: 'REPLACEMENT_REQUESTED' },
     });
 
-    const engagement = await this.prisma.engagement.findUnique({
+    const engagement = await (tx || this.prisma).engagement.findUnique({
       where: { id: engagementId },
     });
     if (engagement) {
@@ -303,16 +374,16 @@ export class EventsService implements OnModuleInit {
     }
   }
 
-  private async handleEngagementCancelled(payload: any) {
+  private async handleEngagementCancelled(payload: any, tx?: any) {
     const [engagementId] = this.destructurePayload(payload);
     this.logger.log(`Engagement cancelled: ${engagementId}`);
 
-    await this.prisma.engagement.update({
+    await (tx || this.prisma).engagement.update({
       where: { id: String(engagementId) },
       data: { status: 'CANCELLED' },
     });
 
-    const engagement = await this.prisma.engagement.findUnique({
+    const engagement = await (tx || this.prisma).engagement.findUnique({
       where: { id: String(engagementId) },
     });
     if (engagement) {
@@ -361,7 +432,7 @@ export class EventsService implements OnModuleInit {
         ? typeof payload[0] === 'string' ? payload[0] : null
         : typeof payload === 'string' ? payload : null;
 
-      await this.prisma.chainEvent.create({
+      return await this.prisma.chainEvent.create({
         data: {
           eventName,
           ledger: event.ledger ?? 0,
@@ -372,6 +443,7 @@ export class EventsService implements OnModuleInit {
       });
     } catch (error) {
       this.logger.error('Failed to save raw event', error.message);
+      throw error;
     }
   }
 

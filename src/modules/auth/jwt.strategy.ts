@@ -2,6 +2,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
+import * as Sentry from '@sentry/node';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -18,11 +19,15 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException('Invalid token type');
     }
 
-    return {
+    const user = {
       id: payload.sub,
       email: payload.email,
       stellarAddress: payload.stellarAddress,
       role: payload.role,
     };
+
+    Sentry.setUser({ id: user.id, email: user.email, username: user.role });
+
+    return user;
   }
 }

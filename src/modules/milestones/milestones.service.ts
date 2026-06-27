@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException, Logger, UnprocessableEntityException } from '@nestjs/common';
+import { Injectable, NotFoundException, Logger, UnprocessableEntityException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
-import { MilestoneStatus } from '@prisma/client';
+import { MilestoneStatus, NotificationType } from '@prisma/client';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class MilestonesService {
@@ -10,6 +11,7 @@ export class MilestonesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly stellar: StellarService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async findByEngagement(engagementId: string) {
@@ -359,5 +361,72 @@ export class MilestonesService {
         });
       }
     }
+  }
+
+  // ----------------------------------------------------------
+  // ADMIN OVERRIDES
+  // ----------------------------------------------------------
+
+  async updateMilestoneStatusByAdmin(
+    engagementId: string,
+    milestoneIndex: number,
+    newStatus: MilestoneStatus,
+    reason: string,
+    adminId: string,
+  ) {
+    const milestone = await this.prisma.milestone.findUnique({
+      where: { engagementId_milestoneIndex: { engagementId, milestoneIndex } },
+      include: { engagement: true },
+    });
+
+    if (!milestone) {
+      throw new NotFoundException(
+        `Milestone ${milestoneIndex} not found on engagement ${engagementId}`,
+      );
+    }
+
+    const oldStatus = milestone.status;
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.milestone.update({
+        where: { id: milestone.id },
+        data: { status: newStatus },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          entityType: 'Milestone',
+          entityId: milestone.id,
+          action: 'STATUS_OVERRIDE',
+          oldValue: oldStatus,
+          newValue: newStatus,
+          reason,
+          changedBy: adminId,
+        },
+      });
+
+      // Notify all parties involved in the engagement
+      const usersToNotify = [
+        milestone.engagement.companyAddress,
+        milestone.engagement.recruiterAddress,
+        milestone.engagement.arbiterAddress,
+      ];
+
+      for (const address of usersToNotify) {
+        await this.notifications.notifyUser(
+          address,
+          NotificationType.MILESTONE_CONFIRMED, // Using a generic notification type for now
+          `Milestone ${milestoneIndex} status updated by Admin`,
+          `The status of milestone ${milestoneIndex} on engagement ${engagementId} has been manually changed from ${oldStatus} to ${newStatus} by an administrator. Reason: ${reason}`,
+          { engagementId, milestoneIndex, oldStatus, newStatus, reason },
+        );
+      }
+    });
+
+    this.logger.log(
+      `Admin ${adminId} updated milestone ${milestoneIndex} on engagement ${engagementId} status from ${oldStatus} to ${newStatus}. Reason: ${reason}`,
+    );
+
+    return this.findOne(engagementId, milestoneIndex);
   }
 }

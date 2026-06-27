@@ -308,6 +308,18 @@ export class StellarService implements OnModuleInit {
     tokenAddress: string,
     requiredAmount: bigint,
   ): Promise<{ sufficient: boolean; balance: bigint }> {
+    const { balance } = await this.getBalance(accountAddress, tokenAddress);
+    return { sufficient: balance >= requiredAmount, balance };
+  }
+
+  /**
+   * Get the token balance for a Stellar account.
+   * Queries Horizon for trustline balance.
+   */
+  async getBalance(
+    accountAddress: string,
+    tokenAddress: string,
+  ): Promise<{ balance: bigint }> {
     try {
       const horizonUrl = this.config.get<string>('STELLAR_HORIZON_URL');
       const response = await fetch(`${horizonUrl}/accounts/${accountAddress}`);
@@ -321,12 +333,12 @@ export class StellarService implements OnModuleInit {
           b.asset_type === 'native' && tokenAddress === 'native',
       );
       if (!trustline) {
-        return { sufficient: false, balance: 0n };
+        return { balance: 0n };
       }
       const balance = this.usdcToStroops(trustline.balance);
-      return { sufficient: balance >= requiredAmount, balance };
+      return { balance };
     } catch (error) {
-      this.logger.error(`Failed to check balance for ${accountAddress}`, error.message);
+      this.logger.error(`Failed to get balance for ${accountAddress}`, error.message);
       throw error;
     }
   }
@@ -344,5 +356,18 @@ export class StellarService implements OnModuleInit {
     const [whole, fraction = ''] = usdc.split('.');
     const paddedFraction = fraction.padEnd(7, '0').slice(0, 7);
     return BigInt(whole) * 10_000_000n + BigInt(paddedFraction);
+  }
+
+  /**
+   * Get the current base fee and recommended Soroban fee.
+   * @returns { baseFee: number, sorobanFee: number }
+   */
+  async getFeeEstimate(): Promise<{ baseFee: number; sorobanFee: number }> {
+    const info = await this.rpcClient.getLatestLedger();
+    // Base fee is in stroops (100 stroops = 0.00001 XLM)
+    const baseFee = Number(info.baseFee);
+    // Soroban fee is an estimate, typically higher than base fee
+    const sorobanFee = baseFee * 10; // Example: 10x base fee for Soroban
+    return { baseFee, sorobanFee };
   }
 }
