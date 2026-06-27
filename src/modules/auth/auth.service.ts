@@ -1,5 +1,6 @@
 import {
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   UnauthorizedException,
@@ -29,7 +30,8 @@ export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
-  ) { }
+    private readonly config: ConfigService,
+  ) {}
 
   generateNonce(stellarAddress: string): string {
     const nonce = `hiresettle:${stellarAddress}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
@@ -55,8 +57,6 @@ export class AuthService {
           role: dto.role,
         },
       });
-  async walletLogin(dto: LoginDto): Promise<{ accessToken: string; user: any }> {
-    const { stellarAddress, signedNonce, signature } = dto;
 
       this.logger.log(`User registered: ${email}`);
       return this.issueTokenPair(user);
@@ -77,32 +77,19 @@ export class AuthService {
 
     if (!user?.passwordHash || !(await this.verifyPassword(dto.password, user.passwordHash))) {
       throw new UnauthorizedException('Invalid email or password');
-    if (signedNonce !== stored.nonce) {
-      throw new UnauthorizedException('Signed nonce does not match the challenge.');
     }
 
-    let sigBytes: Uint8Array;
-    try {
-      sigBytes = Uint8Array.from(Buffer.from(signature, 'base64'));
-    } catch {
-      throw new UnauthorizedException('Invalid signature encoding (expected base64).');
-    }
-
-    let keypair: Keypair;
-    try {
-      keypair = Keypair.fromPublicKey(stellarAddress);
-    } catch {
-      throw new UnauthorizedException('Invalid Stellar address.');
-    }
-
-    const msgBytes = Buffer.from(stored.nonce, 'utf8');
-    const isValid = keypair.verify(msgBytes, sigBytes);
-    if (!isValid) {
-      throw new UnauthorizedException('Invalid signature');
+    if (user.deactivatedAt) {
+      throw new ForbiddenException('Your account has been deactivated. Please contact an administrator.');
     }
 
     this.logger.log(`User logged in: ${email}`);
     return this.issueTokenPair(user);
+  }
+
+  // Backward-compatible alias kept for existing controller routes
+  walletLogin(dto: LoginDto) {
+    return this.login(dto);
   }
 
   async refresh(refreshToken: string) {
@@ -133,11 +120,7 @@ export class AuthService {
 
     await this.prisma.$transaction(async (tx) => {
       const consumed = await tx.refreshToken.updateMany({
-        where: {
-          id: stored.id,
-          consumedAt: null,
-          revokedAt: null,
-        },
+        where: { id: stored.id, consumedAt: null, revokedAt: null },
         data: { consumedAt: now },
       });
 
@@ -180,6 +163,17 @@ export class AuthService {
     return { revoked: true };
   }
 
+  async updateProfile(userId: string, dto: any) {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        ...(dto.name !== undefined ? { name: dto.name } : {}),
+        ...(dto.company !== undefined ? { company: dto.company } : {}),
+        ...(dto.webhookUrl !== undefined ? { webhookUrl: dto.webhookUrl } : {}),
+      },
+    });
+  }
+
   private async issueTokenPair(user: User) {
     const familyId = randomBytes(24).toString('hex');
     const refreshToken = await this.signRefreshToken(user, familyId);
@@ -209,22 +203,14 @@ export class AuthService {
         role: user.role,
         type: 'access',
       },
-      {
-        expiresIn: this.config.get<string>('JWT_ACCESS_EXPIRES_IN', '15m'),
-      },
+      { expiresIn: this.config.get<string>('JWT_ACCESS_EXPIRES_IN', '15m') },
     );
   }
 
   private async signRefreshToken(user: User, familyId: string): Promise<string> {
     return this.jwt.signAsync(
-      {
-        sub: user.id,
-        familyId,
-        type: 'refresh',
-      },
-      {
-        expiresIn: this.config.get<string>('JWT_REFRESH_EXPIRES_IN', '7d'),
-      },
+      { sub: user.id, familyId, type: 'refresh' },
+      { expiresIn: this.config.get<string>('JWT_REFRESH_EXPIRES_IN', '7d') },
     );
   }
 
@@ -233,8 +219,8 @@ export class AuthService {
     return new Date(Date.now() + days * 24 * 60 * 60 * 1000);
   }
 
-  private hashRefreshToken(refreshToken: string): string {
-    return createHash('sha256').update(refreshToken).digest('hex');
+  private hashRefreshToken(token: string): string {
+    return createHash('sha256').update(token).digest('hex');
   }
 
   private async hashPassword(password: string): Promise<string> {
@@ -250,10 +236,7 @@ export class AuthService {
     const derivedKey = (await scrypt(password, salt, PASSWORD_KEY_LENGTH)) as Buffer;
     const storedKey = Buffer.from(key, 'hex');
 
-    return (
-      storedKey.length === derivedKey.length &&
-      timingSafeEqual(storedKey, derivedKey)
-    );
+    return storedKey.length === derivedKey.length && timingSafeEqual(storedKey, derivedKey);
   }
 
   private async revokeFamily(familyId: string) {
@@ -267,19 +250,4 @@ export class AuthService {
     const { passwordHash, ...safeUser } = user;
     return safeUser;
   }
-
-  async updateProfile(userId: string, dto: any) {
-    return this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        ...(dto.name !== undefined ? { name: dto.name } : {}),
-        ...(dto.company !== undefined ? { company: dto.company } : {}),
-        ...(dto.webhookUrl !== undefined ? { webhookUrl: dto.webhookUrl } : {}),
-      },
-    });
-  // Backward-compatible method name
-  login(dto: LoginDto): Promise<{ accessToken: string; user: any }> {
-    return this.walletLogin(dto);
-  }
 }
-
