@@ -28,6 +28,9 @@ async function bootstrap() {
 
   app.setGlobalPrefix(apiPrefix);
 
+  // Enable graceful shutdown hooks
+  app.enableShutdownHooks();
+
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

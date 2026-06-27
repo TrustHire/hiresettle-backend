@@ -16,6 +16,7 @@ import { UserRole } from '@prisma/client';
 import { EngagementStatus } from '@prisma/client';
 import { Throttle } from '@nestjs/throttler';
 import { UserJwtSubThrottlerGuard } from '../../common/guards/user-jwt-sub-throttler.guard';
+import { UpdateEngagementStatusDto } from './dto/update-engagement-status.dto';
 
 @ApiTags('engagements')
 @ApiBearerAuth()
@@ -94,5 +95,17 @@ export class EngagementsController {
   @ApiOperation({ summary: 'Force sync engagement status from Stellar chain' })
   sync(@Param('id') id: string) {
     return this.engagementsService.syncFromChain(id);
+  }
+
+  @Patch(':id/status')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Admin override: Force update engagement status' })
+  updateEngagementStatus(
+    @Param('id') id: string,
+    @Body() dto: UpdateEngagementStatusDto,
+    @CurrentUser('id') adminId: string,
+  ) {
+    return this.engagementsService.updateEngagementStatusByAdmin(id, dto.status, dto.reason, adminId);
   }
 }

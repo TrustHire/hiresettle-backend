@@ -192,6 +192,22 @@ model Notification {
   @@map("notifications")
 }
 
+model AuditLog {
+  id          String    @id @default(uuid())
+  entityType  String    // e.g., "Engagement", "Milestone"
+  entityId    String
+  action      String    // e.g., "STATUS_OVERRIDE"
+  oldValue    String?
+  newValue    String
+  reason      String
+  changedBy   String    // userId of the admin who made the change
+  createdAt   DateTime  @default(now())
+
+  @@index([entityType, entityId])
+  @@index([changedBy])
+  @@map("audit_logs")
+}
+
 // Tracks retention milestones that need to be unlocked.
 // The RetentionSchedulerService queries this table every hour.
 model RetentionSchedule {
