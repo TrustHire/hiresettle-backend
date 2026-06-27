@@ -227,3 +227,19 @@ model RetentionSchedule {
   @@index([unlocked])
   @@map("retention_schedules")
 }
+
+model MilestoneAuditLog {
+  id          String        @id @default(uuid())
+  milestoneId String
+  fromStatus  MilestoneStatus
+  toStatus    MilestoneStatus
+  changedBy   String
+  createdAt   DateTime      @default(now())
+
+  milestone   Milestone     @relation(fields: [milestoneId], references: [id])
+  user        User          @relation(fields: [changedBy], references: [id])
+
+  @@index([milestoneId])
+  @@index([changedBy])
+  @@map("milestone_audit_logs")
+}

@@ -1,4 +1,72 @@
-import { Injectable, Logger } from \'@nestjs/common\';\nimport { ConfigService } from \'@nestjs/config\';\nimport * as nodemailer from \'nodemailer\';\nimport * as hbs from \'nodemailer-express-handlebars\';\nimport * as path from \'path\';\nimport { PrismaService } from \'../../common/prisma/prisma.service\';\nimport { NotificationType } from \'@prisma/client\';\n\n@Injectable()\nexport class NotificationsService {\n  private readonly logger = new Logger(NotificationsService.name);\n  private transporter: nodemailer.Transporter;\n\n  constructor(\n    private readonly prisma: PrismaService,\n    private readonly config: ConfigService,\n  ) {\n    this.transporter = nodemailer.createTransport({\n      host: this.config.get(\'SMTP_HOST\'),\n      port: this.config.get<number>(\'SMTP_PORT\', 587),\n      secure: false,\n      auth: {\n        user: this.config.get(\'SMTP_USER\'),\n        pass: this.config.get(\'SMTP_PASS\'),\n      },\n    });\n\n    // Configure Handlebars for email templates\n    const templatesDir = path.resolve(__dirname, \'..\/..\/common\/email\/templates\');\n    this.transporter.use(\n      \'compile\',\n      hbs({\n        viewEngine: {\n          extname: \'.html\',\n          partialsDir: templatesDir,\n          layoutsDir: templatesDir,\n          defaultLayout: \'base\',\n        },\n        viewPath: templatesDir,\n        extName: \'.html\',\n      }),\n    );\n  }\n
+import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import * as nodemailer from 'nodemailer';
+import { PrismaService } from '../../common/prisma/prisma.service';
+import { NotificationType, Notification } from '@prisma/client';
+
+@Injectable()
+export class NotificationsService {
+  private readonly logger = new Logger(NotificationsService.name);
+  private transporter: nodemailer.Transporter;
+  private userConnections: Map<string, any[]> = new Map();
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
+  ) {
+    this.transporter = nodemailer.createTransport({
+      host: this.config.get('SMTP_HOST'),
+      port: this.config.get<number>('SMTP_PORT', 587),
+      secure: false,
+      auth: {
+        user: this.config.get('SMTP_USER'),
+        pass: this.config.get('SMTP_PASS'),
+      },
+    });
+  }
+
+  addConnection(userId: string, res: any) {
+    if (!this.userConnections.has(userId)) {
+      this.userConnections.set(userId, []);
+    }
+    this.userConnections.get(userId)!.push(res);
+    
+    res.on('close', () => {
+      const connections = this.userConnections.get(userId);
+      if (connections) {
+        const index = connections.indexOf(res);
+        if (index > -1) {
+          connections.splice(index, 1);
+        }
+        if (connections.length === 0) {
+          this.userConnections.delete(userId);
+        }
+      }
+    });
+  }
+
+  removeConnection(userId: string, res: any) {
+    const connections = this.userConnections.get(userId);
+    if (connections) {
+      const index = connections.indexOf(res);
+      if (index > -1) {
+        connections.splice(index, 1);
+      }
+      if (connections.length === 0) {
+        this.userConnections.delete(userId);
+      }
+    }
+  }
+
+  private pushToConnections(notification: Notification) {
+    const connections = this.userConnections.get(notification.userId);
+    if (connections) {
+      connections.forEach(res => {
+        res.write(`data: ${JSON.stringify(notification)}\n\n`);
+      });
+    }
+  }
+
   async notifyUser(
     stellarAddress: string,
     type: NotificationType,
@@ -16,6 +84,8 @@ import { Injectable, Logger } from \'@nestjs/common\';\nimport { ConfigService }
       const notification = await this.prisma.notification.create({
         data: { userId: user.id, type, title, message, data: data ?? {} },
       });
+
+      this.pushToConnections(notification);
 
       if (user.email) {
         const pref = await this.prisma.notificationPreference.findUnique({
@@ -42,7 +112,7 @@ import { Injectable, Logger } from \'@nestjs/common\';\nimport { ConfigService }
     const where: any = { userId };
     if (unreadOnly) where.read = false;
 
-    const [notifications, total] = await this.prisma.$transaction([
+    const [notifications, total, unreadCount] = await this.prisma.$transaction([
       this.prisma.notification.findMany({
         where,
         orderBy: { createdAt: 'desc' },
@@ -50,9 +120,14 @@ import { Injectable, Logger } from \'@nestjs/common\';\nimport { ConfigService }
         take: limit,
       }),
       this.prisma.notification.count({ where }),
+      this.prisma.notification.count({ where: { userId, read: false } }),
     ]);
 
-    return { data: notifications, meta: { total, page, limit } };
+    return { data: notifications, meta: { total, page, limit, unreadCount } };
+  }
+
+  async getUnreadCount(userId: string) {
+    return { unreadCount: await this.prisma.notification.count({ where: { userId, read: false } }) };
   }
 
   async markRead(notificationId: string, userId: string) {

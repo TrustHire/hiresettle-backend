@@ -3,6 +3,8 @@ import { ValidationPipe, Logger } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import helmet from 'helmet';
+import * as Sentry from '@sentry/node';
+import { Integrations } from '@sentry/tracing';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
@@ -16,6 +18,21 @@ async function bootstrap() {
   const port = config.get<number>('PORT', 3000);
   const apiPrefix = config.get<string>('API_PREFIX', 'api/v1');
   const corsOrigin = config.get<string>('CORS_ORIGIN', 'http://localhost:3001');
+  const sentryDsn = config.get<string>('SENTRY_DSN');
+  const nodeEnv = config.get<string>('NODE_ENV');
+
+  if (sentryDsn && !['test', 'ci'].includes(nodeEnv)) {
+    Sentry.init({
+      dsn: sentryDsn,
+      integrations: [
+        new Integrations.Http({ tracing: true }),
+        new Integrations.Express(),
+      ],
+      tracesSampleRate: 1.0,
+    });
+    app.use(Sentry.Handlers.requestHandler());
+    app.use(Sentry.Handlers.errorHandler());
+  }
 
   app.use(helmet());
 

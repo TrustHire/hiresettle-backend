@@ -3,10 +3,12 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { TerminusModule } from '@nestjs/terminus';
+import { CacheModule } from '@nestjs/cache-manager';
 
 
 import { PrismaModule } from './common/prisma/prisma.module';
-import { StellarModule } from './common/stellar/stellar.module';
+import { StellarModule as CommonStellarModule } from './common/stellar/stellar.module';
+import { StellarModule } from './modules/stellar/stellar.module';
 
 import { AuthModule } from './modules/auth/auth.module';
 import { EngagementsModule } from './modules/engagements/engagements.module';
@@ -31,7 +33,13 @@ import { AdminModule } from './modules/admin/admin.module';
     }),
     ScheduleModule.forRoot(),
     TerminusModule,
+    CacheModule.register({
+      ttl: 10000, // default cache time in milliseconds
+      max: 100, // maximum number of items in cache
+    }),
+
     PrismaModule,
+    CommonStellarModule,
     StellarModule,
     AuthModule,
     EngagementsModule,

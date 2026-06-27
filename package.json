@@ -29,7 +29,10 @@
     "@nestjs/swagger": "^7.1.0",
     "@nestjs/terminus": "^10.1.0",
     "@nestjs/throttler": "^5.0.0",
-    "@prisma/client": "^5.6.0",
+    "@sentry/node": "^7.x.x",
+    "@sentry/integrations": "^7.x.x",
+    "@sentry/nestjs": "^7.x.x",
+    "@sentry/instrumentation-prisma": "^7.x.x",
     "@stellar/stellar-sdk": "^12.0.0",
     "axios": "^1.6.0",
     "class-transformer": "^0.5.1",
@@ -48,8 +51,8 @@
     "@nestjs/testing": "^10.0.0",
     "@types/express": "^4.17.17",
     "@types/jest": "^29.5.2",
-    "@types/nodemailer": "^6.4.14",
     "@types/node": "^20.3.1",
+    "@types/nodemailer": "^6.4.14",
     "@types/passport-jwt": "^3.0.9",
     "@types/uuid": "^9.0.7",
     "@typescript-eslint/eslint-plugin": "^6.0.0",
@@ -59,7 +62,6 @@
     "eslint-plugin-prettier": "^5.0.0",
     "jest": "^29.5.0",
     "prettier": "^3.0.0",
-    "prisma": "^5.6.0",
     "source-map-support": "^0.5.21",
     "ts-jest": "^29.1.0",
     "ts-loader": "^9.4.3",
@@ -68,12 +70,27 @@
     "typescript": "^5.1.3"
   },
   "jest": {
-    "moduleFileExtensions": ["js", "json", "ts"],
+    "moduleFileExtensions": [
+      "js",
+      "json",
+      "ts"
+    ],
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
-    "transform": { "^.+\\.(t|j)s$": "ts-jest" },
-    "collectCoverageFrom": ["**/*.(t|j)s"],
+    "transform": {
+      "^.+\\.(t|j)s$": "ts-jest"
+    },
+    "collectCoverageFrom": [
+      "**/*.(t|j)s"
+    ],
     "coverageDirectory": "../coverage",
+    "coverageThreshold": {
+      "global": {
+        "lines": 70,
+        "functions": 70,
+        "branches": 60
+      }
+    },
     "testEnvironment": "node"
   }
 }
