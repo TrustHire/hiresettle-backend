@@ -448,11 +448,35 @@ export class EventsService implements OnModuleInit {
   }
 
   // ----------------------------------------------------------
+  // PUBLIC — called by ChainEventRetryService
+  // ----------------------------------------------------------
+
+  async processChainEventRecord(chainEvent: any): Promise<void> {
+    const pseudoEvent = {
+      ledger: chainEvent.ledger,
+      txHash: chainEvent.txHash,
+      topic: [chainEvent.eventName],
+      value: chainEvent.payload,
+    };
+    await this.processEvent(pseudoEvent);
+  }
+
+  // ----------------------------------------------------------
   // READ — for EventsController
   // ----------------------------------------------------------
 
-  async findAll(engagementId?: string, page = 1, limit = 20) {
-    const where = engagementId ? { engagementId } : {};
+  async findAll(
+    engagementId?: string,
+    eventName?: string,
+    processed?: boolean,
+    page = 1,
+    limit = 20,
+  ) {
+    const where: any = {};
+    if (engagementId) where.engagementId = engagementId;
+    if (eventName) where.eventName = eventName;
+    if (processed !== undefined) where.processed = processed;
+
     const [events, total] = await this.prisma.$transaction([
       this.prisma.chainEvent.findMany({
         where,

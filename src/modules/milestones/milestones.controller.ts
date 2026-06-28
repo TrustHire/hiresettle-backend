@@ -1,5 +1,5 @@
 import { Controller, Get, Param, ParseIntPipe, UseGuards, Patch, UnprocessableEntityException, Post, UseInterceptors, UploadedFile, ForbiddenException, Body } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiResponse, ApiParam } from '@nestjs/swagger';
 import { MilestonesService } from './milestones.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -24,24 +24,30 @@ export class MilestonesController {
   constructor(private readonly milestonesService: MilestonesService) { }
 
   @Get()
-  @ApiOperation({ summary: 'List all milestones for an engagement' })
+  @ApiOperation({ summary: 'List all milestones for an engagement (parties only)' })
   @ApiResponse({ status: 200, description: 'Milestones retrieved successfully' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Not a party to this engagement' })
   @ApiResponse({ status: 404, description: 'Engagement not found' })
-  findAll(@Param('engagementId') engagementId: string) {
-    return this.milestonesService.findByEngagement(engagementId);
+  findAll(
+    @Param('engagementId') engagementId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.milestonesService.findByEngagementForUser(engagementId, user);
   }
 
   @Get(':index')
-  @ApiOperation({ summary: 'Get a single milestone by index' })
+  @ApiOperation({ summary: 'Get a single milestone by index (parties only)' })
   @ApiResponse({ status: 200, description: 'Milestone retrieved successfully' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Not a party to this engagement' })
   @ApiResponse({ status: 404, description: 'Engagement or milestone not found' })
   findOne(
     @Param('engagementId') engagementId: string,
     @Param('index', ParseIntPipe) index: number,
+    @CurrentUser() user: any,
   ) {
-    return this.milestonesService.findOne(engagementId, index);
+    return this.milestonesService.findOneForUser(engagementId, index, user);
   }
 
   @Get(':index/timer')

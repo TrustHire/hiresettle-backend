@@ -158,14 +158,16 @@ model Milestone {
 }
 
 model ChainEvent {
-  id           String   @id @default(uuid())
+  id           String    @id @default(uuid())
   engagementId String?
-  eventName    String   // e.g. "engagement_created", "milestone_confirmed"
+  eventName    String    // e.g. "engagement_created", "milestone_confirmed"
   ledger       Int
   txHash       String
   payload      Json
-  processed    Boolean  @default(false)
-  createdAt    DateTime @default(now())
+  processed    Boolean   @default(false)
+  retryCount   Int       @default(0)
+  lastErrorAt  DateTime?
+  createdAt    DateTime  @default(now())
 
   // Relations
   engagement Engagement? @relation(fields: [engagementId], references: [id])
@@ -174,6 +176,33 @@ model ChainEvent {
   @@index([eventName])
   @@index([processed])
   @@map("chain_events")
+}
+
+model SystemConfig {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+
+  @@map("system_config")
+}
+
+model DeadLetterEvent {
+  id           String    @id @default(uuid())
+  originalId   String    @unique
+  engagementId String?
+  eventName    String
+  ledger       Int
+  txHash       String
+  payload      Json
+  retryCount   Int       @default(0)
+  lastErrorAt  DateTime?
+  errorMessage String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([eventName])
+  @@index([engagementId])
+  @@map("dead_letter_events")
 }
 
 model Notification {

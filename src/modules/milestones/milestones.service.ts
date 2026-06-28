@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, Logger, UnprocessableEntityException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, Logger, UnprocessableEntityException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
 import { MilestoneStatus, NotificationType } from '@prisma/client';
@@ -21,6 +21,16 @@ export class MilestonesService {
     });
   }
 
+  async findByEngagementForUser(engagementId: string, user: any) {
+    const engagement = await this.prisma.engagement.findUnique({ where: { id: engagementId } });
+    if (!engagement) throw new NotFoundException(`Engagement ${engagementId} not found`);
+    this.checkPartyAccess(engagement, user);
+    return this.prisma.milestone.findMany({
+      where: { engagementId },
+      orderBy: { milestoneIndex: 'asc' },
+    });
+  }
+
   async findOne(engagementId: string, milestoneIndex: number) {
     const m = await this.prisma.milestone.findUnique({
       where: { engagementId_milestoneIndex: { engagementId, milestoneIndex } },
@@ -29,6 +39,38 @@ export class MilestonesService {
       `Milestone ${milestoneIndex} not found on engagement ${engagementId}`,
     );
     return m;
+  }
+
+  async findOneForUser(engagementId: string, milestoneIndex: number, user: any) {
+    const m = await this.prisma.milestone.findUnique({
+      where: { engagementId_milestoneIndex: { engagementId, milestoneIndex } },
+      include: { engagement: true },
+    });
+    if (!m) throw new NotFoundException(
+      `Milestone ${milestoneIndex} not found on engagement ${engagementId}`,
+    );
+    this.checkPartyAccess((m as any).engagement, user);
+    const { engagement: _, ...milestone } = m as any;
+    return milestone;
+  }
+
+  async findById(id: string, user: any) {
+    const m = await this.prisma.milestone.findUnique({
+      where: { id },
+      include: { engagement: true },
+    });
+    if (!m) throw new NotFoundException(`Milestone ${id} not found`);
+    this.checkPartyAccess((m as any).engagement, user);
+    const { engagement: _, ...milestone } = m as any;
+    return milestone;
+  }
+
+  private checkPartyAccess(engagement: any, user: any): void {
+    if (user?.role === 'ADMIN') return;
+    const addr = user?.stellarAddress;
+    if (!addr) throw new ForbiddenException('Not a party to this engagement');
+    const parties = [engagement.companyAddress, engagement.recruiterAddress, engagement.arbiterAddress];
+    if (!parties.includes(addr)) throw new ForbiddenException('Not a party to this engagement');
   }
 
   /**
