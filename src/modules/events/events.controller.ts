@@ -16,9 +16,11 @@ export class EventsController {
 
   @Get()
   @ApiOperation({ summary: 'List on-chain events with optional engagement filter' })
-  @ApiQuery({ name: 'engagementId', required: false })
-  @ApiQuery({ name: 'page', required: false, type: Number })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'engagementId', required: false, description: 'Filter by engagement ID' })
+  @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number' })
+  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page' })
+  @ApiResponse({ status: 200, description: 'Events list retrieved' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
   findAll(
     @Query('engagementId') engagementId?: string,
     @Query('page') page?: number,

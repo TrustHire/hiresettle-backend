@@ -18,18 +18,32 @@ export class AdminController {
 
   @Get('users')
   @ApiOperation({ summary: 'List / search users (admin only)' })
+  @ApiResponse({ status: 200, description: 'Users list retrieved' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
   listUsers(@Query() dto: ListUsersDto) {
     return this.adminUsers.listUsers(dto);
   }
 
   @Delete('users/:id')
   @ApiOperation({ summary: 'Deactivate a user (soft delete)' })
+  @ApiParam({ name: 'id', description: 'User ID' })
+  @ApiResponse({ status: 200, description: 'User deactivated' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  @ApiResponse({ status: 404, description: 'User not found' })
   deactivateUser(@Param('id') id: string) {
     return this.adminUsers.deactivateUser(id);
   }
 
   @Post('users/:id/reactivate')
   @ApiOperation({ summary: 'Reactivate a deactivated user' })
+  @ApiParam({ name: 'id', description: 'User ID' })
+  @ApiResponse({ status: 200, description: 'User reactivated' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  @ApiResponse({ status: 409, description: 'User already active' })
   reactivateUser(@Param('id') id: string) {
     return this.adminUsers.reactivateUser(id);
   }

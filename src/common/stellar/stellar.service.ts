@@ -32,6 +32,12 @@ import {
  * This service does NOT hold user funds. The backend Stellar keypair
  * is used only for read-only RPC calls.
  */
+interface TokenConfig {
+  address: string;
+  symbol: string;
+  decimals: number;
+}
+
 @Injectable()
 export class StellarService implements OnModuleInit {
   private readonly logger = new Logger(StellarService.name);
@@ -40,6 +46,7 @@ export class StellarService implements OnModuleInit {
   private networkPassphrase: string;
   private contractId: string;
   private backendKeypair: Keypair;
+  private allowedTokens: TokenConfig[];
   private readonly LEDGERS_PER_DAY = 17_280; // 86400s ÷ 5s per ledger
 
   constructor(private readonly config: ConfigService) {}
@@ -53,13 +60,23 @@ export class StellarService implements OnModuleInit {
     this.networkPassphrase =
       networkName === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
 
-    const secretKey = this.config.get<string>("STELLAR_SECRET_KEY");
+    // Parse allowed tokens from config
+    try {
+      const allowedTokensJson = this.config.get<string>('ALLOWED_TOKENS', '[]');
+      this.allowedTokens = JSON.parse(allowedTokensJson);
+    } catch (e) {
+      this.logger.error('Failed to parse ALLOWED_TOKENS from config', e);
+      this.allowedTokens = [];
+    }
+
+    const secretKey = this.config.get<string>('STELLAR_SECRET_KEY');
     if (secretKey) {
       this.backendKeypair = Keypair.fromSecret(secretKey);
     }
 
     this.logger.log(`Stellar connected to ${networkName} (${rpcUrl})`);
     this.logger.log(`Contract: ${this.contractId}`);
+    this.logger.log(`Allowed tokens: ${this.allowedTokens.map(t => `${t.symbol} (${t.address})`).join(', ')}`);
   }
 
   // ----------------------------------------------------------
@@ -332,8 +349,27 @@ export class StellarService implements OnModuleInit {
   }
 
   // ----------------------------------------------------------
-  // USDC UTILITIES
+  // TOKEN UTILITIES
   // ----------------------------------------------------------
+
+  /** Get list of allowed tokens with metadata */
+  getAllowedTokens(): TokenConfig[] {
+    return this.allowedTokens;
+  }
+
+  /** Check if a token address is in the allowlist */
+  isTokenAllowed(tokenAddress: string): boolean {
+    return this.allowedTokens.some(t => t.address === tokenAddress);
+  }
+
+  /** Get token config by address, throws if not allowed */
+  getTokenConfig(tokenAddress: string): TokenConfig {
+    const config = this.allowedTokens.find(t => t.address === tokenAddress);
+    if (!config) {
+      throw new BadRequestException(`Token ${tokenAddress} is not allowed`);
+    }
+    return config;
+  }
 
   /**
    * Check if a Stellar account has sufficient token balance.
@@ -357,7 +393,8 @@ export class StellarService implements OnModuleInit {
     tokenAddress: string,
   ): Promise<{ balance: bigint }> {
     try {
-      const horizonUrl = this.config.get<string>("STELLAR_HORIZON_URL");
+      const tokenConfig = this.getTokenConfig(tokenAddress);
+      const horizonUrl = this.config.get<string>('STELLAR_HORIZON_URL');
       const response = await fetch(`${horizonUrl}/accounts/${accountAddress}`);
       if (!response.ok) {
         // For balance endpoint and validations we want a hard failure.
@@ -402,15 +439,41 @@ export class StellarService implements OnModuleInit {
     }
   }
 
-  /** Convert stroops (i128 as string/bigint) to human-readable USDC */
-  stroopsToUsdc(stroops: string | bigint, decimals = 2): string {
+  /** Convert stroops (i128 as string/bigint) to human-readable amount */
+  stroopsToHuman(stroops: string | bigint, tokenAddress: string, decimalsOverride?: number): string {
+    const config = decimalsOverride ? { decimals: decimalsOverride } : this.getTokenConfig(tokenAddress);
     const value = BigInt(stroops);
-    const whole = value / 10_000_000n;
-    const fraction = (value % 10_000_000n).toString().padStart(7, "0");
+    const divisor = BigInt(10) ** BigInt(config.decimals);
+    const whole = value / divisor;
+    const fraction = (value % divisor).toString().padStart(config.decimals, '0');
+    return parseFloat(`${whole}.${fraction}`).toFixed(config.decimals);
+  }
+
+  /** Convert human-readable amount to stroops */
+  humanToStroops(human: string, tokenOrDecimals: string | number): bigint {
+    let decimals: number;
+    if (typeof tokenOrDecimals === 'string') {
+      const config = this.getTokenConfig(tokenOrDecimals);
+      decimals = config.decimals;
+    } else {
+      decimals = tokenOrDecimals;
+    }
+    const [whole, fraction = ''] = human.split('.');
+    const paddedFraction = fraction.padEnd(decimals, '0').slice(0, decimals);
+    const divisor = BigInt(10) ** BigInt(decimals);
+    return BigInt(whole) * divisor + BigInt(paddedFraction);
+  }
+
+  /** Convert stroops (i128 as string/bigint) to human-readable USDC (backward compatibility) */
+  stroopsToUsdc(stroops: string | bigint, decimals = 2): string {
+    const divisor = BigInt(10) ** BigInt(7);
+    const value = BigInt(stroops);
+    const whole = value / divisor;
+    const fraction = (value % divisor).toString().padStart(7, '0');
     return parseFloat(`${whole}.${fraction}`).toFixed(decimals);
   }
 
-  /** Convert human-readable USDC amount to stroops */
+  /** Convert human-readable USDC amount to stroops (backward compatibility) */
   usdcToStroops(usdc: string): bigint {
     const [whole, fraction = ""] = usdc.split(".");
     const paddedFraction = fraction.padEnd(7, "0").slice(0, 7);

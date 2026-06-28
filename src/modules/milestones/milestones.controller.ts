@@ -25,12 +25,18 @@ export class MilestonesController {
 
   @Get()
   @ApiOperation({ summary: 'List all milestones for an engagement' })
+  @ApiResponse({ status: 200, description: 'Milestones retrieved successfully' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 404, description: 'Engagement not found' })
   findAll(@Param('engagementId') engagementId: string) {
     return this.milestonesService.findByEngagement(engagementId);
   }
 
   @Get(':index')
   @ApiOperation({ summary: 'Get a single milestone by index' })
+  @ApiResponse({ status: 200, description: 'Milestone retrieved successfully' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 404, description: 'Engagement or milestone not found' })
   findOne(
     @Param('engagementId') engagementId: string,
     @Param('index', ParseIntPipe) index: number,
@@ -40,6 +46,9 @@ export class MilestonesController {
 
   @Get(':index/timer')
   @ApiOperation({ summary: 'Get retention countdown timer for a Locked milestone' })
+  @ApiResponse({ status: 200, description: 'Timer retrieved successfully' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 404, description: 'Milestone not in Locked state' })
   getTimer(
     @Param('engagementId') engagementId: string,
     @Param('index', ParseIntPipe) index: number,
@@ -51,6 +60,10 @@ export class MilestonesController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.ARBITER)
   @ApiOperation({ summary: 'Resolve a dispute on a milestone (arbiter only)' })
+  @ApiResponse({ status: 200, description: 'Dispute resolved successfully' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  @ApiResponse({ status: 404, description: 'Milestone not found' })
   resolveDispute(
     @Param('engagementId') engagementId: string,
     @Param('index', ParseIntPipe) index: number,

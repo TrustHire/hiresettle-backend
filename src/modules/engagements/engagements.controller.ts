@@ -4,7 +4,7 @@ import {
 } from '@nestjs/common';
 import {
   ApiTags, ApiOperation, ApiResponse,
-  ApiBearerAuth, ApiQuery,
+  ApiBearerAuth, ApiQuery, ApiParam,
 } from '@nestjs/swagger';
 import { EngagementsService } from './engagements.service';
 import { CreateEngagementDto } from './dto/create-engagement.dto';
@@ -13,7 +13,6 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { UserRole } from '@prisma/client';
-import { EngagementStatus } from '@prisma/client';
 import { Throttle } from '@nestjs/throttler';
 import { UserJwtSubThrottlerGuard } from '../../common/guards/user-jwt-sub-throttler.guard';
 import { AdminUsersService } from '../admin/admin-users.service';
@@ -35,12 +34,19 @@ export class EngagementsController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.COMPANY)
   @HttpCode(HttpStatus.CREATED)
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.COMPANY)
-  @ApiOperation({ summary: 'Register a newly created on-chain engagement' })
   @ApiOperation({ summary: 'Create engagement with on-chain escrow (COMPANY only)' })
+  @ApiResponse({ status: 201, description: 'Engagement created successfully' })
+  @ApiResponse({ status: 400, description: 'Invalid request' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  @ApiResponse({ status: 422, description: 'Validation failed' })
   create(@Body() dto: CreateEngagementDto) {
     return this.engagementsService.create(dto);
+  create(
+    @CurrentUser() user: User,
+    @Body() dto: CreateEngagementDto,
+  ) {
+    return this.engagementsService.create(user, dto);
   }
 
   /**
@@ -49,14 +55,16 @@ export class EngagementsController {
    */
   @Get()
   @ApiOperation({ summary: 'List engagements with flexible filters and pagination' })
-  @ApiQuery({ name: 'companyAddress', required: false })
-  @ApiQuery({ name: 'recruiterAddress', required: false })
+  @ApiQuery({ name: 'companyAddress', required: false, description: 'Filter by company Stellar address' })
+  @ApiQuery({ name: 'recruiterAddress', required: false, description: 'Filter by recruiter Stellar address' })
   @ApiQuery({ name: 'status', required: false, description: 'Single value or comma-separated (e.g., ACTIVE,COMPLETED)' })
   @ApiQuery({ name: 'search', required: false, description: 'Case-insensitive partial match on jobTitle' })
   @ApiQuery({ name: 'createdFrom', required: false, description: 'ISO date string (e.g., 2026-01-01)' })
   @ApiQuery({ name: 'createdTo', required: false, description: 'ISO date string (e.g., 2026-12-31)' })
-  @ApiQuery({ name: 'page', required: false, type: Number })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number' })
+  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page' })
+  @ApiResponse({ status: 200, description: 'Engagements list retrieved' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
   findAll(
     @Query('companyAddress') companyAddress?: string,
     @Query('recruiterAddress') recruiterAddress?: string,
@@ -85,6 +93,9 @@ export class EngagementsController {
    */
   @Get(':id')
   @ApiOperation({ summary: 'Get full engagement details' })
+  @ApiParam({ name: 'id', description: 'Engagement ID' })
+  @ApiResponse({ status: 200, description: 'Engagement retrieved' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 404, description: 'Engagement not found' })
   findOne(@Param('id') id: string) {
     return this.engagementsService.findOne(id);
@@ -97,6 +108,10 @@ export class EngagementsController {
   @Post(':id/sync')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Force sync engagement status from Stellar chain' })
+  @ApiParam({ name: 'id', description: 'Engagement ID' })
+  @ApiResponse({ status: 200, description: 'Engagement synced successfully' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 404, description: 'Engagement not found' })
   sync(@Param('id') id: string) {
     return this.engagementsService.syncFromChain(id);
   }

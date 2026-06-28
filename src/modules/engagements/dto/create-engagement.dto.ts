@@ -65,9 +65,13 @@ export class CreateEngagementDto {
   @IsString() @IsNotEmpty()
   totalAmount: string;
 
-  @ApiProperty({ example: 'Senior Software Engineer' })
-  @IsString() @IsNotEmpty()
-  jobTitle: string;
+  @ApiProperty({ required: false, example: 'template-id' })
+  @IsOptional() @IsString()
+  templateId?: string;
+
+  @ApiProperty({ example: 'Senior Software Engineer', required: false })
+  @IsOptional() @IsString()
+  jobTitle?: string;
 
   @ApiProperty({ required: false })
   @IsOptional() @IsString()
@@ -81,12 +85,11 @@ export class CreateEngagementDto {
   @IsOptional() @IsString()
   location?: string;
 
-  @ApiProperty({ type: [MilestoneInputDto] })
-  @IsArray()
+  @ApiProperty({ type: [MilestoneInputDto], required: false })
+  @IsOptional() @IsArray()
   @ValidateNested({ each: true })
   @Type(() => MilestoneInputDto)
-  @MilestonesSum100()
-  milestones: MilestoneInputDto[];
+  milestones?: MilestoneInputDto[];
 
   @ApiProperty({
     required: false,

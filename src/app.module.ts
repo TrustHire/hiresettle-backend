@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, CacheModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -12,6 +12,8 @@ import { StellarModule } from './modules/stellar/stellar.module';
 
 import { AuthModule } from './modules/auth/auth.module';
 import { EngagementsModule } from './modules/engagements/engagements.module';
+import { EngagementTemplatesModule } from './modules/engagement-templates/engagement-templates.module';
+import { RecruitersModule } from './modules/recruiters/recruiters.module';
 import { MilestonesModule } from './modules/milestones/milestones.module';
 import { EventsModule } from './modules/events/events.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
@@ -44,6 +46,7 @@ import { BillingModule } from './modules/billing/billing.module';
     StellarModule,
     AuthModule,
     EngagementsModule,
+    RecruitersModule,
     MilestonesModule,
     EventsModule,
     NotificationsModule,

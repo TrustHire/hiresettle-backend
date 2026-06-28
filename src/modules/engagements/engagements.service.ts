@@ -1,6 +1,7 @@
 import {
   Injectable, NotFoundException, ConflictException, BadRequestException, Logger, ForbiddenException,
 } from '@nestjs/common';
+import { User } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
 import { CreateEngagementDto } from './dto/create-engagement.dto';
@@ -21,7 +22,7 @@ export class EngagementsService {
   // CREATE — validates, checks balance, submits on-chain, persists
   // ----------------------------------------------------------
 
-  async create(dto: CreateEngagementDto) {
+  async create(user: User, dto: CreateEngagementDto) {
     const existing = await this.prisma.engagement.findUnique({
       where: { id: dto.engagementId },
     });
@@ -29,33 +30,67 @@ export class EngagementsService {
       throw new ConflictException(`Engagement ${dto.engagementId} already exists`);
     }
 
+    // Validate token is allowed
+    if (!this.stellar.isTokenAllowed(dto.tokenAddress)) {
+      throw new BadRequestException(`Token ${dto.tokenAddress} is not allowed`);
+    }
+
+    // Load template if provided
+    let template: any = null;
+    if (dto.templateId) {
+      template = await this.prisma.engagementTemplate.findUnique({
+        where: { id: dto.templateId },
+      });
+      if (!template) throw new NotFoundException(`Template ${dto.templateId} not found`);
+      if (template.companyId !== user.id) throw new ForbiddenException('Not authorized to use this template');
+    }
+
+    // Merge template and dto (dto overrides template)
+    const mergedData = {
+      ...dto,
+      jobTitle: dto.jobTitle ?? template?.jobTitle,
+      jobDescription: dto.jobDescription ?? template?.jobDescription,
+      salaryRange: dto.salaryRange ?? template?.salaryRange,
+      location: dto.location ?? template?.location,
+      milestones: dto.milestones ?? template?.milestoneConfig?.milestones,
+      retentionDays: dto.retentionDays ?? template?.milestoneConfig?.retentionDays,
+    };
+
+    // Validate required fields after merge
+    if (!mergedData.jobTitle) throw new BadRequestException('jobTitle is required (either provide it or use a template)');
+    if (!mergedData.milestones) throw new BadRequestException('milestones are required (either provide them or use a template)');
+
+    // Validate milestone sum still (since we merged)
+    const sum = mergedData.milestones.reduce((acc: number, m: any) => acc + (m.paymentPercent || 0), 0);
+    if (sum !== 100) throw new BadRequestException('Milestone paymentPercent values must sum to exactly 100');
+
     // 1. Check company has sufficient token balance
     const { sufficient, balance } = await this.stellar.checkTokenBalance(
-      dto.companyAddress,
-      dto.tokenAddress,
-      BigInt(dto.totalAmount),
+      mergedData.companyAddress,
+      mergedData.tokenAddress,
+      BigInt(mergedData.totalAmount),
     );
     if (!sufficient) {
       throw new BadRequestException(
-        `Insufficient token balance. Required: ${dto.totalAmount} stroops, available: ${balance.toString()}`,
+        `Insufficient token balance. Required: ${mergedData.totalAmount} stroops, available: ${balance.toString()}`,
       );
     }
 
     // 2. Submit on-chain create_engagement transaction
-    const retentionMilestones = dto.milestones.filter((m) => m.kind === 'RETENTION');
+    const retentionMilestones = mergedData.milestones.filter((m: any) => m.kind === 'RETENTION');
     const { txHash, ledger: createdLedger } = await this.stellar.submitCreateEngagement({
-      engagementId: dto.engagementId,
-      companyAddress: dto.companyAddress,
-      recruiterAddress: dto.recruiterAddress,
-      arbiterAddress: dto.arbiterAddress,
-      tokenAddress: dto.tokenAddress,
-      totalAmount: dto.totalAmount,
-      milestones: dto.milestones.map((m, index) => ({
+      engagementId: mergedData.engagementId,
+      companyAddress: mergedData.companyAddress,
+      recruiterAddress: mergedData.recruiterAddress,
+      arbiterAddress: mergedData.arbiterAddress,
+      tokenAddress: mergedData.tokenAddress,
+      totalAmount: mergedData.totalAmount,
+      milestones: mergedData.milestones.map((m: any, index: number) => ({
         name: m.name,
         paymentPercent: m.paymentPercent,
         kind: m.kind,
         retentionDays: m.kind === 'RETENTION'
-          ? dto.retentionDays?.[retentionMilestones.indexOf(m)] ?? undefined
+          ? mergedData.retentionDays?.[retentionMilestones.indexOf(m)] ?? undefined
           : undefined,
       })),
     });
@@ -64,9 +99,9 @@ export class EngagementsService {
 
     // 3. Build milestone data with unlock estimates
     let retentionIdx = 0;
-    const milestoneData = dto.milestones.map((m, index) => {
+    const milestoneData = mergedData.milestones.map((m: any, index: number) => {
       const isRetention = m.kind === 'RETENTION';
-      const retentionDays = isRetention ? (dto.retentionDays?.[retentionIdx++] ?? null) : null;
+      const retentionDays = isRetention ? (mergedData.retentionDays?.[retentionIdx++] ?? null) : null;
       const validAfterLedger = isRetention && retentionDays
         ? createdLedger + (retentionDays * 17_280)
         : null;
@@ -90,16 +125,16 @@ export class EngagementsService {
     const engagement = await this.prisma.$transaction(async (tx) => {
       const created = await tx.engagement.create({
         data: {
-          id: dto.engagementId,
-          companyAddress: dto.companyAddress,
-          recruiterAddress: dto.recruiterAddress,
-          arbiterAddress: dto.arbiterAddress,
-          tokenAddress: dto.tokenAddress,
-          totalAmount: BigInt(dto.totalAmount),
-          jobTitle: dto.jobTitle,
-          jobDescription: dto.jobDescription,
-          salaryRange: dto.salaryRange,
-          location: dto.location,
+          id: mergedData.engagementId,
+          companyAddress: mergedData.companyAddress,
+          recruiterAddress: mergedData.recruiterAddress,
+          arbiterAddress: mergedData.arbiterAddress,
+          tokenAddress: mergedData.tokenAddress,
+          totalAmount: BigInt(mergedData.totalAmount),
+          jobTitle: mergedData.jobTitle,
+          jobDescription: mergedData.jobDescription,
+          salaryRange: mergedData.salaryRange,
+          location: mergedData.location,
           txHash,
           createdLedger,
           milestones: { create: milestoneData },
