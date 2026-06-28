@@ -82,7 +82,7 @@ A dedicated Prisma model that tracks when each retention milestone should unlock
 
 ## API Endpoints
 
-All endpoints prefixed with `/api/v1`. Protected routes require `Authorization: Bearer <JWT>`.
+All endpoints prefixed with `/v1`. Protected routes require `Authorization: Bearer <JWT>`.
 
 ### Auth
 | Method | Path | Description |
@@ -160,7 +160,7 @@ npx prisma generate
 npm run start:dev
 ```
 
-API: `http://localhost:3000/api/v1`
+API: `http://localhost:3000/v1`
 Swagger: `http://localhost:3000/docs`
 
 ---

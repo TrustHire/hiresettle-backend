@@ -70,7 +70,13 @@ async function bootstrap() {
     credentials: true,
   });
 
-  app.setGlobalPrefix(apiPrefix);
+  app.setGlobalPrefix(apiPrefix, {
+    exclude: [
+      { path: 'health', method: 'GET' },
+      { path: 'docs', method: 'GET' },
+      { path: 'docs-json', method: 'GET' },
+    ],
+  });
 
   // Enable graceful shutdown hooks
   app.enableShutdownHooks();
@@ -91,33 +97,40 @@ async function bootstrap() {
   app.useGlobalFilters(new TooManyRequestsHeadersFilter());
   app.useGlobalFilters(new HttpExceptionFilter());
 
+  if (nodeEnv !== 'production') {
+    const swaggerConfig = new DocumentBuilder()
+      .setTitle('HireSettle API')
+      .setDescription(
+        'Backend API for HireSettle — milestone-based recruiter fee escrow on Stellar Soroban',
+      )
+      .setVersion('1.0')
+      .addBearerAuth()
+      .addTag('engagements', 'Recruitment engagement lifecycle')
+      .addTag('milestones', 'Milestone proof, unlock, and confirmation')
+      .addTag('events', 'On-chain Stellar event feed')
+      .addTag('notifications', 'User notifications')
+      .addTag('auth', 'Email/password authentication')
+      .addTag('health', 'Health check endpoints')
+      .setBasePath(apiPrefix)
+      .build();
 
+    const document = SwaggerModule.createDocument(app, swaggerConfig);
+    SwaggerModule.setup('docs', app, document, {
+      swaggerOptions: { persistAuthorization: true },
+    });
 
+    // Add docs-json endpoint for Postman import
+    const httpAdapter = app.getHttpAdapter();
+    httpAdapter.get('/docs-json', (req: any, res: any) => {
+      res.json(document);
+    });
 
-
-  const swaggerConfig = new DocumentBuilder()
-    .setTitle('HireSettle API')
-    .setDescription(
-      'Backend API for HireSettle — milestone-based recruiter fee escrow on Stellar Soroban',
-    )
-    .setVersion('1.0')
-    .addBearerAuth()
-    .addTag('engagements', 'Recruitment engagement lifecycle')
-    .addTag('milestones', 'Milestone proof, unlock, and confirmation')
-    .addTag('events', 'On-chain Stellar event feed')
-    .addTag('notifications', 'User notifications')
-    .addTag('auth', 'Email/password authentication')
-    .addTag('health', 'Health check endpoints')
-    .build();
-
-  const document = SwaggerModule.createDocument(app, swaggerConfig);
-  SwaggerModule.setup('docs', app, document, {
-    swaggerOptions: { persistAuthorization: true },
-  });
+    logger.log(`Swagger docs available at http://localhost:${port}/docs`);
+    logger.log(`OpenAPI JSON available at http://localhost:${port}/docs-json`);
+  }
 
   await app.listen(port);
   logger.log(`HireSettle API running on http://localhost:${port}/${apiPrefix}`);
-  logger.log(`Swagger docs at http://localhost:${port}/docs`);
 }
 
 bootstrap();
