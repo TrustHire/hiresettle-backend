@@ -3,10 +3,16 @@ import { NotificationType } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { UpdatePreferencesDto } from './dto/update-preferences.dto';
 import { PublicUserDto } from './dto/public-user.dto';
+import { CacheService } from '../../common/cache/cache.service';
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  private static readonly PROFILE_TTL_S = 30;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cache: CacheService,
+  ) {}
 
   async getPreferences(userId: string) {
     const saved = await this.prisma.notificationPreference.findMany({
@@ -21,11 +27,17 @@ export class UsersService {
   }
 
   async findByStellarAddress(stellarAddress: string): Promise<PublicUserDto> {
+    const cacheKey = `user:profile:${stellarAddress}`;
+    const cached = await this.cache.get<PublicUserDto>(cacheKey);
+    if (cached) return cached;
+
     const user = await this.prisma.user.findUnique({
       where: { stellarAddress },
       select: { name: true, company: true, role: true },
     });
     if (!user) throw new NotFoundException('User not found');
+
+    await this.cache.set(cacheKey, user, UsersService.PROFILE_TTL_S);
     return user;
   }
 

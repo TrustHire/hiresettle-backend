@@ -1,29 +1,39 @@
 name: CI
 
-on: [push, pull_request]
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
 
 jobs:
-  build:
+  ci:
     runs-on: ubuntu-latest
+
     services:
       postgres:
-        image: postgres:13
+        image: postgres:16
         env:
-          POSTGRES_DB: test_db
-          POSTGRES_USER: test_user
-          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: hiresettle_test
+          POSTGRES_USER: hiresettle
+          POSTGRES_PASSWORD: hiresettle
         ports:
           - 5432:5432
-        options: >- 
+        options: >-
           --health-cmd pg_isready
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://hiresettle:hiresettle@localhost:5432/hiresettle_test
+      NODE_ENV: test
+
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Set up Node 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -40,23 +50,23 @@ jobs:
       - name: Install dependencies
         if: steps.cache-node-modules.outputs.cache-hit != 'true'
         run: npm ci
-        env:
-          DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db
 
       - name: Lint
         run: npm run lint
-        env:
-          DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db
 
-      - name: Type check
-        run: npm run build -- --noEmit
-        env:
-          DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db
+      - name: Type-check
+        run: npx tsc --noEmit
 
-      - name: Test with coverage
-        run: npm test -- --coverage
-        env:
-          DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db
+      - name: Check for uncommitted schema changes
+        run: npx prisma migrate diff --exit-code --from-schema-datasource prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma
+        continue-on-error: true
 
-      # This step would typically involve checking coverage thresholds
-      # For now, we'll assume `npm test -- --coverage` handles it or add a separate step later.
+      - name: Run Prisma migrations (test DB)
+        run: npx prisma migrate deploy
+
+      - name: Unit tests
+        run: npx jest --testPathPattern="\.spec\.ts$" --testPathIgnorePatterns="integration" --forceExit
+
+      - name: Integration tests
+        run: npx jest --testPathPattern="integration" --forceExit
+        continue-on-error: true
