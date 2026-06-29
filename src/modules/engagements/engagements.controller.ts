@@ -1,23 +1,29 @@
 import {
   Controller, Get, Post, Body, Param,
-  Query, UseGuards, HttpCode, HttpStatus, Patch,
+  Query, UseGuards, HttpCode, HttpStatus,
+  Patch,
 } from '@nestjs/common';
 import { User } from '@prisma/client';
 import {
   ApiTags, ApiOperation, ApiResponse,
   ApiBearerAuth, ApiQuery, ApiParam,
 } from '@nestjs/swagger';
+import { User, UserRole } from '@prisma/client';
+import { Throttle } from '@nestjs/throttler';
 import { EngagementsService } from './engagements.service';
 import { CreateEngagementDto } from './dto/create-engagement.dto';
+import { UpdateEngagementStatusDto } from './dto/update-engagement-status.dto';
+import { AuditLogService } from './audit-log.service';
+import { AuditLogEntryDto } from './dto/audit-log-response.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
-import { UserRole } from '@prisma/client';
-import { Throttle } from '@nestjs/throttler';
 import { UserJwtSubThrottlerGuard } from '../../common/guards/user-jwt-sub-throttler.guard';
 import { AdminUsersService } from '../admin/admin-users.service';
 import { UpdateEngagementStatusDto } from './dto/update-engagement-status.dto';
+import { CancelEngagementDto } from './dto/cancel-engagement.dto';
+import { RequestReplacementDto } from './dto/request-replacement.dto';
 
 @ApiTags('engagements')
 @ApiBearerAuth()
@@ -29,7 +35,8 @@ export class EngagementsController {
   constructor(
     private readonly engagementsService: EngagementsService,
     private readonly adminUsersService: AdminUsersService,
-  ) { }
+    private readonly auditLogService: AuditLogService,
+  ) {}
 
   @Post()
   @UseGuards(RolesGuard)
@@ -108,6 +115,23 @@ export class EngagementsController {
   @ApiResponse({ status: 404, description: 'Engagement not found' })
   async getEngagementSummary(@Param('id') id: string, @CurrentUser() user: any) {
     return this.engagementsService.getSummary(id, user.id);
+  }
+
+  /**
+   * GET /api/v1/engagements/:id/audit-log
+   * Returns the full status transition history for an engagement.
+   */
+  @Get(':id/audit-log')
+  @ApiOperation({ summary: 'Get engagement audit log' })
+  @ApiParam({ name: 'id', description: 'Engagement ID' })
+  @ApiResponse({ status: 200, description: 'Audit log retrieved' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 404, description: 'Engagement not found' })
+  getAuditLog(
+    @Param('id') engagementId: string,
+    @CurrentUser() user: { id: string; role: string },
+  ): Promise<AuditLogEntryDto[]> {
+    return this.auditLogService.findByEngagement(engagementId, user.id, user.role);
   }
 
   /**
