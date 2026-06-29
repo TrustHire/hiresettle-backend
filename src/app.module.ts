@@ -1,9 +1,9 @@
-import { Module, CacheModule } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { TerminusModule } from '@nestjs/terminus';
-import { CacheModule } from '@nestjs/cache-manager';
+import { AppCacheModule } from './common/cache/cache.module';
 
 
 import { PrismaModule } from './common/prisma/prisma.module';
@@ -36,10 +36,7 @@ import { BillingModule } from './modules/billing/billing.module';
     }),
     ScheduleModule.forRoot(),
     TerminusModule,
-    CacheModule.register({
-      ttl: 10000, // default cache time in milliseconds
-      max: 100, // maximum number of items in cache
-    }),
+    AppCacheModule,
 
     PrismaModule,
     CommonStellarModule,

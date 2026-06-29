@@ -3,6 +3,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { ListUsersDto } from './dto/list-users.dto';
 import { Prisma, UserRole, MilestoneStatus } from '@prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
+import { CacheService } from '../../common/cache/cache.service';
 
 const USER_SELECT = {
   id: true,
@@ -18,9 +19,13 @@ const USER_SELECT = {
 
 @Injectable()
 export class AdminUsersService {
+  private static readonly METRICS_CACHE_KEY = 'admin:metrics';
+  private static readonly METRICS_TTL_S = 60;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly notificationsService: NotificationsService,
+    private readonly cache: CacheService,
   ) {}
 
   async listUsers(dto: ListUsersDto) {
@@ -137,6 +142,9 @@ export class AdminUsersService {
   }
 
   async getAdminMetrics() {
+    const cached = await this.cache.get<object>(AdminUsersService.METRICS_CACHE_KEY);
+    if (cached) return cached;
+
     // Get arbiters with active disputes count
     const arbiters = await this.prisma.user.findMany({
       where: { role: UserRole.ARBITER },
@@ -169,10 +177,16 @@ export class AdminUsersService {
       where: { status: MilestoneStatus.DISPUTED },
     });
 
-    return {
+    const result = {
       totalEngagements,
       totalDisputedMilestones,
       arbiterWorkload,
     };
+    await this.cache.set(AdminUsersService.METRICS_CACHE_KEY, result, AdminUsersService.METRICS_TTL_S);
+    return result;
+  }
+
+  async invalidateMetricsCache(): Promise<void> {
+    await this.cache.del(AdminUsersService.METRICS_CACHE_KEY);
   }
 }

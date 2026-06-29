@@ -15,7 +15,10 @@ import {
   scValToNative,
   xdr,
   nativeToScVal,
+  Transaction,
 } from "@stellar/stellar-sdk";
+import { StellarError, StellarErrorCode } from "./stellar.error";
+import { CacheService } from "../cache/cache.service";
 
 /**
  * StellarService
@@ -49,7 +52,10 @@ export class StellarService implements OnModuleInit {
   private allowedTokens: TokenConfig[];
   private readonly LEDGERS_PER_DAY = 17_280; // 86400s ÷ 5s per ledger
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService,
+    private readonly cache: CacheService,
+  ) {}
 
   async onModuleInit() {
     const rpcUrl = this.config.get<string>("STELLAR_RPC_URL");
@@ -349,6 +355,314 @@ export class StellarService implements OnModuleInit {
   }
 
   // ----------------------------------------------------------
+  // TYPED CONTRACT HELPERS (#58)
+  // ----------------------------------------------------------
+
+  private static readonly TX_CONFIRM_TIMEOUT_MS = 30_000;
+  private static readonly TX_POLL_INTERVAL_MS = 2_000;
+
+  /**
+   * Build, simulate, sign, submit, and wait for confirmation of a contract call.
+   * Throws StellarError with a typed code on any failure.
+   * @param signer - keypair to sign with; defaults to the backend keypair
+   */
+  private async submitAndConfirm(
+    tx: Transaction,
+    signer?: Keypair,
+  ): Promise<{ txHash: string; ledger: number }> {
+    const keypair = signer ?? this.backendKeypair;
+    if (!keypair) {
+      throw new StellarError(
+        'Backend Stellar keypair is not configured',
+        StellarErrorCode.KEYPAIR_NOT_CONFIGURED,
+      );
+    }
+
+    const simulation = await this.rpcClient.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(simulation)) {
+      throw new StellarError(
+        `Contract simulation failed: ${simulation.error}`,
+        StellarErrorCode.SIMULATION_FAILED,
+      );
+    }
+
+    const prepared = SorobanRpc.assembleTransaction(tx, simulation).build();
+    prepared.sign(keypair);
+
+    const sendResult = await this.rpcClient.sendTransaction(prepared);
+    if (sendResult.status === 'ERROR') {
+      throw new StellarError(
+        `Transaction submission failed: ${sendResult.errorResult}`,
+        StellarErrorCode.SUBMISSION_FAILED,
+        sendResult.hash,
+      );
+    }
+
+    const deadline = Date.now() + StellarService.TX_CONFIRM_TIMEOUT_MS;
+    let getResult: SorobanRpc.Api.GetTransactionResponse;
+
+    do {
+      await new Promise((r) => setTimeout(r, StellarService.TX_POLL_INTERVAL_MS));
+      getResult = await this.rpcClient.getTransaction(sendResult.hash);
+      if (Date.now() > deadline && getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND) {
+        throw new StellarError(
+          `Transaction not confirmed within 30 s (hash: ${sendResult.hash})`,
+          StellarErrorCode.CONFIRMATION_TIMEOUT,
+          sendResult.hash,
+        );
+      }
+    } while (getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND);
+
+    if (getResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+      throw new StellarError(
+        `Transaction failed on-chain: ${getResult.status}`,
+        StellarErrorCode.TRANSACTION_FAILED,
+        sendResult.hash,
+      );
+    }
+
+    return { txHash: sendResult.hash, ledger: getResult.ledger };
+  }
+
+  /**
+   * Build and submit an engagement creation transaction.
+   * Returns tx hash on confirmation; throws StellarError on failure.
+   */
+  async createEngagement(params: {
+    engagementId: string;
+    companyAddress: string;
+    recruiterAddress: string;
+    arbiterAddress: string;
+    tokenAddress: string;
+    totalAmount: string;
+    milestones: Array<{
+      name: string;
+      paymentPercent: number;
+      kind: string;
+      retentionDays?: number;
+    }>;
+    signer?: Keypair;
+  }): Promise<string> {
+    const keypair = params.signer ?? this.backendKeypair;
+    if (!keypair) {
+      throw new StellarError(
+        'Backend Stellar keypair is not configured',
+        StellarErrorCode.KEYPAIR_NOT_CONFIGURED,
+      );
+    }
+
+    const contract = new Contract(this.contractId);
+    let account: Awaited<ReturnType<SorobanRpc.Server['getAccount']>>;
+    try {
+      account = await this.rpcClient.getAccount(keypair.publicKey());
+    } catch (err) {
+      throw new StellarError(
+        `Signer account not found: ${keypair.publicKey()}`,
+        StellarErrorCode.ACCOUNT_NOT_FOUND,
+        undefined,
+        err,
+      );
+    }
+
+    const milestonesScVal = nativeToScVal(
+      params.milestones.map((m) => ({
+        name: m.name,
+        payment_percent: m.paymentPercent,
+        kind: m.kind,
+        retention_days: m.retentionDays ?? null,
+      })),
+    );
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        contract.call(
+          'create_engagement',
+          nativeToScVal(params.engagementId, { type: 'string' }),
+          nativeToScVal(params.companyAddress, { type: 'address' }),
+          nativeToScVal(params.recruiterAddress, { type: 'address' }),
+          nativeToScVal(params.arbiterAddress, { type: 'address' }),
+          nativeToScVal(params.tokenAddress, { type: 'address' }),
+          nativeToScVal(BigInt(params.totalAmount), { type: 'i128' }),
+          milestonesScVal,
+        ),
+      )
+      .setTimeout(60)
+      .build();
+
+    const { txHash } = await this.submitAndConfirm(tx, params.signer);
+    return txHash;
+  }
+
+  /**
+   * Submit a retention unlock transaction for a LOCKED milestone.
+   * Returns tx hash on confirmation; throws StellarError on failure.
+   */
+  async unlockMilestone(
+    engagementId: string,
+    milestoneIndex: number,
+    signer?: Keypair,
+  ): Promise<string> {
+    const keypair = signer ?? this.backendKeypair;
+    if (!keypair) {
+      throw new StellarError(
+        'Backend Stellar keypair is not configured',
+        StellarErrorCode.KEYPAIR_NOT_CONFIGURED,
+      );
+    }
+
+    const contract = new Contract(this.contractId);
+    const account = await this.rpcClient.getAccount(keypair.publicKey());
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        contract.call(
+          'unlock_retention_milestone',
+          nativeToScVal(engagementId, { type: 'string' }),
+          nativeToScVal(milestoneIndex, { type: 'u32' }),
+        ),
+      )
+      .setTimeout(60)
+      .build();
+
+    const { txHash } = await this.submitAndConfirm(tx, signer);
+    return txHash;
+  }
+
+  /** Alias used by MilestonesService for backward compatibility. */
+  async unlockRetentionMilestone(
+    engagementId: string,
+    milestoneIndex: number,
+    signer?: Keypair,
+  ): Promise<string> {
+    return this.unlockMilestone(engagementId, milestoneIndex, signer);
+  }
+
+  /**
+   * Submit a payment release transaction for a PROOF_SUBMITTED milestone.
+   * Returns tx hash on confirmation; throws StellarError on failure.
+   */
+  async releaseMilestonePayment(
+    engagementId: string,
+    milestoneIndex: number,
+    signer?: Keypair,
+  ): Promise<string> {
+    const keypair = signer ?? this.backendKeypair;
+    if (!keypair) {
+      throw new StellarError(
+        'Backend Stellar keypair is not configured',
+        StellarErrorCode.KEYPAIR_NOT_CONFIGURED,
+      );
+    }
+
+    const contract = new Contract(this.contractId);
+    const account = await this.rpcClient.getAccount(keypair.publicKey());
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        contract.call(
+          'release_milestone_payment',
+          nativeToScVal(engagementId, { type: 'string' }),
+          nativeToScVal(milestoneIndex, { type: 'u32' }),
+        ),
+      )
+      .setTimeout(60)
+      .build();
+
+    const { txHash } = await this.submitAndConfirm(tx, signer);
+    return txHash;
+  }
+
+  /**
+   * Submit a cancellation transaction for an ACTIVE engagement.
+   * Returns tx hash on confirmation; throws StellarError on failure.
+   */
+  async cancelEngagement(
+    engagementId: string,
+    signer?: Keypair,
+  ): Promise<string> {
+    const keypair = signer ?? this.backendKeypair;
+    if (!keypair) {
+      throw new StellarError(
+        'Backend Stellar keypair is not configured',
+        StellarErrorCode.KEYPAIR_NOT_CONFIGURED,
+      );
+    }
+
+    const contract = new Contract(this.contractId);
+    const account = await this.rpcClient.getAccount(keypair.publicKey());
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        contract.call(
+          'cancel_engagement',
+          nativeToScVal(engagementId, { type: 'string' }),
+        ),
+      )
+      .setTimeout(60)
+      .build();
+
+    const { txHash } = await this.submitAndConfirm(tx, signer);
+    return txHash;
+  }
+
+  /**
+   * Submit a dispute resolution transaction.
+   * @param approved true → release payment; false → refund company
+   */
+  async resolveMilestoneDispute(
+    engagementId: string,
+    milestoneIndex: number,
+    approved: boolean,
+    signer?: Keypair,
+  ): Promise<string> {
+    const keypair = signer ?? this.backendKeypair;
+    if (!keypair) {
+      throw new StellarError(
+        'Backend Stellar keypair is not configured',
+        StellarErrorCode.KEYPAIR_NOT_CONFIGURED,
+      );
+    }
+
+    const contract = new Contract(this.contractId);
+    const account = await this.rpcClient.getAccount(keypair.publicKey());
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        contract.call(
+          'resolve_dispute',
+          nativeToScVal(engagementId, { type: 'string' }),
+          nativeToScVal(milestoneIndex, { type: 'u32' }),
+          nativeToScVal(approved, { type: 'bool' }),
+        ),
+      )
+      .setTimeout(60)
+      .build();
+
+    const { txHash } = await this.submitAndConfirm(tx, signer);
+    return txHash;
+  }
+
+  /** Alias for getLatestLedger used by MilestonesService. */
+  async getCurrentLedgerSequence(): Promise<number> {
+    return this.getLatestLedger();
+  }
+
+  // ----------------------------------------------------------
   // TOKEN UTILITIES
   // ----------------------------------------------------------
 
@@ -527,11 +841,15 @@ export class StellarService implements OnModuleInit {
    * @returns { baseFee: number, sorobanFee: number } in stroops
    */
   async getFeeEstimate(): Promise<{ baseFee: number; sorobanFee: number }> {
+    const CACHE_KEY = 'stellar:fee_estimate';
+    const cached = await this.cache.get<{ baseFee: number; sorobanFee: number }>(CACHE_KEY);
+    if (cached) return cached;
+
     const info = await this.rpcClient.getLatestLedger();
-    // Base fee is in stroops (100 stroops = 0.00001 XLM)
     const baseFee = Number(info.baseFee);
-    // Soroban fee is an estimate, typically higher than base fee
     const sorobanFee = baseFee * 10;
-    return { baseFee, sorobanFee };
+    const result = { baseFee, sorobanFee };
+    await this.cache.set(CACHE_KEY, result, 10); // 10 s TTL
+    return result;
   }
 }

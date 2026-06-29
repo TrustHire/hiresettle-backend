@@ -1,4 +1,4 @@
-import { Controller, Get, Delete, Post, Param, Query, UseGuards, Patch, Body } from '@nestjs/common';
+import { Controller, Get, Delete, Post, Param, Query, UseGuards, Patch, Body, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam, ApiQuery, ApiResponse } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -8,6 +8,7 @@ import { AdminUsersService } from './admin-users.service';
 import { AdminDeadLetterService } from './admin-dead-letter.service';
 import { ListUsersDto } from './dto/list-users.dto';
 import { AssignArbiterDto } from './dto/assign-arbiter.dto';
+import { CacheService } from '../../common/cache/cache.service';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -18,6 +19,7 @@ export class AdminController {
   constructor(
     private readonly adminUsers: AdminUsersService,
     private readonly deadLetter: AdminDeadLetterService,
+    private readonly cacheService: CacheService,
   ) {}
 
   @Get('users')
@@ -82,6 +84,17 @@ export class AdminController {
     @Query('limit') limit?: number,
   ) {
     return this.deadLetter.list(Number(page) || 1, Number(limit) || 20);
+  }
+
+  @Post('cache/flush')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Flush all cache keys (ADMIN only)' })
+  @ApiResponse({ status: 200, description: 'Cache flushed successfully' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  async flushCache() {
+    await this.cacheService.flush();
+    return { message: 'Cache flushed successfully' };
   }
 
   @Post('dead-letter-events/:id/requeue')
