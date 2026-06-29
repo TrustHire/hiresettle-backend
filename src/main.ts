@@ -10,6 +10,8 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
 import { TooManyRequestsHeadersFilter } from './common/filters/too-many-requests-headers.filter';
 import { TracingInterceptor } from './common/interceptors/tracing.interceptor';
+import { HttpMetricsInterceptor } from './metrics/http-metrics.interceptor';
+import { MetricsService } from './metrics/metrics.service';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
@@ -81,6 +83,7 @@ async function bootstrap() {
       { path: 'health', method: 'GET' },
       { path: 'docs', method: 'GET' },
       { path: 'docs-json', method: 'GET' },
+      { path: 'metrics', method: 'GET' },
     ],
   });
 
@@ -96,7 +99,9 @@ async function bootstrap() {
     }),
   );
 
+  const metricsService = app.get(MetricsService);
   app.useGlobalInterceptors(
+    new HttpMetricsInterceptor(metricsService),
     new TracingInterceptor(),
     new TransformInterceptor(),
   );
