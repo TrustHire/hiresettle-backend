@@ -5,7 +5,6 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import helmet from 'helmet';
 import * as Sentry from '@sentry/node';
-import { Integrations } from '@sentry/tracing';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
@@ -19,18 +18,19 @@ async function bootstrap() {
   const config = app.get(ConfigService);
   const port = config.get<number>('PORT', 3000);
   const apiPrefix = config.get<string>('API_PREFIX', 'api/v1');
-  const allowedOriginsStr = config.get<string>('ALLOWED_ORIGINS', 'http://localhost:3001');
-  const allowedOrigins = allowedOriginsStr.split(',').map(origin => origin.trim());
+  const allowedOriginsStr = config.get<string>(
+    'ALLOWED_ORIGINS',
+    'http://localhost:3001',
+  );
+  const allowedOrigins = allowedOriginsStr
+    .split(',')
+    .map((origin) => origin.trim());
   const sentryDsn = config.get<string>('SENTRY_DSN');
   const nodeEnv = config.get<string>('NODE_ENV');
 
   if (sentryDsn && !['test', 'ci'].includes(nodeEnv)) {
     Sentry.init({
       dsn: sentryDsn,
-      integrations: [
-        new Sentry.Integrations.Http({ tracing: true }),
-        new Integrations.Express(),
-      ],
       tracesSampleRate: 1.0,
     });
     app.use(Sentry.Handlers.requestHandler());
@@ -53,7 +53,10 @@ async function bootstrap() {
   );
 
   // Configure CORS
-  const corsOriginValidator = (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+  const corsOriginValidator = (
+    origin: string | undefined,
+    callback: (err: Error | null, allow?: boolean) => void,
+  ) => {
     // Allow requests with no origin (like curl, Postman, etc.)
     if (!origin) {
       return callback(null, true);
@@ -61,7 +64,8 @@ async function bootstrap() {
     if (allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
-    const msg = 'The CORS policy for this site does not allow access from the specified origin.';
+    const msg =
+      'The CORS policy for this site does not allow access from the specified origin.';
     return callback(new Error(msg), false);
   };
 
@@ -92,7 +96,10 @@ async function bootstrap() {
     }),
   );
 
-  app.useGlobalInterceptors(new TracingInterceptor(), new TransformInterceptor());
+  app.useGlobalInterceptors(
+    new TracingInterceptor(),
+    new TransformInterceptor(),
+  );
 
   // Ensure TooManyRequests always has required headers.
   // Keep HttpExceptionFilter as the primary formatter.

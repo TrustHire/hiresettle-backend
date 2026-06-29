@@ -20,6 +20,7 @@ enum EngagementStatus {
   COMPLETED
   CANCELLED
   REPLACEMENT_REQUESTED
+  ACCOUNT_MERGED
 }
 
 enum MilestoneStatus {
@@ -50,6 +51,7 @@ enum NotificationType {
   ARBITER_ASSIGNED
   ARBITER_REASSIGNED
   ARBITER_RECUSAL_REQUESTED
+  ACCOUNT_MERGE_DETECTED
 }
 
 enum UserRole {
@@ -78,15 +80,15 @@ model User {
   updatedAt      DateTime       @updatedAt
 
   // Relations
-  companyEngagements   Engagement[]   @relation("CompanyEngagements")
-  recruiterEngagements Engagement[]   @relation("RecruiterEngagements")
-  arbiterEngagements   Engagement[]   @relation("ArbiterEngagements")
+  companyEngagements   Engagement[]            @relation("CompanyEngagements")
+  recruiterEngagements Engagement[]            @relation("RecruiterEngagements")
+  arbiterEngagements   Engagement[]            @relation("ArbiterEngagements")
   notifications        Notification[]
   refreshTokens        RefreshToken[]
+  notificationPrefs    NotificationPreference[]
   milestoneAuditLogs   MilestoneAuditLog[]
-  disputeEvidence      DisputeEvidence[]
-  notificationPreferences NotificationPreference[]
-  engagementTemplates  EngagementTemplate[]
+  disputeEvidences     DisputeEvidence[]
+  auditLogs            EngagementAuditLog[]
 
   @@map("users")
 }
@@ -128,6 +130,7 @@ model Engagement {
   salaryRange      String?           // off-chain metadata
   location         String?           // off-chain metadata
   status           EngagementStatus  @default(ACTIVE)
+  replacementReason String?
   txHash           String?           // on-chain creation tx hash
   createdLedger    Int?              // ledger sequence at creation
   createdAt        DateTime          @default(now())
@@ -139,8 +142,25 @@ model Engagement {
   arbiter    User         @relation("ArbiterEngagements",   fields: [arbiterAddress],   references: [stellarAddress])
   milestones Milestone[]
   events     ChainEvent[]
+  auditLogs  EngagementAuditLog[]
 
   @@map("engagements")
+}
+
+model EngagementAuditLog {
+  id           String   @id @default(cuid())
+  engagementId String
+  fromStatus   String
+  toStatus     String
+  changedBy    String
+  reason       String?
+  createdAt    DateTime @default(now())
+
+  engagement   Engagement @relation(fields: [engagementId], references: [id])
+  changedByUser User       @relation(fields: [changedBy], references: [id])
+
+  @@index([engagementId])
+  @@index([changedBy])
 }
 
 model Milestone {
@@ -164,9 +184,9 @@ model Milestone {
   updatedAt        DateTime        @updatedAt
 
   // Relations
-  engagement       Engagement          @relation(fields: [engagementId], references: [id])
-  auditLogs        MilestoneAuditLog[]
-  disputeEvidence  DisputeEvidence[]
+  engagement         Engagement          @relation(fields: [engagementId], references: [id])
+  milestoneAuditLogs MilestoneAuditLog[]
+  disputeEvidences   DisputeEvidence[]
 
   @@unique([engagementId, milestoneIndex])
   @@map("milestones")
@@ -218,6 +238,19 @@ model DeadLetterEvent {
   @@index([eventName])
   @@index([engagementId])
   @@map("dead_letter_events")
+}
+
+model NotificationPreference {
+  id           String           @id @default(uuid())
+  userId       String
+  type         NotificationType
+  emailEnabled Boolean          @default(true)
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, type])
+  @@index([userId])
+  @@map("notification_preferences")
 }
 
 model Notification {
