@@ -20,6 +20,7 @@ enum EngagementStatus {
   COMPLETED
   CANCELLED
   REPLACEMENT_REQUESTED
+  ACCOUNT_MERGED
 }
 
 enum MilestoneStatus {
@@ -50,6 +51,7 @@ enum NotificationType {
   ARBITER_ASSIGNED
   ARBITER_REASSIGNED
   ARBITER_RECUSAL_REQUESTED
+  ACCOUNT_MERGE_DETECTED
 }
 
 enum UserRole {
@@ -78,11 +80,14 @@ model User {
   updatedAt      DateTime       @updatedAt
 
   // Relations
-  companyEngagements   Engagement[]   @relation("CompanyEngagements")
-  recruiterEngagements Engagement[]   @relation("RecruiterEngagements")
-  arbiterEngagements   Engagement[]   @relation("ArbiterEngagements")
+  companyEngagements   Engagement[]            @relation("CompanyEngagements")
+  recruiterEngagements Engagement[]            @relation("RecruiterEngagements")
+  arbiterEngagements   Engagement[]            @relation("ArbiterEngagements")
   notifications        Notification[]
   refreshTokens        RefreshToken[]
+  notificationPrefs    NotificationPreference[]
+  milestoneAuditLogs   MilestoneAuditLog[]
+  disputeEvidences     DisputeEvidence[]
 
   @@map("users")
 }
@@ -152,7 +157,9 @@ model Milestone {
   updatedAt        DateTime        @updatedAt
 
   // Relations
-  engagement Engagement @relation(fields: [engagementId], references: [id])
+  engagement         Engagement          @relation(fields: [engagementId], references: [id])
+  milestoneAuditLogs MilestoneAuditLog[]
+  disputeEvidences   DisputeEvidence[]
 
   @@unique([engagementId, milestoneIndex])
   @@map("milestones")
@@ -204,6 +211,19 @@ model DeadLetterEvent {
   @@index([eventName])
   @@index([engagementId])
   @@map("dead_letter_events")
+}
+
+model NotificationPreference {
+  id           String           @id @default(uuid())
+  userId       String
+  type         NotificationType
+  emailEnabled Boolean          @default(true)
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, type])
+  @@index([userId])
+  @@map("notification_preferences")
 }
 
 model Notification {
