@@ -152,6 +152,21 @@ hiresettle-backend/
 
 ## Setup
 
+### Docker Compose (recommended)
+
+```bash
+cp .env.example .env
+# Fill in required values in .env, then:
+docker compose up
+```
+
+The `api` service runs `prisma migrate deploy` automatically before starting. Postgres data is persisted in a named volume.
+
+API: `http://localhost:3000/api/v1`
+Swagger: `http://localhost:3000/docs`
+
+### Manual
+
 ```bash
 cp .env.example .env
 npm install
@@ -159,9 +174,6 @@ npx prisma migrate dev --name init
 npx prisma generate
 npm run start:dev
 ```
-
-API: `http://localhost:3000/v1`
-Swagger: `http://localhost:3000/docs`
 
 ---
 
