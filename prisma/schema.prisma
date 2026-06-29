@@ -61,6 +61,16 @@ enum UserRole {
   ADMIN
 }
 
+enum SecurityEventAction {
+  LOGIN_SUCCESS
+  LOGIN_FAILURE
+  LOGOUT
+  PASSWORD_RESET
+  EMAIL_VERIFICATION
+  ROLE_CHANGE
+  ADMIN_OVERRIDE
+}
+
 // ============================================================
 // MODELS
 // ============================================================
@@ -89,6 +99,7 @@ model User {
   milestoneAuditLogs   MilestoneAuditLog[]
   disputeEvidences     DisputeEvidence[]
   auditLogs            EngagementAuditLog[]
+  securityEvents       SecurityEvent[]
 
   @@map("users")
 }
@@ -333,4 +344,22 @@ model DisputeEvidence {
   @@index([milestoneId])
   @@index([uploadedBy])
   @@map("dispute_evidence")
+}
+
+// Append-only log of security-relevant events for incident response and
+// compliance. No update or delete endpoints are exposed for this table.
+model SecurityEvent {
+  id        String              @id @default(uuid())
+  userId    String?
+  action    SecurityEventAction
+  ip        String?
+  userAgent String?
+  createdAt DateTime            @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("security_events")
 }

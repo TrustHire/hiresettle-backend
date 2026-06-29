@@ -8,11 +8,12 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { Prisma, User } from '@prisma/client';
+import { Prisma, SecurityEventAction, User } from '@prisma/client';
 import { randomBytes, scrypt as scryptCallback, timingSafeEqual, createHash } from 'crypto';
 import { promisify } from 'util';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
+import { SecurityEventsService } from '../../common/security-events/security-events.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 
@@ -21,6 +22,11 @@ const PASSWORD_KEY_LENGTH = 64;
 const REFRESH_TOKEN_DAYS = 7;
 
 type AuthUser = Omit<User, 'passwordHash'>;
+
+export interface RequestMeta {
+  ip?: string;
+  userAgent?: string;
+}
 
 @Injectable()
 export class AuthService {
@@ -34,6 +40,7 @@ export class AuthService {
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
     private readonly stellar: StellarService,
+    private readonly securityEvents: SecurityEventsService,
   ) {}
 
   generateNonce(stellarAddress: string): string {
@@ -84,25 +91,28 @@ export class AuthService {
     }
   }
 
-  async login(dto: LoginDto) {
+  async login(dto: LoginDto, meta: RequestMeta = {}) {
     const email = dto.email.toLowerCase();
     const user = await this.prisma.user.findUnique({ where: { email } });
 
     if (!user?.passwordHash || !(await this.verifyPassword(dto.password, user.passwordHash))) {
+      await this.logSecurityEvent(SecurityEventAction.LOGIN_FAILURE, user?.id, meta);
       throw new UnauthorizedException('Invalid email or password');
     }
 
     if (user.deactivatedAt) {
+      await this.logSecurityEvent(SecurityEventAction.LOGIN_FAILURE, user.id, meta);
       throw new ForbiddenException('Your account has been deactivated. Please contact an administrator.');
     }
 
     this.logger.log(`User logged in: ${email}`);
+    await this.logSecurityEvent(SecurityEventAction.LOGIN_SUCCESS, user.id, meta);
     return this.issueTokenPair(user);
   }
 
   // Backward-compatible alias kept for existing controller routes
-  walletLogin(dto: LoginDto) {
-    return this.login(dto);
+  walletLogin(dto: LoginDto, meta: RequestMeta = {}) {
+    return this.login(dto, meta);
   }
 
   async refresh(refreshToken: string) {
@@ -162,7 +172,7 @@ export class AuthService {
     };
   }
 
-  async logout(refreshToken: string) {
+  async logout(refreshToken: string, meta: RequestMeta = {}) {
     const tokenHash = this.hashRefreshToken(refreshToken);
     const stored = await this.prisma.refreshToken.findUnique({ where: { tokenHash } });
 
@@ -173,6 +183,7 @@ export class AuthService {
       });
     }
 
+    await this.logSecurityEvent(SecurityEventAction.LOGOUT, stored?.userId, meta);
     return { revoked: true };
   }
 
@@ -262,5 +273,18 @@ export class AuthService {
   private sanitizeUser(user: User): AuthUser {
     const { passwordHash, ...safeUser } = user;
     return safeUser;
+  }
+
+  private async logSecurityEvent(
+    action: SecurityEventAction,
+    userId: string | null | undefined,
+    meta: RequestMeta,
+  ) {
+    await this.securityEvents.log({
+      userId,
+      action,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+    });
   }
 }

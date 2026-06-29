@@ -4,6 +4,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { TerminusModule } from '@nestjs/terminus';
 import { AppCacheModule } from './common/cache/cache.module';
+import { SecurityEventsModule } from './common/security-events/security-events.module';
 
 
 import { PrismaModule } from './common/prisma/prisma.module';
@@ -37,6 +38,7 @@ import { BillingModule } from './modules/billing/billing.module';
     ScheduleModule.forRoot(),
     TerminusModule,
     AppCacheModule,
+    SecurityEventsModule,
 
     PrismaModule,
     CommonStellarModule,
