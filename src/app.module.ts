@@ -4,6 +4,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { TerminusModule } from '@nestjs/terminus';
 import { AppCacheModule } from './common/cache/cache.module';
+import { envValidationSchema } from './config/env.validation';
 
 
 import { PrismaModule } from './common/prisma/prisma.module';
@@ -24,7 +25,11 @@ import { BillingModule } from './modules/billing/billing.module';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      validationSchema: envValidationSchema,
+      validationOptions: { abortEarly: false },
+    }),
     ThrottlerModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
