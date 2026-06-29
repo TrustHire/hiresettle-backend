@@ -51,6 +51,9 @@ jobs:
         if: steps.cache-node-modules.outputs.cache-hit != 'true'
         run: npm ci
 
+      - name: Dependency vulnerability scan
+        run: npm audit --audit-level=high
+
       - name: Generate Prisma client
         run: npx prisma generate
         env:

@@ -217,7 +217,11 @@ export class EngagementsService {
     };
   }
 
-  async findOne(id: string) {
+  /**
+   * Retrieves the full engagement record including milestones and events.
+   * If `userId` is provided, enforces that only parties to the engagement may view it.
+   */
+  async findOne(id: string, userId?: string) {
     const engagement = await this.prisma.engagement.findUnique({
       where: { id },
       include: {
@@ -225,8 +229,58 @@ export class EngagementsService {
         events: { orderBy: { ledger: 'desc' }, take: 20 },
       },
     });
+
     if (!engagement) throw new NotFoundException(`Engagement ${id} not found`);
-    return this.serialize(engagement);
+
+    if (userId && engagement.clientId && engagement.freelancerId) {
+      if (engagement.clientId !== userId && engagement.freelancerId !== userId) {
+        throw new ForbiddenException('You do not have access to this engagement');
+      }
+    }
+
+    return this.serializeAmounts(engagement);
+  }
+
+  /**
+   * Calculates and retrieves the aggregated summary for an engagement.
+   */
+  async getSummary(id: string, userId: string): Promise<EngagementSummaryDto> {
+    const engagement = await this.prisma.engagement.findUnique({
+      where: { id },
+      include: { milestones: true },
+    });
+
+    if (!engagement) {
+      throw new NotFoundException('Engagement not found');
+    }
+
+    if (engagement.clientId !== userId && engagement.freelancerId !== userId) {
+      throw new ForbiddenException('You do not have access to this engagement');
+    }
+
+    let totalAmount = BigInt(0);
+    let releasedAmount = BigInt(0);
+    let milestonesCompleted = 0;
+
+    for (const milestone of engagement.milestones) {
+      const amount = typeof milestone.amount === 'bigint' ? milestone.amount : BigInt(milestone.amount as any);
+      totalAmount += amount;
+
+      if (milestone.status === 'COMPLETED' || milestone.status === 'RELEASED') {
+        releasedAmount += amount;
+        milestonesCompleted++;
+      }
+    }
+
+    const lockedAmount = totalAmount - releasedAmount;
+
+    return {
+      totalAmount: totalAmount.toString(),
+      releasedAmount: releasedAmount.toString(),
+      lockedAmount: lockedAmount.toString(),
+      milestonesTotal: engagement.milestones.length,
+      milestonesCompleted,
+    };
   }
 
   // ----------------------------------------------------------
@@ -342,6 +396,17 @@ export class EngagementsService {
         paymentReleased: m.paymentReleased?.toString() ?? null,
       })),
     };
+  }
+
+  /**
+   * Helper utility to deeply convert BigInts to strings within an object.
+   */
+  private serializeAmounts(obj: any): any {
+    return JSON.parse(
+      JSON.stringify(obj, (key, value) =>
+        typeof value === 'bigint' ? value.toString() : value
+      )
+    );
   }
 
   // ----------------------------------------------------------

@@ -1,3 +1,4 @@
+import './tracing';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
@@ -9,6 +10,7 @@ import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
 import { TooManyRequestsHeadersFilter } from './common/filters/too-many-requests-headers.filter';
+import { TracingInterceptor } from './common/interceptors/tracing.interceptor';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
@@ -90,7 +92,7 @@ async function bootstrap() {
     }),
   );
 
-  app.useGlobalInterceptors(new TransformInterceptor());
+  app.useGlobalInterceptors(new TracingInterceptor(), new TransformInterceptor());
 
   // Ensure TooManyRequests always has required headers.
   // Keep HttpExceptionFilter as the primary formatter.

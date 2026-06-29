@@ -3,6 +3,7 @@ import {
   Query, UseGuards, HttpCode, HttpStatus,
   Patch,
 } from '@nestjs/common';
+import { User } from '@prisma/client';
 import {
   ApiTags, ApiOperation, ApiResponse,
   ApiBearerAuth, ApiQuery, ApiParam,
@@ -99,8 +100,18 @@ export class EngagementsController {
   @ApiResponse({ status: 200, description: 'Engagement retrieved' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 404, description: 'Engagement not found' })
-  findOne(@Param('id') id: string) {
-    return this.engagementsService.findOne(id);
+  async findOne(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.engagementsService.findOne(id, user.id);
+  }
+
+  @Get(':id/summary')
+  @ApiOperation({ summary: 'Get aggregated engagement summary' })
+  @ApiParam({ name: 'id', description: 'Engagement ID' })
+  @ApiResponse({ status: 200, description: 'Engagement summary retrieved' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 404, description: 'Engagement not found' })
+  async getEngagementSummary(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.engagementsService.getSummary(id, user.id);
   }
 
   /**
