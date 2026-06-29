@@ -72,6 +72,7 @@
     "@types/passport-jwt": "^3.0.9",
     "@types/supertest": "^7.2.0",
     "@types/uuid": "^9.0.7",
+    "@types/winston": "^2.4.4",
     "@typescript-eslint/eslint-plugin": "^6.0.0",
     "@typescript-eslint/parser": "^6.0.0",
     "eslint": "^8.42.0",
@@ -99,7 +100,12 @@
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
-      "^.+\\.(t|j)s$": ["ts-jest", { "isolatedModules": true }]
+      "^.+\\.(t|j)s$": [
+        "ts-jest",
+        {
+          "isolatedModules": true
+        }
+      ]
     },
     "collectCoverageFrom": [
       "**/*.(t|j)s"

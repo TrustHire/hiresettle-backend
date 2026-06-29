@@ -1,9 +1,11 @@
-import { Module } from '@nestjs/common';
+import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { TerminusModule } from '@nestjs/terminus';
 import { AppCacheModule } from './common/cache/cache.module';
+import { AppLoggerModule } from './common/logger/logger.module';
+import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 
 
 import { PrismaModule } from './common/prisma/prisma.module';
@@ -37,6 +39,7 @@ import { BillingModule } from './modules/billing/billing.module';
     ScheduleModule.forRoot(),
     TerminusModule,
     AppCacheModule,
+    AppLoggerModule,
 
     PrismaModule,
     CommonStellarModule,
@@ -53,4 +56,8 @@ import { BillingModule } from './modules/billing/billing.module';
     BillingModule,
   ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(RequestIdMiddleware).forRoutes('*');
+  }
+}
