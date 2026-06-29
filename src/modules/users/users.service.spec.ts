@@ -4,6 +4,7 @@ import { UserRole } from '@prisma/client';
 import { UsersService } from './users.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { S3Service } from '../../common/s3/s3.service';
+import { CacheService } from '../../common/cache/cache.service';
 
 const mockPrisma = {
   user: { findUnique: jest.fn(), update: jest.fn() },
@@ -12,6 +13,12 @@ const mockPrisma = {
 
 const mockS3Service = {
   uploadFile: jest.fn(),
+};
+
+const mockCacheService = {
+  get: jest.fn().mockResolvedValue(null),
+  set: jest.fn().mockResolvedValue(undefined),
+  del: jest.fn().mockResolvedValue(undefined),
 };
 
 describe('UsersService', () => {
@@ -23,6 +30,7 @@ describe('UsersService', () => {
         UsersService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: S3Service, useValue: mockS3Service },
+        { provide: CacheService, useValue: mockCacheService },
       ],
     }).compile();
 
@@ -31,10 +39,15 @@ describe('UsersService', () => {
   });
 
   describe('findByStellarAddress()', () => {
-    const address = 'GABC123DEFGHIJKLMNOPQRSTUVWXYZ234567GABC123DEFGHIJKLMNOPQR';
+    const address =
+      'GABC123DEFGHIJKLMNOPQRSTUVWXYZ234567GABC123DEFGHIJKLMNOPQR';
 
     it('returns public fields when user exists', async () => {
-      const mockUser = { name: 'Ada', company: 'HireSettle', role: UserRole.RECRUITER };
+      const mockUser = {
+        name: 'Ada',
+        company: 'HireSettle',
+        role: UserRole.RECRUITER,
+      };
       mockPrisma.user.findUnique.mockResolvedValue(mockUser);
 
       const result = await service.findByStellarAddress(address);
@@ -48,7 +61,9 @@ describe('UsersService', () => {
 
     it('throws NotFoundException when user does not exist', async () => {
       mockPrisma.user.findUnique.mockResolvedValue(null);
-      await expect(service.findByStellarAddress(address)).rejects.toThrow(NotFoundException);
+      await expect(service.findByStellarAddress(address)).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 
@@ -60,7 +75,8 @@ describe('UsersService', () => {
         name: 'Ada Lovelace',
         email: 'ada@example.com',
         company: 'HireSettle Inc.',
-        stellarAddress: 'GABC123DEFGHIJKLMNOPQRSTUVWXYZ234567GABC123DEFGHIJKLMNOPQR',
+        stellarAddress:
+          'GABC123DEFGHIJKLMNOPQRSTUVWXYZ234567GABC123DEFGHIJKLMNOPQR',
         avatarUrl: null,
         role: UserRole.COMPANY,
       };
@@ -84,7 +100,9 @@ describe('UsersService', () => {
 
     it('throws NotFoundException when user does not exist', async () => {
       mockPrisma.user.findUnique.mockResolvedValue(null);
-      await expect(service.getProfile(userId)).rejects.toThrow(NotFoundException);
+      await expect(service.getProfile(userId)).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 
@@ -96,13 +114,18 @@ describe('UsersService', () => {
         name: 'Updated Name',
         email: 'updated@example.com',
         company: 'Updated Company',
-        stellarAddress: 'GABC123DEFGHIJKLMNOPQRSTUVWXYZ234567GABC123DEFGHIJKLMNOPQR',
+        stellarAddress:
+          'GABC123DEFGHIJKLMNOPQRSTUVWXYZ234567GABC123DEFGHIJKLMNOPQR',
         avatarUrl: null,
         role: UserRole.COMPANY,
       };
       mockPrisma.user.update.mockResolvedValue(mockUser);
 
-      const dto = { name: 'Updated Name', company: 'Updated Company', email: 'updated@example.com' };
+      const dto = {
+        name: 'Updated Name',
+        company: 'Updated Company',
+        email: 'updated@example.com',
+      };
       const result = await service.updateProfile(userId, dto);
 
       expect(result).toEqual(mockUser);
@@ -125,8 +148,13 @@ describe('UsersService', () => {
     });
 
     it('throws BadRequestException when stellarAddress is provided', async () => {
-      const dto = { stellarAddress: 'GABC123DEFGHIJKLMNOPQRSTUVWXYZ234567GABC123DEFGHIJKLMNOPQR' };
-      await expect(service.updateProfile(userId, dto)).rejects.toThrow(BadRequestException);
+      const dto = {
+        stellarAddress:
+          'GABC123DEFGHIJKLMNOPQRSTUVWXYZ234567GABC123DEFGHIJKLMNOPQR',
+      };
+      await expect(service.updateProfile(userId, dto)).rejects.toThrow(
+        BadRequestException,
+      );
     });
   });
 
@@ -143,11 +171,14 @@ describe('UsersService', () => {
         name: 'Ada Lovelace',
         email: 'ada@example.com',
         company: 'HireSettle Inc.',
-        stellarAddress: 'GABC123DEFGHIJKLMNOPQRSTUVWXYZ234567GABC123DEFGHIJKLMNOPQR',
+        stellarAddress:
+          'GABC123DEFGHIJKLMNOPQRSTUVWXYZ234567GABC123DEFGHIJKLMNOPQR',
         avatarUrl: 'https://cdn.example.com/avatars/user-123/1234567890.jpg',
         role: UserRole.COMPANY,
       };
-      mockS3Service.uploadFile.mockResolvedValue('avatars/user-123/1234567890.jpg');
+      mockS3Service.uploadFile.mockResolvedValue(
+        'avatars/user-123/1234567890.jpg',
+      );
       mockPrisma.user.update.mockResolvedValue(mockUser);
 
       const result = await service.uploadAvatar(userId, mockFile);
@@ -157,13 +188,23 @@ describe('UsersService', () => {
     });
 
     it('throws BadRequestException for invalid file type', async () => {
-      const invalidFile = { ...mockFile, mimetype: 'application/pdf' } as Express.Multer.File;
-      await expect(service.uploadAvatar(userId, invalidFile)).rejects.toThrow(BadRequestException);
+      const invalidFile = {
+        ...mockFile,
+        mimetype: 'application/pdf',
+      } as Express.Multer.File;
+      await expect(service.uploadAvatar(userId, invalidFile)).rejects.toThrow(
+        BadRequestException,
+      );
     });
 
     it('throws BadRequestException for file size exceeding 2 MB', async () => {
-      const largeFile = { ...mockFile, size: 3 * 1024 * 1024 } as Express.Multer.File;
-      await expect(service.uploadAvatar(userId, largeFile)).rejects.toThrow(BadRequestException);
+      const largeFile = {
+        ...mockFile,
+        size: 3 * 1024 * 1024,
+      } as Express.Multer.File;
+      await expect(service.uploadAvatar(userId, largeFile)).rejects.toThrow(
+        BadRequestException,
+      );
     });
   });
 });

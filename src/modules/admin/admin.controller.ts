@@ -1,11 +1,34 @@
-import { Controller, Get, Delete, Post, Param, Query, UseGuards, Patch, Body, HttpCode, HttpStatus } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam, ApiQuery, ApiResponse } from '@nestjs/swagger';
+import {
+  Controller,
+  Get,
+  Delete,
+  Post,
+  Param,
+  Query,
+  UseGuards,
+  Patch,
+  Body,
+  HttpCode,
+  HttpStatus,
+  Res,
+} from '@nestjs/common';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiBearerAuth,
+  ApiParam,
+  ApiQuery,
+  ApiResponse,
+} from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
+import { Response } from 'express';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { AdminUsersService } from './admin-users.service';
 import { AdminDeadLetterService } from './admin-dead-letter.service';
+import { AdminReportsService } from './admin-reports.service';
+import { StellarMergeDetectorService } from './stellar-merge-detector.service';
 import { ListUsersDto } from './dto/list-users.dto';
 import { AssignArbiterDto } from './dto/assign-arbiter.dto';
 import { CacheService } from '../../common/cache/cache.service';
@@ -20,6 +43,8 @@ export class AdminController {
     private readonly adminUsers: AdminUsersService,
     private readonly deadLetter: AdminDeadLetterService,
     private readonly cacheService: CacheService,
+    private readonly reports: AdminReportsService,
+    private readonly mergeDetector: StellarMergeDetectorService,
   ) {}
 
   @Get('users')
@@ -98,7 +123,10 @@ export class AdminController {
   }
 
   @Post('dead-letter-events/:id/requeue')
-  @ApiOperation({ summary: 'Requeue a dead-letter event back into chain_events for retry (ADMIN only)' })
+  @ApiOperation({
+    summary:
+      'Requeue a dead-letter event back into chain_events for retry (ADMIN only)',
+  })
   @ApiParam({ name: 'id', description: 'Dead-letter event ID' })
   @ApiResponse({ status: 201, description: 'Event requeued' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
@@ -106,5 +134,84 @@ export class AdminController {
   @ApiResponse({ status: 404, description: 'Dead-letter event not found' })
   requeueDeadLetterEvent(@Param('id') id: string) {
     return this.deadLetter.requeue(id);
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Issue #62 — Admin reports / CSV export
+  // ────────────────────────────────────────────────────────────────
+
+  @Get('reports/engagements.csv')
+  @ApiOperation({
+    summary: 'Export engagements as CSV for a date range (max 90 days)',
+  })
+  @ApiQuery({
+    name: 'from',
+    required: true,
+    description: 'Start date (ISO 8601)',
+  })
+  @ApiQuery({ name: 'to', required: true, description: 'End date (ISO 8601)' })
+  @ApiResponse({ status: 200, description: 'CSV stream' })
+  @ApiResponse({ status: 400, description: 'Invalid or missing date range' })
+  streamEngagementsCsv(
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Res() res: Response,
+  ) {
+    return this.reports.streamEngagementsCsv(from, to, res);
+  }
+
+  @Get('reports/payments.csv')
+  @ApiOperation({
+    summary: 'Export released payments as CSV for a date range (max 90 days)',
+  })
+  @ApiQuery({
+    name: 'from',
+    required: true,
+    description: 'Start date (ISO 8601)',
+  })
+  @ApiQuery({ name: 'to', required: true, description: 'End date (ISO 8601)' })
+  @ApiResponse({ status: 200, description: 'CSV stream' })
+  @ApiResponse({ status: 400, description: 'Invalid or missing date range' })
+  streamPaymentsCsv(
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Res() res: Response,
+  ) {
+    return this.reports.streamPaymentsCsv(from, to, res);
+  }
+
+  @Get('reports/disputes.csv')
+  @ApiOperation({
+    summary: 'Export dispute log as CSV for a date range (max 90 days)',
+  })
+  @ApiQuery({
+    name: 'from',
+    required: true,
+    description: 'Start date (ISO 8601)',
+  })
+  @ApiQuery({ name: 'to', required: true, description: 'End date (ISO 8601)' })
+  @ApiResponse({ status: 200, description: 'CSV stream' })
+  @ApiResponse({ status: 400, description: 'Invalid or missing date range' })
+  streamDisputesCsv(
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Res() res: Response,
+  ) {
+    return this.reports.streamDisputesCsv(from, to, res);
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Issue #59 — Stellar account merge detection
+  // ────────────────────────────────────────────────────────────────
+
+  @Get('merged-accounts')
+  @ApiOperation({
+    summary: 'List engagements flagged as ACCOUNT_MERGED (ADMIN only)',
+  })
+  @ApiResponse({ status: 200, description: 'Flagged engagements' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  listMergedAccounts() {
+    return this.mergeDetector.listMergedEngagements();
   }
 }
