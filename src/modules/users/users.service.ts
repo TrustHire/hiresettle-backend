@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Optional } from '@nestjs/common';
 import { NotificationType } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { S3Service } from '../../common/s3/s3.service';
@@ -10,9 +10,12 @@ import { CacheService } from '../../common/cache/cache.service';
 
 @Injectable()
 export class UsersService {
+  private static readonly PROFILE_TTL_S = 300;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly s3Service: S3Service,
+    @Optional() private readonly cache?: CacheService,
   ) {}
 
   async getPreferences(userId: string) {
@@ -29,7 +32,7 @@ export class UsersService {
 
   async findByStellarAddress(stellarAddress: string): Promise<PublicUserDto> {
     const cacheKey = `user:profile:${stellarAddress}`;
-    const cached = await this.cache.get<PublicUserDto>(cacheKey);
+    const cached = await this.cache?.get<PublicUserDto>(cacheKey);
     if (cached) return cached;
 
     const user = await this.prisma.user.findUnique({
@@ -38,7 +41,7 @@ export class UsersService {
     });
     if (!user) throw new NotFoundException('User not found');
 
-    await this.cache.set(cacheKey, user, UsersService.PROFILE_TTL_S);
+    await this.cache?.set(cacheKey, user, UsersService.PROFILE_TTL_S);
     return user;
   }
 

@@ -17,7 +17,7 @@ import { UpdateMilestoneStatusDto } from './dto/update-milestone-status.dto';
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 @UseGuards(UserJwtSubThrottlerGuard)
-@Throttle({ limit: 100, ttl: 60 })
+@Throttle(100, 60)
 @Controller('engagements/:engagementId/milestones')
 export class MilestonesController {
 
