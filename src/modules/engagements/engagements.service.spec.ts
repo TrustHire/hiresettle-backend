@@ -9,7 +9,7 @@ import {
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
-import { EngagementStatus, NotificationType } from '@prisma/client';
+import { EngagementStatus, NotificationType, UserRole } from '@prisma/client';
 
 // ----------------------------------------------------------------
 // Shared mock factories
@@ -282,6 +282,33 @@ describe('EngagementsService', () => {
         'admin-1',
       );
       expect(result).toBeDefined();
+    });
+  });
+
+  // ----------------------------------------------------------
+  // recuseArbiter()
+  // ----------------------------------------------------------
+
+  describe('recuseArbiter()', () => {
+    it('notifies admins when the assigned arbiter recuses', async () => {
+      mockPrisma.engagement.findUnique.mockResolvedValue({
+        id: 'ENG-001',
+        arbiter: { id: 'arbiter-1', name: 'Arbiter One' },
+      });
+      mockPrisma.user.findMany.mockResolvedValue([
+        { id: 'admin-1', role: UserRole.ADMIN, deactivatedAt: null },
+      ]);
+
+      const result = await service.recuseArbiter('ENG-001', 'arbiter-1', UserRole.ARBITER);
+
+      expect(result).toEqual({ message: 'Recusal request sent successfully' });
+      expect(mockNotifications.notifyUserById).toHaveBeenCalledWith(
+        'admin-1',
+        'ARBITER_RECUSAL_REQUESTED',
+        'Arbiter Recusal Requested',
+        expect.stringContaining('Arbiter Arbiter One has recused themselves'),
+        { engagementId: 'ENG-001', arbiterId: 'arbiter-1' },
+      );
     });
   });
 

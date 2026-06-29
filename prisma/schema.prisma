@@ -120,6 +120,7 @@ model Engagement {
   salaryRange      String?           // off-chain metadata
   location         String?           // off-chain metadata
   status           EngagementStatus  @default(ACTIVE)
+  replacementReason String?
   txHash           String?           // on-chain creation tx hash
   createdLedger    Int?              // ledger sequence at creation
   createdAt        DateTime          @default(now())

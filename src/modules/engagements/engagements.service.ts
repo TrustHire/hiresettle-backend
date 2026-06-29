@@ -5,6 +5,7 @@ import { User } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
 import { CreateEngagementDto } from './dto/create-engagement.dto';
+import { EngagementSummaryDto } from './dto/engagement-summary.dto';
 import { EngagementStatus, MilestoneKind, MilestoneStatus, NotificationType, UserRole } from '@prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AuditLogService } from './audit-log.service';
@@ -284,6 +285,153 @@ export class EngagementsService {
   }
 
   // ----------------------------------------------------------
+  // CANCEL
+  // ----------------------------------------------------------
+
+  async cancelEngagement(engagementId: string, requestingUser: User) {
+    const engagement = await this.prisma.engagement.findUnique({
+      where: { id: engagementId },
+    });
+
+    if (!engagement) {
+      throw new NotFoundException(`Engagement ${engagementId} not found`);
+    }
+
+    if (engagement.companyAddress !== requestingUser.stellarAddress) {
+      throw new ForbiddenException('Only the company party may cancel this engagement');
+    }
+
+    if (
+      engagement.status === EngagementStatus.CANCELLED ||
+      engagement.status === EngagementStatus.COMPLETED
+    ) {
+      throw new ConflictException(
+        `Cannot cancel an engagement with status '${engagement.status}'`,
+      );
+    }
+
+    const txHash = await this.stellar.cancelEngagement(engagementId);
+    this.logger.log(`On-chain cancel submitted for ${engagementId} (tx: ${txHash})`);
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      return tx.engagement.update({
+        where: { id: engagementId },
+        data: { status: EngagementStatus.CANCELLED },
+        include: { milestones: { orderBy: { milestoneIndex: 'asc' } } },
+      });
+    });
+
+    const notifyTitle = `Engagement Cancelled – ${engagement.jobTitle}`;
+    const notifyMessage =
+      `The engagement "${engagement.jobTitle}" (${engagementId}) has been cancelled by the company. ` +
+      `On-chain transaction: ${txHash}`;
+
+    await Promise.allSettled([
+      this.notifications.notifyUser(
+        engagement.companyAddress,
+        NotificationType.ENGAGEMENT_CANCELLED,
+        notifyTitle,
+        notifyMessage,
+        { engagementId, txHash },
+      ),
+      this.notifications.notifyUser(
+        engagement.recruiterAddress,
+        NotificationType.ENGAGEMENT_CANCELLED,
+        notifyTitle,
+        notifyMessage,
+        { engagementId, txHash },
+      ),
+      this.notifications.notifyUser(
+        engagement.arbiterAddress,
+        NotificationType.ENGAGEMENT_CANCELLED,
+        notifyTitle,
+        notifyMessage,
+        { engagementId, txHash },
+      ),
+    ]);
+
+    this.logger.log(`Engagement ${engagementId} cancelled and all parties notified`);
+    return this.serialize(updated);
+  }
+
+  // ----------------------------------------------------------
+  // REQUEST REPLACEMENT
+  // ----------------------------------------------------------
+
+  async requestReplacement(
+    engagementId: string,
+    requestingUser: User,
+    reason?: string,
+  ) {
+    const engagement = await this.prisma.engagement.findUnique({
+      where: { id: engagementId },
+    });
+
+    if (!engagement) {
+      throw new NotFoundException(`Engagement ${engagementId} not found`);
+    }
+
+    if (engagement.companyAddress !== requestingUser.stellarAddress) {
+      throw new ForbiddenException(
+        'Only the company party may request a candidate replacement',
+      );
+    }
+
+    if (
+      engagement.status === EngagementStatus.CANCELLED ||
+      engagement.status === EngagementStatus.COMPLETED ||
+      engagement.status === EngagementStatus.REPLACEMENT_REQUESTED
+    ) {
+      throw new ConflictException(
+        `Cannot request replacement for an engagement with status '${engagement.status}'`,
+      );
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      return tx.engagement.update({
+        where: { id: engagementId },
+        data: { status: EngagementStatus.REPLACEMENT_REQUESTED },
+        include: { milestones: { orderBy: { milestoneIndex: 'asc' } } },
+      });
+    });
+
+    const notifyTitle = `Replacement Requested – ${engagement.jobTitle}`;
+    const reasonSuffix = reason ? ` Reason: "${reason}"` : '';
+    const notifyMessage =
+      `The company has requested a candidate replacement for engagement ` +
+      `"${engagement.jobTitle}" (${engagementId}).${reasonSuffix}`;
+
+    await Promise.allSettled([
+      this.notifications.notifyUser(
+        engagement.companyAddress,
+        NotificationType.REPLACEMENT_REQUESTED,
+        notifyTitle,
+        notifyMessage,
+        { engagementId, reason: reason ?? null },
+      ),
+      this.notifications.notifyUser(
+        engagement.recruiterAddress,
+        NotificationType.REPLACEMENT_REQUESTED,
+        notifyTitle,
+        notifyMessage,
+        { engagementId, reason: reason ?? null },
+      ),
+      this.notifications.notifyUser(
+        engagement.arbiterAddress,
+        NotificationType.REPLACEMENT_REQUESTED,
+        notifyTitle,
+        notifyMessage,
+        { engagementId, reason: reason ?? null },
+      ),
+    ]);
+
+    this.logger.log(
+      `Engagement ${engagementId} replacement requested and all parties notified`,
+    );
+    return this.serialize(updated);
+  }
+
+  // ----------------------------------------------------------
   // SYNC FROM CHAIN
   // ----------------------------------------------------------
 
@@ -376,7 +524,7 @@ export class EngagementsService {
     for (const admin of admins) {
       await this.notifications.notifyUserById(
         admin.id,
-        'ARBITER_RECUSAL_REQUESTED',
+        NotificationType.ARBITER_RECUSAL_REQUESTED,
         'Arbiter Recusal Requested',
         `Arbiter ${engagement.arbiter?.name} has recused themselves from engagement ${engagementId}. Please reassign.`,
         { engagementId, arbiterId: userId },
