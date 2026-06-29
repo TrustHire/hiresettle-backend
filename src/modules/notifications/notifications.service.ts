@@ -1,6 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { NotificationType, Notification } from '@prisma/client';
 
@@ -13,6 +15,7 @@ export class NotificationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    @Optional() @InjectQueue('email') private readonly emailQueue?: Queue,
   ) {
     this.transporter = nodemailer.createTransport({
       host: this.config.get('SMTP_HOST'),
@@ -114,11 +117,22 @@ export class NotificationsService {
         const emailEnabled = pref ? pref.emailEnabled : true;
 
         if (emailEnabled) {
-          await this.sendEmail(user.email, title, message, type, data);
-          await this.prisma.notification.update({
-            where: { id: notification.id },
-            data: { emailSent: true },
-          });
+          if (this.emailQueue) {
+            await this.emailQueue.add('send', {
+              to: user.email,
+              subject: title,
+              message,
+              type,
+              notificationId: notification.id,
+              data,
+            });
+          } else {
+            await this.sendEmail(user.email, title, message, type, data);
+            await this.prisma.notification.update({
+              where: { id: notification.id },
+              data: { emailSent: true },
+            });
+          }
         }
       }
 
@@ -161,6 +175,23 @@ export class NotificationsService {
     return this.prisma.notification.updateMany({
       where: { userId, read: false },
       data: { read: true },
+    });
+  }
+
+  async sendEmailDirect(
+    to: string,
+    subject: string,
+    message: string,
+    type: NotificationType,
+    data?: Record<string, any>,
+  ) {
+    return this.sendEmail(to, subject, message, type, data);
+  }
+
+  async markEmailSent(notificationId: string) {
+    await this.prisma.notification.update({
+      where: { id: notificationId },
+      data: { emailSent: true },
     });
   }
 

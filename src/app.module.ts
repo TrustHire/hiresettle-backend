@@ -3,7 +3,9 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { TerminusModule } from '@nestjs/terminus';
+import { BullModule } from '@nestjs/bullmq';
 import { AppCacheModule } from './common/cache/cache.module';
+import { QueuesModule } from './queues/queues.module';
 
 
 import { PrismaModule } from './common/prisma/prisma.module';
@@ -37,6 +39,14 @@ import { BillingModule } from './modules/billing/billing.module';
     ScheduleModule.forRoot(),
     TerminusModule,
     AppCacheModule,
+    BullModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        connection: { url: config.get<string>('REDIS_URL', 'redis://localhost:6379') },
+      }),
+    }),
+    QueuesModule,
 
     PrismaModule,
     CommonStellarModule,
