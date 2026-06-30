@@ -10,6 +10,7 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
 import { TooManyRequestsHeadersFilter } from './common/filters/too-many-requests-headers.filter';
 import { TracingInterceptor } from './common/interceptors/tracing.interceptor';
+import { assertSecureJwtSecret } from './common/utils/jwt-secret.util';
 import { JwtService } from '@nestjs/jwt';
 import { HttpMetricsInterceptor } from './metrics/http-metrics.interceptor';
 import { MetricsService } from './metrics/metrics.service';
@@ -19,6 +20,12 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   const config = app.get(ConfigService);
+  const nodeEnv = config.get<string>('NODE_ENV');
+
+  if (!['test', 'ci'].includes(nodeEnv)) {
+    assertSecureJwtSecret(config.get<string>('JWT_SECRET'));
+  }
+
   const port = config.get<number>('PORT', 3000);
   const apiPrefix = config.get<string>('API_PREFIX', 'api/v1');
   const allowedOriginsStr = config.get<string>(
@@ -29,7 +36,6 @@ async function bootstrap() {
     .split(',')
     .map((origin) => origin.trim());
   const sentryDsn = config.get<string>('SENTRY_DSN');
-  const nodeEnv = config.get<string>('NODE_ENV');
 
   if (sentryDsn && !['test', 'ci'].includes(nodeEnv)) {
     Sentry.init({
