@@ -1,8 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { NotificationType, Notification } from '@prisma/client';
+import { MetricsService } from '../../metrics/metrics.service';
 
 @Injectable()
 export class NotificationsService {
@@ -13,6 +14,7 @@ export class NotificationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    @Optional() private readonly metrics?: MetricsService,
   ) {
     this.transporter = nodemailer.createTransport({
       host: this.config.get('SMTP_HOST'),
@@ -30,13 +32,15 @@ export class NotificationsService {
       this.userConnections.set(userId, []);
     }
     this.userConnections.get(userId)!.push(res);
-    
+    this.metrics?.sseActiveConnections.inc();
+
     res.on('close', () => {
       const connections = this.userConnections.get(userId);
       if (connections) {
         const index = connections.indexOf(res);
         if (index > -1) {
           connections.splice(index, 1);
+          this.metrics?.sseActiveConnections.dec();
         }
         if (connections.length === 0) {
           this.userConnections.delete(userId);
@@ -51,6 +55,7 @@ export class NotificationsService {
       const index = connections.indexOf(res);
       if (index > -1) {
         connections.splice(index, 1);
+        this.metrics?.sseActiveConnections.dec();
       }
       if (connections.length === 0) {
         this.userConnections.delete(userId);
