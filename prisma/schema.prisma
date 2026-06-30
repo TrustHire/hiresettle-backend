@@ -101,6 +101,7 @@ model User {
   auditLogs            EngagementAuditLog[]
   securityEvents       SecurityEvent[]
 
+  @@index([role, deactivatedAt])
   @@map("users")
 }
 
@@ -155,6 +156,10 @@ model Engagement {
   events     ChainEvent[]
   auditLogs  EngagementAuditLog[]
 
+  @@index([status])
+  @@index([companyAddress])
+  @@index([recruiterAddress])
+  @@index([status, createdAt])
   @@map("engagements")
 }
 
@@ -200,6 +205,9 @@ model Milestone {
   disputeEvidences   DisputeEvidence[]
 
   @@unique([engagementId, milestoneIndex])
+  @@index([status])
+  @@index([engagementId])
+  @@index([status, engagementId])
   @@map("milestones")
 }
 
