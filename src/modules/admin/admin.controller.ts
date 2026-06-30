@@ -11,6 +11,7 @@ import {
   HttpCode,
   HttpStatus,
   Res,
+  Req,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -20,8 +21,8 @@ import {
   ApiQuery,
   ApiResponse,
 } from '@nestjs/swagger';
-import { UserRole } from '@prisma/client';
-import { Response } from 'express';
+import { SecurityEventAction, UserRole } from '@prisma/client';
+import { Request, Response } from 'express';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -32,6 +33,8 @@ import { StellarMergeDetectorService } from './stellar-merge-detector.service';
 import { ListUsersDto } from './dto/list-users.dto';
 import { AssignArbiterDto } from './dto/assign-arbiter.dto';
 import { CacheService } from '../../common/cache/cache.service';
+import { SecurityEventsService } from '../../common/security-events/security-events.service';
+import { ListSecurityEventsDto } from '../../common/security-events/dto/list-security-events.dto';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -45,6 +48,7 @@ export class AdminController {
     private readonly cacheService: CacheService,
     private readonly reports: AdminReportsService,
     private readonly mergeDetector: StellarMergeDetectorService,
+    private readonly securityEvents: SecurityEventsService,
   ) {}
 
   @Get('users')
@@ -63,8 +67,15 @@ export class AdminController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Forbidden' })
   @ApiResponse({ status: 404, description: 'User not found' })
-  deactivateUser(@Param('id') id: string) {
-    return this.adminUsers.deactivateUser(id);
+  async deactivateUser(@Param('id') id: string, @Req() req: Request) {
+    const result = await this.adminUsers.deactivateUser(id);
+    await this.securityEvents.log({
+      userId: (req.user as any)?.id,
+      action: SecurityEventAction.ADMIN_OVERRIDE,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+    return result;
   }
 
   @Post('users/:id/reactivate')
@@ -75,8 +86,15 @@ export class AdminController {
   @ApiResponse({ status: 403, description: 'Forbidden' })
   @ApiResponse({ status: 404, description: 'User not found' })
   @ApiResponse({ status: 409, description: 'User already active' })
-  reactivateUser(@Param('id') id: string) {
-    return this.adminUsers.reactivateUser(id);
+  async reactivateUser(@Param('id') id: string, @Req() req: Request) {
+    const result = await this.adminUsers.reactivateUser(id);
+    await this.securityEvents.log({
+      userId: (req.user as any)?.id,
+      action: SecurityEventAction.ADMIN_OVERRIDE,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+    return result;
   }
 
   @Patch('engagements/:id/arbiter')
@@ -213,5 +231,25 @@ export class AdminController {
   @ApiResponse({ status: 403, description: 'Forbidden' })
   listMergedAccounts() {
     return this.mergeDetector.listMergedEngagements();
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Issue #87 — Security audit event log
+  // ────────────────────────────────────────────────────────────────
+
+  @Get('security-events')
+  @ApiOperation({
+    summary: 'List security audit events (ADMIN only, append-only)',
+  })
+  @ApiQuery({ name: 'userId', required: false })
+  @ApiQuery({ name: 'from', required: false, description: 'ISO 8601 start date' })
+  @ApiQuery({ name: 'to', required: false, description: 'ISO 8601 end date' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'Security events retrieved' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  listSecurityEvents(@Query() dto: ListSecurityEventsDto) {
+    return this.securityEvents.list(dto);
   }
 }
