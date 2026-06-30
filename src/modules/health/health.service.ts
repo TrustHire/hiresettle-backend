@@ -28,7 +28,7 @@ export class HealthService {
       return { stellarHorizon: { status: 'up' } };
     } catch (e) {
       this.logger.warn('Stellar Horizon health check degraded', e.message);
-      return { stellarHorizon: { status: 'degraded', message: e.message } };
+      return { stellarHorizon: { status: 'down', message: e.message } };
     }
   }
 }

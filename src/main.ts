@@ -1,6 +1,6 @@
 import './tracing';
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe, Logger } from '@nestjs/common';
+import { ValidationPipe, Logger, RequestMethod } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import helmet from 'helmet';
@@ -78,9 +78,9 @@ async function bootstrap() {
 
   app.setGlobalPrefix(apiPrefix, {
     exclude: [
-      { path: 'health', method: 'GET' },
-      { path: 'docs', method: 'GET' },
-      { path: 'docs-json', method: 'GET' },
+      { path: 'health', method: RequestMethod.GET },
+      { path: 'docs', method: RequestMethod.GET },
+      { path: 'docs-json', method: RequestMethod.GET },
     ],
   });
 
