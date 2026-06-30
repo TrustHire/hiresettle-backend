@@ -5,6 +5,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { TerminusModule } from '@nestjs/terminus';
 import { BullModule } from '@nestjs/bullmq';
 import { AppCacheModule } from './common/cache/cache.module';
+import { SecurityEventsModule } from './common/security-events/security-events.module';
 import { QueuesModule } from './queues/queues.module';
 
 import { MetricsModule } from './metrics/metrics.module';
@@ -41,6 +42,7 @@ import stellarConfig from './config/stellar.config';
     ScheduleModule.forRoot(),
     TerminusModule,
     AppCacheModule,
+    SecurityEventsModule,
     BullModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
