@@ -15,6 +15,7 @@ describe('NotificationsController', () => {
     markRead: jest.fn(),
     markAllRead: jest.fn(),
     addConnection: jest.fn(),
+    removeConnection: jest.fn(),
   };
 
   beforeEach(async () => {

@@ -1,6 +1,6 @@
 import './tracing';
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe, Logger } from '@nestjs/common';
+import { ValidationPipe, Logger, RequestMethod } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import helmet from 'helmet';
@@ -10,6 +10,9 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
 import { TooManyRequestsHeadersFilter } from './common/filters/too-many-requests-headers.filter';
 import { TracingInterceptor } from './common/interceptors/tracing.interceptor';
+import { JwtService } from '@nestjs/jwt';
+import { HttpMetricsInterceptor } from './metrics/http-metrics.interceptor';
+import { MetricsService } from './metrics/metrics.service';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
@@ -81,6 +84,7 @@ async function bootstrap() {
       { path: 'health', method: 'GET' },
       { path: 'docs', method: 'GET' },
       { path: 'docs-json', method: 'GET' },
+      { path: 'metrics', method: 'GET' },
     ],
   });
 
@@ -96,7 +100,9 @@ async function bootstrap() {
     }),
   );
 
+  const metricsService = app.get(MetricsService);
   app.useGlobalInterceptors(
+    new HttpMetricsInterceptor(metricsService),
     new TracingInterceptor(),
     new TransformInterceptor(),
   );
@@ -136,6 +142,47 @@ async function bootstrap() {
 
     logger.log(`Swagger docs available at http://localhost:${port}/docs`);
     logger.log(`OpenAPI JSON available at http://localhost:${port}/docs-json`);
+  }
+
+  if (nodeEnv !== 'production') {
+    const { createBullBoard } = await import('@bull-board/api');
+    const { BullMQAdapter } = await import('@bull-board/api/bullMQAdapter');
+    const { ExpressAdapter } = await import('@bull-board/express');
+    const { Queue } = await import('bullmq');
+
+    const redisUrl = config.get<string>('REDIS_URL', 'redis://localhost:6379');
+    const connection = { url: redisUrl };
+
+    const serverAdapter = new ExpressAdapter();
+    serverAdapter.setBasePath('/admin/queues');
+
+    createBullBoard({
+      queues: [
+        new BullMQAdapter(new Queue('email', { connection })),
+        new BullMQAdapter(new Queue('stellar-tx', { connection })),
+        new BullMQAdapter(new Queue('webhook', { connection })),
+      ],
+      serverAdapter,
+    });
+
+    const jwtService = app.get(JwtService);
+    const httpAdapter = app.getHttpAdapter();
+    const instance: any = httpAdapter.getInstance();
+
+    instance.use('/admin/queues', (req: any, res: any, next: any) => {
+      const token = req.headers.authorization?.split(' ')[1];
+      if (!token) return res.status(401).json({ message: 'Unauthorized' });
+      try {
+        const payload: any = jwtService.verify(token);
+        if (payload.role !== 'ADMIN') return res.status(403).json({ message: 'Forbidden' });
+        next();
+      } catch {
+        res.status(401).json({ message: 'Invalid token' });
+      }
+    });
+
+    instance.use('/admin/queues', serverAdapter.getRouter());
+    logger.log('Bull Board available at http://localhost:' + port + '/admin/queues');
   }
 
   await app.listen(port);

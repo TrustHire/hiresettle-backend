@@ -1,5 +1,5 @@
 import { Controller, Get, Patch, Param, Query, UseGuards, Res } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery, ApiParam, ApiResponse } from '@nestjs/swagger';
 import { NotificationsService } from './notifications.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -11,7 +11,7 @@ import { Response } from 'express';
 @ApiBearerAuth()
 @UseGuards(UserJwtSubThrottlerGuard)
 @UseGuards(JwtAuthGuard)
-@Throttle({ limit: 100, ttl: 60 })
+@Throttle(100, 60)
 @Controller('notifications')
 export class NotificationsController {
   constructor(private readonly notificationsService: NotificationsService) { }
