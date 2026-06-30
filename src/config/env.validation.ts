@@ -14,4 +14,8 @@ export const envValidationSchema = Joi.object({
     .valid('error', 'warn', 'log', 'debug', 'verbose')
     .default('log'),
   NOTIFICATION_RETENTION_DAYS: Joi.number().integer().min(1).default(90),
+  
+  // Database connection pooling
+  DATABASE_POOL_MIN: Joi.number().integer().min(1).max(20).default(2),
+  DATABASE_POOL_MAX: Joi.number().integer().min(2).max(50).default(10),
 }).unknown(true);
