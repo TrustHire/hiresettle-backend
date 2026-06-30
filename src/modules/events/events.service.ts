@@ -161,14 +161,12 @@ export class EventsService implements OnModuleInit {
         select: { webhookUrl: true },
       });
 
-      if (companyUser?.webhookUrl) {
-        await this.webhooks.sendWebhook(companyUser.webhookUrl, {
-          event: eventDetails.event,
-          engagementId: eventDetails.engagementId,
-          status: eventDetails.status,
-          timestamp: new Date().toISOString(),
-        });
-      }
+      await this.webhooks.sendWebhook(companyUser?.webhookUrl, {
+        event: eventDetails.event,
+        engagementId: eventDetails.engagementId,
+        status: eventDetails.status,
+        timestamp: new Date().toISOString(),
+      });
     } catch (err) {
       this.logger.error(`Webhook runtime dispatcher encounter error for engagement ${eventDetails.engagementId}:`, err.message);
     }

@@ -6,7 +6,6 @@ import {
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import {
-  Networks,
   SorobanRpc,
   Contract,
   TransactionBuilder,
@@ -35,10 +34,18 @@ import { CacheService } from "../cache/cache.service";
  * This service does NOT hold user funds. The backend Stellar keypair
  * is used only for read-only RPC calls.
  */
-interface TokenConfig {
+export interface TokenConfig {
   address: string;
   symbol: string;
   decimals: number;
+}
+
+interface StellarRuntimeConfig {
+  network: 'testnet' | 'mainnet';
+  rpcUrl: string;
+  horizonUrl: string;
+  networkPassphrase: string;
+  contractAddress?: string;
 }
 
 @Injectable()
@@ -46,7 +53,9 @@ export class StellarService implements OnModuleInit {
   private readonly logger = new Logger(StellarService.name);
 
   private rpcClient: SorobanRpc.Server;
+  private networkName: string;
   private networkPassphrase: string;
+  private horizonUrl: string;
   private contractId: string;
   private backendKeypair: Keypair;
   private allowedTokens: TokenConfig[];
@@ -58,13 +67,15 @@ export class StellarService implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
-    const rpcUrl = this.config.get<string>("STELLAR_RPC_URL");
-    const networkName = this.config.get<string>("STELLAR_NETWORK", "testnet");
+    const stellarConfig =
+      this.config.get<StellarRuntimeConfig>('stellar') ??
+      ({} as StellarRuntimeConfig);
 
-    this.rpcClient = new SorobanRpc.Server(rpcUrl, { allowHttp: true });
-    this.contractId = this.config.get<string>("HIRESETTLE_CONTRACT_ID");
-    this.networkPassphrase =
-      networkName === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
+    this.networkName = stellarConfig.network;
+    this.horizonUrl = stellarConfig.horizonUrl;
+    this.networkPassphrase = stellarConfig.networkPassphrase;
+    this.contractId = stellarConfig.contractAddress;
+    this.rpcClient = new SorobanRpc.Server(stellarConfig.rpcUrl, { allowHttp: true });
 
     // Parse allowed tokens from config
     try {
@@ -80,7 +91,9 @@ export class StellarService implements OnModuleInit {
       this.backendKeypair = Keypair.fromSecret(secretKey);
     }
 
-    this.logger.log(`Stellar connected to ${networkName} (${rpcUrl})`);
+    this.logger.log(`Active Stellar network: ${this.networkName}`);
+    this.logger.log(`Stellar RPC: ${stellarConfig.rpcUrl}`);
+    this.logger.log(`Stellar Horizon: ${this.horizonUrl}`);
     this.logger.log(`Contract: ${this.contractId}`);
     this.logger.log(`Allowed tokens: ${this.allowedTokens.map(t => `${t.symbol} (${t.address})`).join(', ')}`);
   }
@@ -94,6 +107,9 @@ export class StellarService implements OnModuleInit {
   }
   getNetworkPassphrase(): string {
     return this.networkPassphrase;
+  }
+  getHorizonUrl(): string {
+    return this.horizonUrl;
   }
   getContractId(): string {
     return this.contractId;
@@ -708,8 +724,7 @@ export class StellarService implements OnModuleInit {
   ): Promise<{ balance: bigint }> {
     try {
       const tokenConfig = this.getTokenConfig(tokenAddress);
-      const horizonUrl = this.config.get<string>('STELLAR_HORIZON_URL');
-      const response = await fetch(`${horizonUrl}/accounts/${accountAddress}`);
+      const response = await fetch(`${this.horizonUrl}/accounts/${accountAddress}`);
       if (!response.ok) {
         // For balance endpoint and validations we want a hard failure.
         throw new BadRequestException(
@@ -809,8 +824,7 @@ export class StellarService implements OnModuleInit {
     requireFunded = true,
   ): Promise<boolean> {
     try {
-      const horizonUrl = this.config.get<string>("STELLAR_HORIZON_URL");
-      const response = await fetch(`${horizonUrl}/accounts/${accountAddress}`);
+      const response = await fetch(`${this.horizonUrl}/accounts/${accountAddress}`);
       if (!response.ok) return false;
       if (!requireFunded) return true;
 
@@ -845,8 +859,8 @@ export class StellarService implements OnModuleInit {
     const cached = await this.cache.get<{ baseFee: number; sorobanFee: number }>(CACHE_KEY);
     if (cached) return cached;
 
-    const info = await this.rpcClient.getLatestLedger();
-    const baseFee = Number(info.baseFee);
+    await this.rpcClient.getLatestLedger();
+    const baseFee = Number(BASE_FEE);
     const sorobanFee = baseFee * 10;
     const result = { baseFee, sorobanFee };
     await this.cache.set(CACHE_KEY, result, 10); // 10 s TTL
