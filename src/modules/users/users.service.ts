@@ -36,7 +36,7 @@ export class UsersService {
 
   async findByStellarAddress(stellarAddress: string): Promise<PublicUserDto> {
     const cacheKey = `user:profile:${stellarAddress}`;
-    const cached = await this.cache.get<PublicUserDto>(cacheKey);
+    const cached = await this.cache?.get<PublicUserDto>(cacheKey);
     if (cached) return cached;
 
     const user = await this.prisma.user.findUnique({
@@ -45,7 +45,7 @@ export class UsersService {
     });
     if (!user) throw new NotFoundException('User not found');
 
-    await this.cache.set(cacheKey, user, UsersService.PROFILE_TTL_S);
+    await this.cache?.set(cacheKey, user, UsersService.PROFILE_TTL_S);
     return user;
   }
 

@@ -31,6 +31,7 @@ describe('NotificationsService', () => {
             notification: {
               create: jest.fn(),
               update: jest.fn(),
+              updateMany: jest.fn(),
               count: jest.fn(),
               findMany: jest.fn(),
             },
@@ -81,18 +82,14 @@ describe('NotificationsService', () => {
         stellarAddress,
         email,
       });
-      (prisma.notification.create as jest.Mock).mockResolvedValue({
+      (prisma.notification.create as jest.Mock).mockImplementation(({ data: createData }) => Promise.resolve({
         id: 'notification_id',
-        userId,
-        type: NotificationType.PAYMENT_RELEASED,
-        title,
-        message,
-        data,
+        ...createData,
         read: false,
         emailSent: false,
         createdAt: new Date(),
         updatedAt: new Date(),
-      });
+      }));
       (prisma.notificationPreference.findUnique as jest.Mock).mockResolvedValue(null); // Default to email enabled
     });
 
@@ -108,8 +105,14 @@ describe('NotificationsService', () => {
         from: 'test@example.com',
         to: email,
         subject: '💰 HireSettle — Test Notification',
-        text: message,
-        html: expect.any(String),
+        template: 'payment_released',
+        context: {
+          subject: expect.any(String),
+          message,
+          ctaLink: undefined,
+          year: expect.any(Number),
+          ...data,
+        },
       });
       expect(prisma.notification.update).toHaveBeenCalledWith({
         where: { id: 'notification_id' },

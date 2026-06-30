@@ -150,26 +150,90 @@ hiresettle-backend/
 
 ---
 
-## Setup
+## Quick Start (Docker Compose)
+
+The fastest way to get a local environment running:
 
 ```bash
 cp .env.example .env
+# Edit .env — fill in JWT_SECRET, STELLAR_* and SMTP_* at minimum
+
+docker compose up -d        # starts PostgreSQL and (optionally) Redis
 npm install
 npx prisma migrate dev --name init
 npx prisma generate
 npm run start:dev
 ```
 
-API: `http://localhost:3000/v1`
+API: `http://localhost:3000/api/v1`
 Swagger: `http://localhost:3000/docs`
+Metrics: `http://localhost:3000/metrics`
+
+> If you don't have Docker, start a local PostgreSQL instance and set `DATABASE_URL` manually.
+
+---
+
+## Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `NODE_ENV` | No | `development` | `development`, `production`, or `test` |
+| `PORT` | No | `3000` | HTTP port the server listens on |
+| `API_PREFIX` | No | `api/v1` | URL prefix for all API routes |
+| `ALLOWED_ORIGINS` | No | `http://localhost:3001` | Comma-separated CORS origins |
+| `JWT_SECRET` | **Yes** | — | Secret for signing JWTs (min 32 chars in prod) |
+| `JWT_ACCESS_EXPIRES_IN` | No | `15m` | Access token lifetime |
+| `JWT_REFRESH_EXPIRES_IN` | No | `7d` | Refresh token lifetime |
+| `DATABASE_URL` | **Yes** | — | PostgreSQL connection string |
+| `STELLAR_NETWORK` | **Yes** | — | `testnet` or `mainnet` |
+| `STELLAR_RPC_URL` | **Yes** | — | Soroban RPC endpoint |
+| `STELLAR_HORIZON_URL` | **Yes** | — | Horizon REST endpoint |
+| `HIRESETTLE_CONTRACT_ID` | **Yes** | — | Deployed Soroban contract address |
+| `STELLAR_SECRET_KEY` | **Yes** | — | Read-only keypair for event polling |
+| `ALLOWED_TOKENS` | **Yes** | — | JSON array of accepted token configs |
+| `SMTP_HOST` | **Yes** | — | SMTP server hostname |
+| `SMTP_PORT` | No | `587` | SMTP port |
+| `SMTP_USER` | **Yes** | — | SMTP username |
+| `SMTP_PASS` | **Yes** | — | SMTP password / app password |
+| `EMAIL_FROM` | No | `noreply@hiresettle.com` | From address for outgoing email |
+| `THROTTLE_TTL` | No | `60` | Rate limit window in seconds |
+| `THROTTLE_LIMIT` | No | `100` | Max requests per window |
+| `EVENT_POLLING_INTERVAL_MS` | No | `5000` | How often to poll for chain events |
+| `LEDGERS_PER_DAY` | No | `17280` | Used for retention timer math |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | No | — | OpenTelemetry collector URL (unset = tracing disabled) |
+| `OTEL_SERVICE_NAME` | No | `hiresettle-backend` | Service name in traces |
+| `SENTRY_DSN` | No | — | Sentry error tracking DSN (unset = disabled) |
+| `S3_ACCESS_KEY_ID` | **Yes** | — | AWS / S3-compatible access key |
+| `S3_SECRET_ACCESS_KEY` | **Yes** | — | AWS / S3-compatible secret |
+| `S3_REGION` | **Yes** | — | S3 region |
+| `S3_BUCKET` | **Yes** | — | S3 bucket name |
+| `S3_ENDPOINT` | No | AWS default | Custom endpoint for S3-compatible services |
+| `REDIS_URL` | No | — | Redis URL; omit to use in-memory cache |
+| `METRICS_ALLOWED_IPS` | No | `127.0.0.1,::1` | IPs allowed to scrape `/metrics` |
+
+---
+
+## npm Scripts
+
+| Script | Description |
+|--------|-------------|
+| `npm run start:dev` | Start with hot-reload (development) |
+| `npm run start:prod` | Start compiled output (production) |
+| `npm run build` | Compile TypeScript to `dist/` |
+| `npm run test` | Run unit tests |
+| `npm run test:cov` | Run tests with coverage report |
+| `npm run lint` | Lint and auto-fix with ESLint |
+| `npm run format` | Format with Prettier |
+| `npm run release` | Bump version + update CHANGELOG (conventional commits) |
 
 ---
 
 ## Running Tests
 
 ```bash
-npm run test
-npm run test:cov
+npm run test           # all tests
+npm run test:watch     # watch mode
+npm run test:cov       # with coverage (thresholds: 70% lines/functions, 60% branches)
 ```
 
 ---

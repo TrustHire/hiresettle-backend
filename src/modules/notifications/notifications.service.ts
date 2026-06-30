@@ -5,6 +5,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { NotificationType, Notification } from '@prisma/client';
+import { MetricsService } from '../../metrics/metrics.service';
 
 @Injectable()
 export class NotificationsService {
@@ -16,6 +17,7 @@ export class NotificationsService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     @Optional() @InjectQueue('email') private readonly emailQueue?: Queue,
+    @Optional() private readonly metrics?: MetricsService,
   ) {
     this.transporter = nodemailer.createTransport({
       host: this.config.get('SMTP_HOST'),
@@ -33,13 +35,15 @@ export class NotificationsService {
       this.userConnections.set(userId, []);
     }
     this.userConnections.get(userId)!.push(res);
-    
+    this.metrics?.sseActiveConnections.inc();
+
     res.on('close', () => {
       const connections = this.userConnections.get(userId);
       if (connections) {
         const index = connections.indexOf(res);
         if (index > -1) {
           connections.splice(index, 1);
+          this.metrics?.sseActiveConnections.dec();
         }
         if (connections.length === 0) {
           this.userConnections.delete(userId);
@@ -54,6 +58,7 @@ export class NotificationsService {
       const index = connections.indexOf(res);
       if (index > -1) {
         connections.splice(index, 1);
+        this.metrics?.sseActiveConnections.dec();
       }
       if (connections.length === 0) {
         this.userConnections.delete(userId);
@@ -146,16 +151,14 @@ export class NotificationsService {
     const where: any = { userId };
     if (unreadOnly) where.read = false;
 
-    const [notifications, total, unreadCount] = await this.prisma.$transaction([
-      this.prisma.notification.findMany({
-        where,
-        orderBy: { createdAt: 'desc' },
-        skip: (page - 1) * limit,
-        take: limit,
-      }),
-      this.prisma.notification.count({ where }),
-      this.prisma.notification.count({ where: { userId, read: false } }),
-    ]);
+    const notifications = await this.prisma.notification.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+    const total = await this.prisma.notification.count({ where });
+    const unreadCount = await this.prisma.notification.count({ where: { userId, read: false } });
 
     return { data: notifications, meta: { total, page, limit, unreadCount } };
   }
@@ -217,7 +220,7 @@ export class NotificationsService {
 
     try {
       await this.transporter.sendMail({
-        from: this.config.get('EMAIL_FROM', 'noreply@hiresettle.com'),
+        from: this.config.get('EMAIL_FROM') ?? 'noreply@hiresettle.com',
         to,
         subject: `${typeEmoji[type] ?? '📬'} HireSettle — ${subject}`,
         template: type.toLowerCase(), // Use the notification type as the template name
@@ -229,7 +232,7 @@ export class NotificationsService {
           // Pass all data properties to the template context
           ...data,
         },
-      });
+      } as any);
       this.logger.log(`Email sent to ${to}: ${subject}`);
     } catch (error) {
       this.logger.error(`Email failed to ${to}`, error.message);

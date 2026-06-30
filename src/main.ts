@@ -1,6 +1,6 @@
 import './tracing';
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe, Logger } from '@nestjs/common';
+import { ValidationPipe, Logger, RequestMethod } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import helmet from 'helmet';
@@ -11,6 +11,8 @@ import { TransformInterceptor } from './common/interceptors/transform.intercepto
 import { TooManyRequestsHeadersFilter } from './common/filters/too-many-requests-headers.filter';
 import { TracingInterceptor } from './common/interceptors/tracing.interceptor';
 import { JwtService } from '@nestjs/jwt';
+import { HttpMetricsInterceptor } from './metrics/http-metrics.interceptor';
+import { MetricsService } from './metrics/metrics.service';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
@@ -82,6 +84,7 @@ async function bootstrap() {
       { path: 'health', method: 'GET' },
       { path: 'docs', method: 'GET' },
       { path: 'docs-json', method: 'GET' },
+      { path: 'metrics', method: 'GET' },
     ],
   });
 
@@ -97,7 +100,9 @@ async function bootstrap() {
     }),
   );
 
+  const metricsService = app.get(MetricsService);
   app.useGlobalInterceptors(
+    new HttpMetricsInterceptor(metricsService),
     new TracingInterceptor(),
     new TransformInterceptor(),
   );

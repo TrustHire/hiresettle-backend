@@ -1,7 +1,7 @@
 import {
   Injectable, NotFoundException, ConflictException, BadRequestException, Logger, ForbiddenException,
 } from '@nestjs/common';
-import { User } from '@prisma/client';
+import { User, UserRole } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
 import { CreateEngagementDto } from './dto/create-engagement.dto';
@@ -267,7 +267,7 @@ export class EngagementsService {
       const amount = typeof milestone.amount === 'bigint' ? milestone.amount : BigInt(milestone.amount as any);
       totalAmount += amount;
 
-      if (milestone.status === 'COMPLETED' || milestone.status === 'RELEASED') {
+      if (milestone.status === MilestoneStatus.CONFIRMED || milestone.status === MilestoneStatus.RESOLVED) {
         releasedAmount += amount;
         milestonesCompleted++;
       }
