@@ -6,6 +6,6 @@ import { ThrottlerGuard, Throttle } from '@nestjs/throttler';
  */
 export const RateLimit = (limit: number, ttlSeconds: number) =>
     applyDecorators(
-        Throttle({ limit, ttl: ttlSeconds })
+        Throttle(limit, ttlSeconds)
     );
 

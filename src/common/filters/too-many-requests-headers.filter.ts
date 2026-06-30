@@ -3,13 +3,13 @@ import {
     Catch,
     ExceptionFilter,
     HttpStatus,
-    TooManyRequestsException,
 } from '@nestjs/common';
+import { ThrottlerException } from '@nestjs/throttler';
 import { Request, Response } from 'express';
 
-@Catch(TooManyRequestsException)
+@Catch(ThrottlerException)
 export class TooManyRequestsHeadersFilter implements ExceptionFilter {
-    catch(exception: TooManyRequestsException, host: ArgumentsHost) {
+    catch(exception: ThrottlerException, host: ArgumentsHost) {
         const ctx = host.switchToHttp();
         const response = ctx.getResponse<Response>();
         const request = ctx.getRequest<Request>();

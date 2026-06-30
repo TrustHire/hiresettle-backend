@@ -17,7 +17,7 @@ import { UserJwtSubThrottlerGuard } from '../../common/guards/user-jwt-sub-throt
 @ApiBearerAuth()
 @UseGuards(UserJwtSubThrottlerGuard)
 @UseGuards(JwtAuthGuard)
-@Throttle({ limit: 100, ttl: 60 })
+@Throttle(100, 60)
 @Controller('recruiters')
 export class RecruitersController {
   constructor(private readonly recruitersService: RecruitersService) {}
