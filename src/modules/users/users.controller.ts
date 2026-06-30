@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Put, UseGuards, UseInterceptors } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Put, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiTags, ApiResponse, ApiConsumes } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -90,11 +90,11 @@ export class UsersController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   async uploadAvatar(
     @CurrentUser('id') userId: string,
-    @Body() body: { file: Express.Multer.File },
+    @UploadedFile() file: Express.Multer.File,
   ): Promise<UserProfileDto> {
-    if (!body.file) {
+    if (!file) {
       throw new BadRequestException('No file provided');
     }
-    return this.usersService.uploadAvatar(userId, body.file);
+    return this.usersService.uploadAvatar(userId, file);
   }
 }
