@@ -11,6 +11,7 @@ import { Prisma } from '@prisma/client';
 import { AuthService } from './auth.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
+import { SecurityEventsService } from '../../common/security-events/security-events.service';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -79,6 +80,10 @@ const makeMockStellar = () => ({
   accountExists: jest.fn().mockResolvedValue(true),
 });
 
+const makeMockSecurityEvents = () => ({
+  log: jest.fn().mockResolvedValue(undefined),
+});
+
 // ── Suite ─────────────────────────────────────────────────────────────────────
 
 describe('AuthService', () => {
@@ -105,6 +110,7 @@ describe('AuthService', () => {
         { provide: JwtService, useValue: mockJwt },
         { provide: ConfigService, useValue: makeMockConfig() },
         { provide: StellarService, useValue: mockStellar },
+        { provide: SecurityEventsService, useValue: makeMockSecurityEvents() },
       ],
     }).compile();
 
@@ -166,6 +172,7 @@ describe('AuthService', () => {
             },
           },
           { provide: StellarService, useValue: mockStellar },
+          { provide: SecurityEventsService, useValue: makeMockSecurityEvents() },
         ],
       }).compile();
       const svc2 = module2.get<AuthService>(AuthService);

@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, Logger, UnprocessableEntityException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
+import { S3Service } from '../../common/s3/s3.service';
 import { MilestoneStatus, NotificationType } from '@prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
 
@@ -12,6 +13,7 @@ export class MilestonesService {
     private readonly prisma: PrismaService,
     private readonly stellar: StellarService,
     private readonly notifications: NotificationsService,
+    private readonly s3: S3Service,
   ) {}
 
   async findByEngagement(engagementId: string) {
@@ -408,6 +410,40 @@ export class MilestonesService {
   // ----------------------------------------------------------
   // ADMIN OVERRIDES
   // ----------------------------------------------------------
+
+  async uploadEvidence(
+    engagementId: string,
+    milestoneIndex: number,
+    file: Express.Multer.File,
+    user: any,
+  ) {
+    const milestone = await this.prisma.milestone.findUnique({
+      where: { engagementId_milestoneIndex: { engagementId, milestoneIndex } },
+      include: { engagement: true },
+    });
+    if (!milestone) {
+      throw new NotFoundException(`Milestone ${milestoneIndex} not found on engagement ${engagementId}`);
+    }
+    this.checkPartyAccess((milestone as any).engagement, user);
+
+    const key = `evidence/${engagementId}/${milestoneIndex}/${user.id}/${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    await this.s3.uploadFile(key, file.buffer, file.mimetype);
+    const s3Url = await this.s3.getPresignedUrl(key);
+
+    const evidence = await this.prisma.disputeEvidence.create({
+      data: {
+        milestoneId: milestone.id,
+        uploadedBy: user.id,
+        fileName: file.originalname,
+        fileSize: file.size,
+        mimeType: file.mimetype,
+        s3Path: key,
+        s3Url,
+      },
+    });
+
+    return { id: evidence.id, fileName: evidence.fileName, s3Url };
+  }
 
   async updateMilestoneStatusByAdmin(
     engagementId: string,

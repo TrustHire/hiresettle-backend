@@ -1,11 +1,17 @@
-import { Module } from '@nestjs/common';
+import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { TerminusModule } from '@nestjs/terminus';
+import { BullModule } from '@nestjs/bullmq';
 import { AppCacheModule } from './common/cache/cache.module';
 import { envValidationSchema } from './config/env.validation';
+import { AppLoggerModule } from './common/logger/logger.module';
+import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
+import { SecurityEventsModule } from './common/security-events/security-events.module';
+import { QueuesModule } from './queues/queues.module';
 
+import { MetricsModule } from './metrics/metrics.module';
 
 import { PrismaModule } from './common/prisma/prisma.module';
 import { StellarModule as CommonStellarModule } from './common/stellar/stellar.module';
@@ -22,14 +28,11 @@ import { UsersModule } from './modules/users/users.module';
 import { HealthModule } from './modules/health/health.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { BillingModule } from './modules/billing/billing.module';
+import stellarConfig from './config/stellar.config';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({
-      isGlobal: true,
-      validationSchema: envValidationSchema,
-      validationOptions: { abortEarly: false },
-    }),
+    ConfigModule.forRoot({ isGlobal: true, load: [stellarConfig] }),
     ThrottlerModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -42,6 +45,17 @@ import { BillingModule } from './modules/billing/billing.module';
     ScheduleModule.forRoot(),
     TerminusModule,
     AppCacheModule,
+    AppLoggerModule,
+    SecurityEventsModule,
+    BullModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        connection: { url: config.get<string>('REDIS_URL', 'redis://localhost:6379') },
+      }),
+    }),
+    QueuesModule,
+    MetricsModule,
 
     PrismaModule,
     CommonStellarModule,
@@ -58,4 +72,8 @@ import { BillingModule } from './modules/billing/billing.module';
     BillingModule,
   ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(RequestIdMiddleware).forRoutes('*');
+  }
+}

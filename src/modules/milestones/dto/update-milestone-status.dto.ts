@@ -3,7 +3,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import { MilestoneStatus } from '@prisma/client';
 
 export class UpdateMilestoneStatusDto {
-  @ApiProperty({ enum: MilestoneStatus, example: MilestoneStatus.CANCELLED })
+  @ApiProperty({ enum: MilestoneStatus, example: MilestoneStatus.RESOLVED })
   @IsEnum(MilestoneStatus)
   @IsNotEmpty()
   status: MilestoneStatus;

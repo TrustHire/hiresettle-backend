@@ -7,7 +7,7 @@ import { ThrottlerGuard } from '@nestjs/throttler';
  */
 @Injectable()
 export class UserJwtSubThrottlerGuard extends ThrottlerGuard {
-  protected getTracker(req: Record<string, any>, _res: any, _options: any): string {
+  protected getTracker(req: Record<string, any>): string {
     // req.user is set by JwtStrategy.validate() + Passport.
     // In this app: { id: payload.sub, stellarAddress, role }
     const user = req.user;
