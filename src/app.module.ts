@@ -5,6 +5,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { TerminusModule } from '@nestjs/terminus';
 import { BullModule } from '@nestjs/bullmq';
 import { AppCacheModule } from './common/cache/cache.module';
+import { envValidationSchema } from './config/env.validation';
 import { AppLoggerModule } from './common/logger/logger.module';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 import { SecurityEventsModule } from './common/security-events/security-events.module';
