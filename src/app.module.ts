@@ -1,10 +1,12 @@
-import { Module } from '@nestjs/common';
+import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { TerminusModule } from '@nestjs/terminus';
 import { BullModule } from '@nestjs/bullmq';
 import { AppCacheModule } from './common/cache/cache.module';
+import { AppLoggerModule } from './common/logger/logger.module';
+import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 import { SecurityEventsModule } from './common/security-events/security-events.module';
 import { QueuesModule } from './queues/queues.module';
 
@@ -42,6 +44,7 @@ import stellarConfig from './config/stellar.config';
     ScheduleModule.forRoot(),
     TerminusModule,
     AppCacheModule,
+    AppLoggerModule,
     SecurityEventsModule,
     BullModule.forRootAsync({
       imports: [ConfigModule],
@@ -68,4 +71,8 @@ import stellarConfig from './config/stellar.config';
     BillingModule,
   ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(RequestIdMiddleware).forRoutes('*');
+  }
+}
