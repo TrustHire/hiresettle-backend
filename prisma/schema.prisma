@@ -61,6 +61,16 @@ enum UserRole {
   ADMIN
 }
 
+enum SecurityEventAction {
+  LOGIN_SUCCESS
+  LOGIN_FAILURE
+  LOGOUT
+  PASSWORD_RESET
+  EMAIL_VERIFICATION
+  ROLE_CHANGE
+  ADMIN_OVERRIDE
+}
+
 // ============================================================
 // MODELS
 // ============================================================
@@ -89,6 +99,7 @@ model User {
   milestoneAuditLogs   MilestoneAuditLog[]
   disputeEvidences     DisputeEvidence[]
   auditLogs            EngagementAuditLog[]
+  securityEvents       SecurityEvent[]
 
   @@map("users")
 }
@@ -117,6 +128,11 @@ model Engagement {
   companyAddress   String
   recruiterAddress String
   arbiterAddress   String
+  companyId        String?
+  recruiterId      String?
+  arbiterId        String?
+  clientId         String?
+  freelancerId     String?
   tokenAddress     String
   totalAmount      BigInt            // total fee in stroops
   releasedAmount   BigInt            @default(0)
@@ -165,10 +181,13 @@ model Milestone {
   name             String
   kind             MilestoneKind
   paymentPercent   Int             // 0-100
+  amount           BigInt?
   retentionDays    Int?            // original retention window in days (for display)
   validAfterLedger Int?            // on-chain valid_after_ledger value
   unlockEstimatedAt DateTime?      // estimated real-world datetime of unlock
   proofHash        String?
+  disputeReason    String?
+  approachingNotificationSent Boolean @default(false)
   status           MilestoneStatus @default(PENDING)
   paymentReleased  BigInt?
   confirmedAt      DateTime?
@@ -264,6 +283,38 @@ model Notification {
   @@map("notifications")
 }
 
+model NotificationPreference {
+  id           String           @id @default(uuid())
+  userId       String
+  type         NotificationType
+  emailEnabled Boolean          @default(true)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, type])
+  @@map("notification_preferences")
+}
+
+model EngagementTemplate {
+  id              String   @id @default(uuid())
+  companyId       String
+  name            String
+  jobTitle        String
+  jobDescription  String?
+  salaryRange     String?
+  location        String?
+  milestoneConfig Json
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  company User @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@map("engagement_templates")
+}
+
 model AuditLog {
   id          String    @id @default(uuid())
   entityType  String    // e.g., "Engagement", "Milestone"
@@ -333,4 +384,22 @@ model DisputeEvidence {
   @@index([milestoneId])
   @@index([uploadedBy])
   @@map("dispute_evidence")
+}
+
+// Append-only log of security-relevant events for incident response and
+// compliance. No update or delete endpoints are exposed for this table.
+model SecurityEvent {
+  id        String              @id @default(uuid())
+  userId    String?
+  action    SecurityEventAction
+  ip        String?
+  userAgent String?
+  createdAt DateTime            @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("security_events")
 }

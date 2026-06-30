@@ -29,7 +29,7 @@ import { RequestReplacementDto } from './dto/request-replacement.dto';
 @ApiBearerAuth()
 @UseGuards(UserJwtSubThrottlerGuard)
 @UseGuards(JwtAuthGuard)
-@Throttle({ limit: 100, ttl: 60 })
+@Throttle(100, 60)
 @Controller('engagements')
 export class EngagementsController {
   constructor(
