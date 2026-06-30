@@ -154,6 +154,21 @@ hiresettle-backend/
 
 The fastest way to get a local environment running:
 
+### Docker Compose (recommended)
+
+```bash
+cp .env.example .env
+# Fill in required values in .env, then:
+docker compose up
+```
+
+The `api` service runs `prisma migrate deploy` automatically before starting. Postgres data is persisted in a named volume.
+
+API: `http://localhost:3000/api/v1`
+Swagger: `http://localhost:3000/docs`
+
+### Manual
+
 ```bash
 cp .env.example .env
 # Edit .env — fill in JWT_SECRET, STELLAR_* and SMTP_* at minimum
