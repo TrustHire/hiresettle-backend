@@ -82,3 +82,28 @@ This document provides step-by-step instructions for handling alerts fired by th
 3. Check backend code for connection leaks (ensure Prisma transactions are properly committed/rolled back)
 4. Increase connection pool size if necessary (in Prisma configuration)
 5. Optimize database queries to reduce query duration
+
+---
+
+## QueueBacklog
+
+### Symptoms
+- BullMQ queue depth growing steadily across `email`, `stellar-tx`, or `webhook` queues
+- Jobs stuck in `waiting` or `active` state for longer than expected
+- Delayed or missing emails, webhook deliveries, or Stellar payment confirmations
+
+### Likely Causes
+- Processor failure (unhandled exception causing the worker to crash)
+- Redis connectivity issues preventing job acknowledgement
+- Downstream dependency unavailable (email provider, webhook endpoint, Stellar RPC)
+- Concurrency limit too low for current throughput
+
+### Resolution Steps
+1. Open BullMQ dashboard (Bull Board) or query Redis to identify which queue(s) are backing up (`XLEN <queueName>`)
+2. Check processor logs for the affected queue (`EmailProcessor`, `WebhookProcessor`, `StellarTxProcessor`) for errors or timeouts
+3. Verify Redis connectivity (`redis-cli ping`) and memory usage
+4. Check downstream dependencies: email provider status, webhook target availability, Stellar RPC health
+5. If a processor is crashed, restart the affected backend instance to re-initialise workers
+6. Manually retry stuck jobs via BullMQ dashboard or `BullMQ` CLI (`addWorkerQueue -r <jobId>`)
+7. If a specific job keeps failing, inspect its data and move it to the dead-letter queue or remove it
+8. Scale up worker concurrency if throughput consistently exceeds processing capacity
