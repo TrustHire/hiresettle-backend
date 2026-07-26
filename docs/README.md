@@ -1,14 +1,16 @@
-# HireSettle — Docs
+# Documentation
+
+This directory contains the technical documentation for the HireSettle backend.
+
+## Available Documents
 
 | Document | Description |
 |----------|-------------|
-| [Glossary](glossary.md) | Definitions of domain-specific terms |
-| [Architecture](architecture.md) | Module responsibilities, data flow, design decisions |
-| [Stellar Integration](stellar-integration.md) | Soroban contract interface, Horizon usage, network config |
-| [Security](security.md) | Security model and practices |
-| [Secrets](secrets.md) | Environment variables and secret management |
-| [Alerts](alerts.md) | Alerting rules and escalation |
-| [Runbook](runbook.md) | Operational runbook |
-| [Tracing](tracing.md) | Distributed tracing setup |
-| [Performance](performance.md) | Performance benchmarks and load testing |
-| [Postman](postman/) | API collection and environments |
+| [Architecture](./architecture.md) | High-level system architecture and design. |
+| [Database Schema](./database-schema.md) | Summary of all Prisma models, their purpose, key fields, and relationships. |
+| [Performance](./performance.md) | Performance optimization guidelines and best practices. |
+| [Runbook](./runbook.md) | Operational procedures for deployment and maintenance. |
+| [Secrets](./secrets.md) | Secret management and environment configuration. |
+| [Security](./security.md) | Security practices and recommendations. |
+| [Stellar Integration](./stellar-integration.md) | Integration details with the Stellar blockchain. |
+| [Tracing](./tracing.md) | Application tracing and observability documentation. |
