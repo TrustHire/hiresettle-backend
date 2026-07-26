@@ -44,6 +44,15 @@ groups:
         annotations:
           summary: "Database connection pool nearly exhausted"
           description: "Database pool usage is {{ $value | humanizePercentage }} (> 90%)"
+
+      - alert: NotificationDeliveryFailureRate
+        expr: sum(rate(notification_delivery_failures_total[5m])) by (channel) / sum(rate(notification_delivery_attempts_total[5m])) by (channel) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High notification delivery failure rate for {{ $labels.channel }}"
+          description: "Notification failure rate for {{ $labels.channel }} is {{ $value | humanizePercentage }} (> 5% for 5m)"
 ```
 
 ## Notes
@@ -51,3 +60,4 @@ groups:
 - Assumes standard Prometheus metrics from NestJS (use `@willsoto/nestjs-prometheus` or similar)
 - Adjust metric names to match your actual instrumentation
 - Dead-letter queue and DB pool metrics need custom exporters
+- Notification delivery failure metrics (`notification_delivery_failures_total`, `notification_delivery_attempts_total`) require instrumenting the notification/email/SSE service
