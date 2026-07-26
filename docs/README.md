@@ -4,6 +4,7 @@
 |----------|-------------|
 | [Glossary](glossary.md) | Definitions of domain-specific terms |
 | [Error Codes](error-codes.md) | API error response shapes and HTTP status codes |
+| [Notifications Guide](notifications-guide.md) | Notification types, channels, templates, and preferences |
 | [Architecture](architecture.md) | Module responsibilities, data flow, design decisions |
 | [Stellar Integration](stellar-integration.md) | Soroban contract interface, Horizon usage, network config |
 | [Security](security.md) | Security model and practices |
