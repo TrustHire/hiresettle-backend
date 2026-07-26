@@ -3,6 +3,7 @@
 | Document | Description |
 |----------|-------------|
 | [Glossary](glossary.md) | Definitions of domain-specific terms |
+| [Error Codes](error-codes.md) | API error response shapes and HTTP status codes |
 | [Architecture](architecture.md) | Module responsibilities, data flow, design decisions |
 | [Stellar Integration](stellar-integration.md) | Soroban contract interface, Horizon usage, network config |
 | [Security](security.md) | Security model and practices |
