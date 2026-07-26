@@ -77,6 +77,42 @@ credential that should be rotated if exposed.
 4. If the old key was also used elsewhere (e.g. manual scripts), revoke or
    stop using it there too.
 
+### AWS S3 credentials (`S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY`)
+
+`S3Service` (`src/common/s3/s3.service.ts`) reads these once via `ConfigService`
+in its constructor to build the `S3Client` used for `uploadFile` and
+`getPresignedUrl` — like the other secrets in this doc, a new value only
+takes effect after a redeploy/restart, not live.
+
+1. In AWS IAM (or the console for whatever provider `S3_ENDPOINT` points at,
+   if set to a non-AWS S3-compatible service), create a new access key for
+   the same IAM user/role. Do not deactivate the old key yet — AWS allows up
+   to two active access keys per user, which is what makes step 5 possible.
+2. Update `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` in the environment's
+   secret store (see [Production secrets injection](#production-secrets-injection)
+   below).
+3. Redeploy so `S3Service` picks up the new values at startup.
+4. Confirm uploads and presigned URL generation both work against the new
+   key — e.g. exercise the document upload/download flow end to end.
+5. Wait out the longest `expiresIn` window used for presigned URLs issued
+   before the cutover (`getPresignedUrl` defaults to `3600` seconds / 1
+   hour) before deactivating and deleting the old access key in IAM.
+
+**Downtime considerations**
+
+- Because AWS permits two simultaneous active keys per user, this rotation
+  can be zero-downtime — unlike `JWT_SECRET`, there's no window where every
+  instance must flip at once.
+- Presigned URLs are signed with whichever key was active at generation
+  time. If the old key is deactivated before an already-issued presigned
+  URL expires, that URL starts failing with `403 SignatureDoesNotMatch`.
+  Rotating the key doesn't retroactively invalidate live URLs on its own —
+  only revoking the old key too early does — so step 5's wait matters.
+- If `S3_ENDPOINT` is set to a non-AWS S3-compatible provider (MinIO,
+  DigitalOcean Spaces, Cloudflare R2, etc.), confirm it also supports two
+  concurrent active keys before relying on the zero-downtime approach above
+  — not all providers do.
+
 ### General rule
 
 Never rotate by editing `.env` on a single running host and leaving others
