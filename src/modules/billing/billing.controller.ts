@@ -61,3 +61,37 @@ export class BillingController {
     res.status(HttpStatus.OK).send(csvContent);
   }
 }
+
+@ApiTags('billing')
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.COMPANY, UserRole.ADMIN)
+@Controller('billing')
+export class BillingExportController {
+  constructor(private readonly billingService: BillingService) {}
+
+  @Get('export')
+  @ApiOperation({
+    summary: 'Export billing history as CSV (COMPANY sees own records; ADMIN sees all)',
+  })
+  @ApiQuery({ name: 'from', required: false, description: 'Start date (ISO format)' })
+  @ApiQuery({ name: 'to', required: false, description: 'End date (ISO format)' })
+  async exportCsv(
+    @CurrentUser() user: any,
+    @Res() res: Response,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    const fromDate = from ? new Date(from) : undefined;
+    const toDate = to ? new Date(to) : undefined;
+    const csv = await this.billingService.exportBillingHistory(user, fromDate, toDate);
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="billing-history-${Date.now()}.csv"`,
+    );
+    res.status(HttpStatus.OK).send(csv);
+  }
+}
+
