@@ -3,38 +3,30 @@
 ## System Diagram
 
 ```
-┌──────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                   NestJS Application                                                 │
-│                                                                                                      │
-│  ┌──────────┐ ┌─────────────┐ ┌────────────┐ ┌─────────────┐ ┌────────────────────┐                  │ 
-│  │   Auth   │ │ Engagements │ │ Milestones │ │   Events    │ │   Notifications    │                  │
-│  │  Module  │ │   Module    │ │   Module   │ │   Module    │ │      Module        │                  │
-│  └──────────┘ └─────────────┘ └────────────┘ └─────────────┘ └────────────────────┘                  │
-│                                                                                                      │
-│  ┌──────────────┐ ┌──────────────┐ ┌──────────────────┐ ┌─────────────┐                              │
-│  │ AdminModule  │ │BillingModule │ │RecruitersModule  │ │ UsersModule │                              │
-│  └──────────────┘ └──────────────┘ └──────────────────┘ └─────────────┘                              │
-│                                                                                                      │
-│  ┌──────────────────────────────┐ ┌───────────────────┐                                              │
-│  │ EngagementTemplatesModule    │ │ WebhooksModule    │                                              │
-│  └──────────────────────────────┘ └───────────────────┘                                              │
-│                                                                                                      │
-│                                               ↑                         ↑                            │
-│                                    EventsService          RetentionSchedulerService                  │
-│                                    (5 s poll)             (hourly + 10 min cron)                     │
-│                                                                                                      │
-│  ┌────────────────┐ ┌────────────────┐ ┌──────────────────────┐                                      │
-│  │ PrismaService  │ │ StellarService │ │ NotificationsService │                                      │
-│  │ (PostgreSQL)   │ │ (RPC + Horizon)│ │   (email + SSE)      │                                      │
-│  └────────────────┘ └────────────────┘ └──────────────────────┘                                      │
-│                                                                                                      │
-│  ┌───────────┐ ┌────────────┐ ┌────────────┐                                                         │
-│  │ S3Module  │ │CacheModule │ │HealthModule│                                                         │
-│  └───────────┘ └────────────┘ └────────────┘                                                         │
-└──────────────────────────────────────────────────────────────────────────────────────────────────────┘
-         │                          │                              │
-   PostgreSQL                Stellar Testnet                   AWS S3
-   (Prisma ORM)             (Soroban RPC + Horizon)         (file storage)
+┌────────────────────────────────────────────────────────────────────┐
+│                        NestJS Application                          │
+│                                                                    │
+│  ┌──────────┐  ┌─────────────┐  ┌────────────┐  ┌─────────────┐  │
+│  │   Auth   │  │ Engagements │  │ Milestones │  │   Events    │  │
+│  │  Module  │  │   Module    │  │   Module   │  │   Module    │  │
+│  └──────────┘  └─────────────┘  └────────────┘  └─────────────┘  │
+│                                                   ↑          ↑     │
+│                                        EventsService   RetentionSchedulerService
+│                                        (5 s poll)      (hourly + 10 min cron)
+│                                                                    │
+│  ┌────────────────┐  ┌────────────────┐  ┌──────────────────────┐ │
+│  │  PrismaService │  │ StellarService │  │  NotificationsService│ │
+│  │  (PostgreSQL)  │  │ (RPC + Horizon)│  │  (email + SSE)       │ │
+│  └────────────────┘  └────────────────┘  └──────────────────────┘ │
+│                                                                    │
+│  ┌──────────────┐  ┌───────────┐  ┌───────────┐  ┌────────────┐  │
+│  │  AdminModule │  │  S3Module │  │CacheModule │  │HealthModule│  │
+│  └──────────────┘  └───────────┘  └───────────┘  └────────────┘  │
+└────────────────────────────────────────────────────────────────────┘
+         │                          │                    │
+   PostgreSQL                Stellar Testnet          AWS S3
+   (Prisma ORM)              (Soroban RPC +         (file storage)
+                              Horizon API)
 ```
 
 ## Module Responsibilities
