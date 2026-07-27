@@ -106,6 +106,8 @@ model User {
   auditLogs            EngagementAuditLog[]
   securityEvents       SecurityEvent[]
   engagementTemplates  EngagementTemplate[]
+  engagementNotes      EngagementNote[]
+  webhookSubscriptions WebhookSubscription[]
 
   @@index([role, deactivatedAt])
   @@map("users")
@@ -161,12 +163,29 @@ model Engagement {
   milestones Milestone[]
   events     ChainEvent[]
   auditLogs  EngagementAuditLog[]
+  notes      EngagementNote[]
 
   @@index([status])
   @@index([companyAddress])
   @@index([recruiterAddress])
   @@index([status, createdAt])
   @@map("engagements")
+}
+
+// Internal notes left by either party on an engagement (visible to both).
+// Not to be confused with milestone proof text — these are free-form comments.
+model EngagementNote {
+  id           String   @id @default(uuid())
+  engagementId String
+  authorId     String
+  body         String
+  createdAt    DateTime @default(now())
+
+  engagement Engagement @relation(fields: [engagementId], references: [id])
+  author     User       @relation(fields: [authorId], references: [id])
+
+  @@index([engagementId])
+  @@map("engagement_notes")
 }
 
 model EngagementAuditLog {
@@ -315,6 +334,20 @@ model EngagementTemplate {
   @@map("engagement_templates")
 }
 
+// A company-registered target URL that receives outgoing webhook events
+// (see WebhooksModule). A company may register more than one.
+model WebhookSubscription {
+  id        String   @id @default(uuid())
+  companyId String
+  url       String
+  createdAt DateTime @default(now())
+
+  company User @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@map("webhook_subscriptions")
+}
+
 model AuditLog {
   id          String    @id @default(uuid())
   entityType  String    // e.g., "Engagement", "Milestone"
@@ -401,7 +434,8 @@ model DataDeletionRequest {
 
 // Append-only log of security-relevant events for incident response and
 // compliance. No update or delete endpoints are exposed for this table.
-model SecurityEvent {  id        String              @id @default(uuid())
+model SecurityEvent {
+  id        String              @id @default(uuid())
   userId    String?
   action    SecurityEventAction
   ip        String?

@@ -1,14 +1,20 @@
 import {
   Injectable, NotFoundException, ConflictException, BadRequestException, Logger, ForbiddenException,
 } from '@nestjs/common';
-import { User, UserRole } from '@prisma/client';
+import { User, EngagementStatus, MilestoneKind, MilestoneStatus, NotificationType, UserRole } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
 import { CreateEngagementDto } from './dto/create-engagement.dto';
 import { EngagementSummaryDto } from './dto/engagement-summary.dto';
-import { EngagementStatus, MilestoneKind, MilestoneStatus, NotificationType, UserRole } from '@prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AuditLogService } from './audit-log.service';
+
+// Allow-list mapping public sort keys to their underlying Engagement columns.
+const ENGAGEMENT_SORTABLE_FIELDS: Record<string, string> = {
+  createdAt: 'createdAt',
+  amount: 'totalAmount',
+  status: 'status',
+};
 
 @Injectable()
 export class EngagementsService {
@@ -179,8 +185,13 @@ export class EngagementsService {
     createdTo?: string;    // ISO date string
     page?: number;
     limit?: number;
+    sortBy?: string;       // one of ENGAGEMENT_SORTABLE_FIELDS
+    sortOrder?: string;    // 'asc' | 'desc'
   }) {
-    const { companyAddress, recruiterAddress, status, search, createdFrom, createdTo, page = 1, limit = 20 } = filters;
+    const {
+      companyAddress, recruiterAddress, status, search, createdFrom, createdTo,
+      page = 1, limit = 20, sortBy, sortOrder,
+    } = filters;
 
     const where: any = {};
     if (companyAddress) where.companyAddress = companyAddress;
@@ -201,11 +212,25 @@ export class EngagementsService {
       if (createdTo) where.createdAt.lte = new Date(createdTo);
     }
 
+    let orderBy: Record<string, 'asc' | 'desc'> = { createdAt: 'desc' };
+    if (sortBy !== undefined) {
+      const field = ENGAGEMENT_SORTABLE_FIELDS[sortBy];
+      if (!field) {
+        throw new BadRequestException(
+          `Invalid sortBy value '${sortBy}'. Allowed values: ${Object.keys(ENGAGEMENT_SORTABLE_FIELDS).join(', ')}`,
+        );
+      }
+      if (sortOrder !== undefined && sortOrder !== 'asc' && sortOrder !== 'desc') {
+        throw new BadRequestException(`Invalid sortOrder value '${sortOrder}'. Allowed values: asc, desc`);
+      }
+      orderBy = { [field]: sortOrder === 'asc' ? 'asc' : 'desc' };
+    }
+
     const [engagements, total] = await this.prisma.$transaction([
       this.prisma.engagement.findMany({
         where,
         include: { milestones: { orderBy: { milestoneIndex: 'asc' } } },
-        orderBy: { createdAt: 'desc' },
+        orderBy,
         skip: (page - 1) * limit,
         take: limit,
       }),
@@ -282,6 +307,42 @@ export class EngagementsService {
       milestonesTotal: engagement.milestones.length,
       milestonesCompleted,
     };
+  }
+
+  // ----------------------------------------------------------
+  // NOTES
+  // ----------------------------------------------------------
+
+  async createNote(engagementId: string, user: { id: string; stellarAddress?: string; role: string }, body: string) {
+    const engagement = await this.prisma.engagement.findUnique({ where: { id: engagementId } });
+    if (!engagement) throw new NotFoundException(`Engagement ${engagementId} not found`);
+    this.checkParticipant(engagement, user);
+
+    return this.prisma.engagementNote.create({
+      data: { engagementId, authorId: user.id, body },
+    });
+  }
+
+  async findNotes(engagementId: string, user: { id: string; stellarAddress?: string; role: string }) {
+    const engagement = await this.prisma.engagement.findUnique({ where: { id: engagementId } });
+    if (!engagement) throw new NotFoundException(`Engagement ${engagementId} not found`);
+    this.checkParticipant(engagement, user);
+
+    return this.prisma.engagementNote.findMany({
+      where: { engagementId },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  private checkParticipant(
+    engagement: { companyAddress: string; recruiterAddress: string; arbiterAddress: string },
+    user: { stellarAddress?: string; role: string },
+  ): void {
+    if (user.role === UserRole.ADMIN) return;
+    const parties = [engagement.companyAddress, engagement.recruiterAddress, engagement.arbiterAddress];
+    if (!user.stellarAddress || !parties.includes(user.stellarAddress)) {
+      throw new ForbiddenException('You are not a participant of this engagement');
+    }
   }
 
   // ----------------------------------------------------------

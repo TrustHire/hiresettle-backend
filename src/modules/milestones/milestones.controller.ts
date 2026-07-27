@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Param, ParseIntPipe, Patch, Post, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, Param, ParseIntPipe, Patch, Post, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ApiConsumes, ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
@@ -12,6 +12,7 @@ import { Throttle } from '@nestjs/throttler';
 import { MilestonesService } from './milestones.service';
 import { ResolveDisputeDto } from './dto/resolve-dispute.dto';
 import { UpdateMilestoneStatusDto } from './dto/update-milestone-status.dto';
+import { BulkCreateMilestonesDto } from './dto/bulk-create-milestones.dto';
 
 const ALLOWED_EVIDENCE_MIME_TYPES = [
   'image/jpeg',
@@ -57,6 +58,24 @@ export class MilestonesController {
     @CurrentUser() user: any,
   ) {
     return this.milestonesService.findOneForUser(engagementId, index, user);
+  }
+
+  @Post('bulk')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.COMPANY)
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Create multiple milestones on an engagement in one transactional call (COMPANY only)' })
+  @ApiResponse({ status: 201, description: 'Milestones created successfully' })
+  @ApiResponse({ status: 400, description: 'paymentPercent values do not sum to 100' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Not the company party for this engagement' })
+  @ApiResponse({ status: 404, description: 'Engagement not found' })
+  bulkCreate(
+    @Param('engagementId') engagementId: string,
+    @Body() dto: BulkCreateMilestonesDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.milestonesService.bulkCreate(engagementId, dto.milestones, user);
   }
 
   @Get(':index/timer')
