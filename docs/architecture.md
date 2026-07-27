@@ -35,12 +35,15 @@
 |--------|---------------|
 | `AuthModule` | Sign-In With Stellar (challenge/response), JWT issuance and refresh |
 | `EngagementsModule` | CRUD for off-chain engagement records; triggers retention schedule creation |
+| `EngagementTemplatesModule` | CRUD for engagement templates (COMPANY role only); company-scoped authorization; reusable pre-configured milestone settings, compensation, and job metadata for quick engagement creation |
 | `MilestonesModule` | Milestone state machine transitions (LOCKED → PENDING → PROOF_SUBMITTED → CONFIRMED/DISPUTED → RESOLVED); retention timer queries; dispute evidence upload |
 | `EventsModule` | Polls Stellar RPC every 5 seconds for contract events; processes and dispatches them; retries failed events |
 | `NotificationsModule` | Persists in-app notifications; sends emails via Nodemailer; manages SSE connections |
 | `AdminModule` | User management, dead-letter event inspection and requeue, arbiter assignment, CSV report export |
 | `BillingModule` | Fee configuration and billing record management |
 | `RecruitersModule` | Recruiter profile queries |
+| `UsersModule` | Public profile lookups by Stellar address (cached); authenticated user profile CRUD; notification preference management; avatar upload to S3 with MIME/size validation |
+| `WebhooksModule` | Outbound webhook delivery for engagement lifecycle events; BullMQ queue-based async dispatch with inline fallback delivery; 5-second HTTP timeout |
 | `HealthModule` | `GET /health` terminus check (database liveness) |
 | `common/StellarModule` | Shared Stellar RPC/Horizon client, contract call helpers, retention timer math |
 | `common/PrismaModule` | Global Prisma ORM client with optional metrics middleware |
