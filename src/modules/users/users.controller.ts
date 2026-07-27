@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Put, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Put, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiTags, ApiResponse, ApiConsumes } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -7,7 +7,9 @@ import { PublicUserDto } from './dto/public-user.dto';
 import { UpdatePreferencesDto } from './dto/update-preferences.dto';
 import { UserProfileDto } from './dto/user-profile.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+import { AvatarUploadDto } from './dto/avatar-upload.dto';
 import { UsersService } from './users.service';
+import { GdprService } from './gdpr.service';
 
 // Stellar public key: G + 55 base32 uppercase chars = 56 chars total
 const STELLAR_ADDRESS_RE = /^G[A-Z2-7]{55}$/;
@@ -15,7 +17,21 @@ const STELLAR_ADDRESS_RE = /^G[A-Z2-7]{55}$/;
 @ApiTags('users')
 @Controller('users')
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly gdprService: GdprService,
+  ) {}
+
+  @Delete('me')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'GDPR right-to-erasure: anonymise current user PII' })
+  @ApiResponse({ status: 200, description: 'Account anonymised and deletion request queued' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  deleteMe(@CurrentUser('id') userId: string) {
+    return this.gdprService.requestErasure(userId);
+  }
 
   @Get(':stellarAddress')
   @ApiOperation({ summary: 'Look up public profile by Stellar address (no auth required)' })
@@ -77,6 +93,20 @@ export class UsersController {
     @Body() dto: UpdateProfileDto,
   ): Promise<UserProfileDto> {
     return this.usersService.updateProfile(userId, dto);
+  }
+
+  @Post('me/avatar/presigned-url')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Get a presigned S3 URL to upload the current user avatar directly' })
+  @ApiResponse({ status: 201, description: 'Presigned upload URL returned', schema: { properties: { uploadUrl: { type: 'string' }, key: { type: 'string' } } } })
+  @ApiResponse({ status: 400, description: 'Invalid MIME type' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  getAvatarUploadUrl(
+    @CurrentUser('id') userId: string,
+    @Body() dto: AvatarUploadDto,
+  ) {
+    return this.usersService.getAvatarUploadUrl(userId, dto.contentType);
   }
 
   @Post('me/avatar')

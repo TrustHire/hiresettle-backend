@@ -7,9 +7,10 @@ import { StellarMergeDetectorService } from './stellar-merge-detector.service';
 import { AdminAuditLogsService } from './admin-audit-logs.service';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { PrismaModule } from '../../common/prisma/prisma.module';
+import { UsersModule } from '../users/users.module';
 
 @Module({
-  imports: [NotificationsModule, PrismaModule],
+  imports: [NotificationsModule, PrismaModule, UsersModule],
   controllers: [AdminController],
   providers: [
     AdminUsersService,

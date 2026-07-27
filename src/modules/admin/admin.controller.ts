@@ -37,6 +37,7 @@ import { AuditLogsQueryDto } from './dto/audit-logs.dto';
 import { CacheService } from '../../common/cache/cache.service';
 import { SecurityEventsService } from '../../common/security-events/security-events.service';
 import { ListSecurityEventsDto } from '../../common/security-events/dto/list-security-events.dto';
+import { GdprService } from '../users/gdpr.service';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -52,6 +53,7 @@ export class AdminController {
     private readonly mergeDetector: StellarMergeDetectorService,
     private readonly securityEvents: SecurityEventsService,
     private readonly auditLogs: AdminAuditLogsService,
+    private readonly gdpr: GdprService,
   ) {}
 
   @Get('users')
@@ -272,5 +274,27 @@ export class AdminController {
   @ApiResponse({ status: 403, description: 'Forbidden' })
   listAuditLogs(@Query() dto: AuditLogsQueryDto) {
     return this.auditLogs.queryAuditLogs(dto);
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Issue #97 — GDPR data deletion queue
+  // ────────────────────────────────────────────────────────────────
+
+  @Get('data-deletion-requests')
+  @ApiOperation({ summary: 'List GDPR data deletion requests (ADMIN only)' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'Deletion requests retrieved' })
+  listDeletionRequests(@Query('page') page?: number, @Query('limit') limit?: number) {
+    return this.gdpr.listRequests(Number(page) || 1, Number(limit) || 20);
+  }
+
+  @Post('data-deletion-requests/:id/process')
+  @ApiOperation({ summary: 'Mark a GDPR deletion request as processed (ADMIN only)' })
+  @ApiParam({ name: 'id', description: 'DataDeletionRequest ID' })
+  @ApiResponse({ status: 201, description: 'Request marked as processed' })
+  @ApiResponse({ status: 404, description: 'Request not found' })
+  processDeletionRequest(@Param('id') id: string, @Req() req: Request) {
+    return this.gdpr.processRequest(id, (req.user as any)?.id);
   }
 }

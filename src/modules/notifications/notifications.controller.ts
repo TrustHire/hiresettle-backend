@@ -32,6 +32,14 @@ export class NotificationsController {
     return this.notificationsService.findForUser(userId, unreadOnly, page, limit);
   }
 
+  @Get('preferences')
+  @ApiOperation({ summary: 'Get notification channel preferences for the current user (creates defaults if none exist)' })
+  @ApiResponse({ status: 200, description: 'Preferences returned' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  getPreferences(@CurrentUser('id') userId: string) {
+    return this.notificationsService.getPreferences(userId);
+  }
+
   @Get('unread-count')
   @ApiOperation({ summary: 'Get unread notifications count' })
   getUnreadCount(@CurrentUser('id') userId: string) {
