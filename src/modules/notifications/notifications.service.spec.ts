@@ -1,3 +1,4 @@
+import { NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { NotificationsService } from './notifications.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -32,6 +33,7 @@ describe('NotificationsService', () => {
               create: jest.fn(),
               update: jest.fn(),
               updateMany: jest.fn(),
+              deleteMany: jest.fn(),
               count: jest.fn(),
               findMany: jest.fn(),
             },
@@ -315,6 +317,29 @@ describe('NotificationsService', () => {
         data: { read: true },
       });
       expect(result).toEqual({ count: 3 });
+    });
+  });
+
+  describe('remove', () => {
+    it('should delete a notification scoped to its owner', async () => {
+      const notificationId = 'notif_id';
+      const userId = 'test_user_id';
+      (prisma.notification.deleteMany as jest.Mock).mockResolvedValue({ count: 1 });
+
+      const result = await service.remove(notificationId, userId);
+
+      expect(prisma.notification.deleteMany).toHaveBeenCalledWith({
+        where: { id: notificationId, userId },
+      });
+      expect(result).toEqual({ success: true });
+    });
+
+    it('should throw NotFoundException when the notification does not belong to the user', async () => {
+      const notificationId = 'notif_id';
+      const userId = 'other_user_id';
+      (prisma.notification.deleteMany as jest.Mock).mockResolvedValue({ count: 0 });
+
+      await expect(service.remove(notificationId, userId)).rejects.toThrow(NotFoundException);
     });
   });
 });

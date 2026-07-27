@@ -1,4 +1,4 @@
-import { Controller, Get, Patch, Param, Query, UseGuards, Res } from '@nestjs/common';
+import { Controller, Get, Patch, Delete, Param, Query, UseGuards, Res } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery, ApiParam, ApiResponse } from '@nestjs/swagger';
 import { NotificationsService } from './notifications.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -83,11 +83,21 @@ export class NotificationsController {
     return this.notificationsService.markRead(id, userId);
   }
 
-  @Patch('mark-all-read')
+  @Patch('read-all')
   @ApiOperation({ summary: 'Mark all notifications as read' })
   @ApiResponse({ status: 200, description: 'All notifications marked as read' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   markAllRead(@CurrentUser('id') userId: string) {
     return this.notificationsService.markAllRead(userId);
+  }
+
+  @Delete(':id')
+  @ApiOperation({ summary: 'Delete a notification' })
+  @ApiParam({ name: 'id', description: 'Notification ID' })
+  @ApiResponse({ status: 200, description: 'Notification deleted' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 404, description: 'Notification not found' })
+  remove(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.notificationsService.remove(id, userId);
   }
 }
