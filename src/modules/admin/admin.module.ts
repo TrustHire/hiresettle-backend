@@ -4,6 +4,7 @@ import { AdminUsersService } from './admin-users.service';
 import { AdminDeadLetterService } from './admin-dead-letter.service';
 import { AdminReportsService } from './admin-reports.service';
 import { StellarMergeDetectorService } from './stellar-merge-detector.service';
+import { AdminAuditLogsService } from './admin-audit-logs.service';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { PrismaModule } from '../../common/prisma/prisma.module';
 
@@ -15,6 +16,7 @@ import { PrismaModule } from '../../common/prisma/prisma.module';
     AdminDeadLetterService,
     AdminReportsService,
     StellarMergeDetectorService,
+    AdminAuditLogsService,
   ],
   exports: [AdminUsersService],
 })

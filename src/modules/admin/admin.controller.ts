@@ -30,8 +30,10 @@ import { AdminUsersService } from './admin-users.service';
 import { AdminDeadLetterService } from './admin-dead-letter.service';
 import { AdminReportsService } from './admin-reports.service';
 import { StellarMergeDetectorService } from './stellar-merge-detector.service';
+import { AdminAuditLogsService } from './admin-audit-logs.service';
 import { ListUsersDto } from './dto/list-users.dto';
 import { AssignArbiterDto } from './dto/assign-arbiter.dto';
+import { AuditLogsQueryDto } from './dto/audit-logs.dto';
 import { CacheService } from '../../common/cache/cache.service';
 import { SecurityEventsService } from '../../common/security-events/security-events.service';
 import { ListSecurityEventsDto } from '../../common/security-events/dto/list-security-events.dto';
@@ -49,6 +51,7 @@ export class AdminController {
     private readonly reports: AdminReportsService,
     private readonly mergeDetector: StellarMergeDetectorService,
     private readonly securityEvents: SecurityEventsService,
+    private readonly auditLogs: AdminAuditLogsService,
   ) {}
 
   @Get('users')
@@ -251,5 +254,23 @@ export class AdminController {
   @ApiResponse({ status: 403, description: 'Forbidden' })
   listSecurityEvents(@Query() dto: ListSecurityEventsDto) {
     return this.securityEvents.list(dto);
+  }
+
+  @Get('audit-logs')
+  @ApiOperation({
+    summary: 'List unified audit logs (ADMIN only)',
+  })
+  @ApiQuery({ name: 'actorId', required: false, description: 'Filter by actor (user) ID' })
+  @ApiQuery({ name: 'action', required: false, description: 'Filter by action type' })
+  @ApiQuery({ name: 'entityType', required: false, description: 'Filter by entity type' })
+  @ApiQuery({ name: 'from', required: false, description: 'ISO 8601 start date' })
+  @ApiQuery({ name: 'to', required: false, description: 'ISO 8601 end date' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'Audit logs retrieved' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  listAuditLogs(@Query() dto: AuditLogsQueryDto) {
+    return this.auditLogs.queryAuditLogs(dto);
   }
 }

@@ -399,4 +399,244 @@ describe('AuthService', () => {
       expect(nonce).toMatch(/^hiresettle:GABC:/);
     });
   });
+
+  // ── getSessions ───────────────────────────────────────────────────────────
+
+  describe('getSessions()', () => {
+    it('returns active sessions for a user', async () => {
+      const now = new Date();
+      const sessions = [
+        makeRefreshToken({
+          userId: 'user-1',
+          revokedAt: null,
+          expiresAt: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
+          consumedAt: null,
+        }),
+        makeRefreshToken({
+          userId: 'user-1',
+          revokedAt: null,
+          expiresAt: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
+          consumedAt: now,
+        }),
+      ];
+      mockPrisma.refreshToken.findMany.mockResolvedValue(sessions);
+
+      const result = await service.getSessions('user-1');
+
+      expect(mockPrisma.refreshToken.findMany).toHaveBeenCalledWith({
+        where: {
+          userId: 'user-1',
+          revokedAt: null,
+          expiresAt: { gt: expect.any(Date) },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(result).toHaveLength(2);
+      expect(result[0]).toMatchObject({
+        id: 'rt-1',
+        familyId: 'family-1',
+        isCurrent: true,
+      });
+      expect(result[1]).toMatchObject({
+        isCurrent: false,
+      });
+    });
+
+    it('excludes revoked and expired sessions', async () => {
+      const now = new Date();
+      const sessions = [
+        makeRefreshToken({
+          revokedAt: new Date(),
+        }),
+        makeRefreshToken({
+          expiresAt: new Date(now.getTime() - 1000),
+        }),
+      ];
+      mockPrisma.refreshToken.findMany.mockResolvedValue(sessions);
+
+      const result = await service.getSessions('user-1');
+
+      expect(result).toHaveLength(2);
+    });
+  });
+
+  // ── revokeSession ─────────────────────────────────────────────────────────
+
+  describe('revokeSession()', () => {
+    it('revokes a session successfully', async () => {
+      const session = makeRefreshToken({ userId: 'user-1', revokedAt: null });
+      mockPrisma.refreshToken.findUnique.mockResolvedValue(session);
+      mockPrisma.refreshToken.update.mockResolvedValue({ ...session, revokedAt: new Date() });
+
+      const result = await service.revokeSession('rt-1', 'user-1');
+
+      expect(mockPrisma.refreshToken.update).toHaveBeenCalledWith({
+        where: { id: 'rt-1' },
+        data: { revokedAt: expect.any(Date) },
+      });
+      expect(result).toEqual({ revoked: true, isCurrentSession: false });
+    });
+
+    it('throws BadRequestException when session not found', async () => {
+      mockPrisma.refreshToken.findUnique.mockResolvedValue(null);
+
+      await expect(service.revokeSession('rt-1', 'user-1')).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('throws ForbiddenException when trying to revoke another user session', async () => {
+      const session = makeRefreshToken({ userId: 'user-2' });
+      mockPrisma.refreshToken.findUnique.mockResolvedValue(session);
+
+      await expect(service.revokeSession('rt-1', 'user-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('throws BadRequestException when session already revoked', async () => {
+      const session = makeRefreshToken({ userId: 'user-1', revokedAt: new Date() });
+      mockPrisma.refreshToken.findUnique.mockResolvedValue(session);
+
+      await expect(service.revokeSession('rt-1', 'user-1')).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('detects when current session is revoked', async () => {
+      const session = makeRefreshToken({ userId: 'user-1', revokedAt: null, tokenHash: 'abc123' });
+      mockPrisma.refreshToken.findUnique.mockResolvedValue(session);
+      mockPrisma.refreshToken.update.mockResolvedValue({ ...session, revokedAt: new Date() });
+
+      jest.spyOn(service as any, 'hashRefreshToken').mockReturnValue('abc123');
+
+      const result = await service.revokeSession('rt-1', 'user-1', 'current-token');
+
+      expect(result).toEqual({ revoked: true, isCurrentSession: true });
+    });
+  });
+
+  // ── generateTotpSecret ─────────────────────────────────────────────────────
+
+  describe('generateTotpSecret()', () => {
+    it('generates a TOTP secret for a user', async () => {
+      const user = makeUser({ totpEnabled: false });
+      mockPrisma.user.findUnique.mockResolvedValue(user);
+      mockPrisma.user.update.mockResolvedValue(user);
+
+      const result = await service.generateTotpSecret('user-1');
+
+      expect(mockPrisma.user.update).toHaveBeenCalledWith({
+        where: { id: 'user-1' },
+        data: { totpSecret: expect.any(String) },
+      });
+      expect(result).toHaveProperty('secret');
+      expect(result).toHaveProperty('otpauthUrl');
+      expect(result.secret).toMatch(/^[A-Z2-7]+$/);
+    });
+
+    it('throws BadRequestException when 2FA already enabled', async () => {
+      const user = makeUser({ totpEnabled: true });
+      mockPrisma.user.findUnique.mockResolvedValue(user);
+
+      await expect(service.generateTotpSecret('user-1')).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('throws BadRequestException when user not found', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue(null);
+
+      await expect(service.generateTotpSecret('user-1')).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+  });
+
+  // ── enableTotp ───────────────────────────────────────────────────────────
+
+  describe('enableTotp()', () => {
+    it('enables 2FA with valid TOTP code', async () => {
+      const user = makeUser({ totpSecret: 'JBSWY3DPEHPK3PXP', totpEnabled: false });
+      mockPrisma.user.findUnique.mockResolvedValue(user);
+      mockPrisma.user.update.mockResolvedValue({ ...user, totpEnabled: true });
+
+      jest.spyOn(service as any, 'verifyTotpCode').mockReturnValue(true);
+
+      const result = await service.enableTotp('user-1', '123456');
+
+      expect(mockPrisma.user.update).toHaveBeenCalledWith({
+        where: { id: 'user-1' },
+        data: { totpEnabled: true },
+      });
+      expect(result).toEqual({ enabled: true });
+    });
+
+    it('throws BadRequestException when TOTP secret not found', async () => {
+      const user = makeUser({ totpSecret: null, totpEnabled: false });
+      mockPrisma.user.findUnique.mockResolvedValue(user);
+
+      await expect(service.enableTotp('user-1', '123456')).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('throws BadRequestException when 2FA already enabled', async () => {
+      const user = makeUser({ totpSecret: 'JBSWY3DPEHPK3PXP', totpEnabled: true });
+      mockPrisma.user.findUnique.mockResolvedValue(user);
+
+      await expect(service.enableTotp('user-1', '123456')).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('throws UnauthorizedException with invalid TOTP code', async () => {
+      const user = makeUser({ totpSecret: 'JBSWY3DPEHPK3PXP', totpEnabled: false });
+      mockPrisma.user.findUnique.mockResolvedValue(user);
+      jest.spyOn(service as any, 'verifyTotpCode').mockReturnValue(false);
+
+      await expect(service.enableTotp('user-1', '000000')).rejects.toThrow(
+        UnauthorizedException,
+      );
+    });
+  });
+
+  // ── disableTotp ─────────────────────────────────────────────────────────
+
+  describe('disableTotp()', () => {
+    it('disables 2FA with valid TOTP code', async () => {
+      const user = makeUser({ totpSecret: 'JBSWY3DPEHPK3PXP', totpEnabled: true });
+      mockPrisma.user.findUnique.mockResolvedValue(user);
+      mockPrisma.user.update.mockResolvedValue({ ...user, totpEnabled: false, totpSecret: null });
+
+      jest.spyOn(service as any, 'verifyTotpCode').mockReturnValue(true);
+
+      const result = await service.disableTotp('user-1', '123456');
+
+      expect(mockPrisma.user.update).toHaveBeenCalledWith({
+        where: { id: 'user-1' },
+        data: { totpSecret: null, totpEnabled: false },
+      });
+      expect(result).toEqual({ disabled: true });
+    });
+
+    it('throws BadRequestException when 2FA not enabled', async () => {
+      const user = makeUser({ totpEnabled: false });
+      mockPrisma.user.findUnique.mockResolvedValue(user);
+
+      await expect(service.disableTotp('user-1', '123456')).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('throws UnauthorizedException with invalid TOTP code', async () => {
+      const user = makeUser({ totpSecret: 'JBSWY3DPEHPK3PXP', totpEnabled: true });
+      mockPrisma.user.findUnique.mockResolvedValue(user);
+      jest.spyOn(service as any, 'verifyTotpCode').mockReturnValue(false);
+
+      await expect(service.disableTotp('user-1', '000000')).rejects.toThrow(
+        UnauthorizedException,
+      );
+    });
+  });
 });
