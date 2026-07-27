@@ -113,6 +113,20 @@ export class UsersService {
     return user;
   }
 
+  async getAvatarUploadUrl(userId: string, contentType: string): Promise<{ uploadUrl: string; key: string }> {
+    const ext = contentType === 'image/png' ? 'png' : 'jpg';
+    const key = `avatars/${userId}/${Date.now()}.${ext}`;
+    const uploadUrl = await this.s3Service.getPresignedUploadUrl(key, contentType);
+    // Store the key on the user record so the CDN URL is available after upload
+    const cdnBase = process.env.S3_CDN_URL || process.env.S3_ENDPOINT;
+    const avatarUrl = `${cdnBase}/${key}`;
+    const existing = await this.prisma.user.findUnique({ where: { id: userId }, select: { avatarUrl: true } });
+    // Note: old avatar key is not deleted here — cleanup of orphaned objects should
+    // be handled by a scheduled S3 lifecycle rule or the s3-cleanup service.
+    await this.prisma.user.update({ where: { id: userId }, data: { avatarUrl } });
+    return { uploadUrl, key };
+  }
+
   async updateAvatar(
     userId: string,
     avatarUrl: string,

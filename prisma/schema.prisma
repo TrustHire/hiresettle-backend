@@ -90,6 +90,7 @@ model User {
   lockedUntil    DateTime?
   totpSecret     String?        // TOTP secret for 2FA
   totpEnabled    Boolean         @default(false)
+  deletedAt      DateTime?      // GDPR anonymisation timestamp
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
@@ -385,10 +386,22 @@ model DisputeEvidence {
   @@map("dispute_evidence")
 }
 
+// GDPR right-to-erasure queue. Created when a user requests account deletion.
+// Admins review and process via POST /admin/data-deletion-requests/:id/process.
+model DataDeletionRequest {
+  id          String    @id @default(uuid())
+  userId      String
+  requestedAt DateTime  @default(now())
+  processedAt DateTime?
+  processedBy String?   // admin userId
+
+  @@index([processedAt])
+  @@map("data_deletion_requests")
+}
+
 // Append-only log of security-relevant events for incident response and
 // compliance. No update or delete endpoints are exposed for this table.
-model SecurityEvent {
-  id        String              @id @default(uuid())
+model SecurityEvent {  id        String              @id @default(uuid())
   userId    String?
   action    SecurityEventAction
   ip        String?

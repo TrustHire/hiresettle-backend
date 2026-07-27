@@ -147,6 +147,14 @@ export class NotificationsService {
     }
   }
 
+  async getPreferences(userId: string) {
+    const saved = await this.prisma.notificationPreference.findMany({ where: { userId } });
+    return Object.values(NotificationType).map((type) => {
+      const pref = saved.find((p) => p.type === type);
+      return { type, emailEnabled: pref ? pref.emailEnabled : true };
+    });
+  }
+
   async findForUser(userId: string, unreadOnly = false, page = 1, limit = 20) {
     const where: any = { userId };
     if (unreadOnly) where.read = false;
