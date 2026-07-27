@@ -3,6 +3,7 @@ import {
   Get,
   Delete,
   Post,
+  Put,
   Param,
   Query,
   UseGuards,
@@ -31,9 +32,11 @@ import { AdminDeadLetterService } from './admin-dead-letter.service';
 import { AdminReportsService } from './admin-reports.service';
 import { StellarMergeDetectorService } from './stellar-merge-detector.service';
 import { AdminAuditLogsService } from './admin-audit-logs.service';
+import { AdminWebhooksService } from './admin-webhooks.service';
 import { ListUsersDto } from './dto/list-users.dto';
 import { AssignArbiterDto } from './dto/assign-arbiter.dto';
 import { AuditLogsQueryDto } from './dto/audit-logs.dto';
+import { SetRateLimitOverrideDto } from './dto/set-rate-limit-override.dto';
 import { CacheService } from '../../common/cache/cache.service';
 import { SecurityEventsService } from '../../common/security-events/security-events.service';
 import { ListSecurityEventsDto } from '../../common/security-events/dto/list-security-events.dto';
@@ -54,6 +57,7 @@ export class AdminController {
     private readonly securityEvents: SecurityEventsService,
     private readonly auditLogs: AdminAuditLogsService,
     private readonly gdpr: GdprService,
+    private readonly adminWebhooks: AdminWebhooksService,
   ) {}
 
   @Get('users')
@@ -296,5 +300,46 @@ export class AdminController {
   @ApiResponse({ status: 404, description: 'Request not found' })
   processDeletionRequest(@Param('id') id: string, @Req() req: Request) {
     return this.gdpr.processRequest(id, (req.user as any)?.id);
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Issue #176 — Manual resend of a failed webhook delivery
+  // ────────────────────────────────────────────────────────────────
+
+  @Post('webhooks/deliveries/:id/resend')
+  @ApiOperation({ summary: 'Manually resend a failed webhook delivery (ADMIN only)' })
+  @ApiParam({ name: 'id', description: 'WebhookDelivery ID' })
+  @ApiResponse({ status: 201, description: 'Resend triggered' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  @ApiResponse({ status: 404, description: 'Webhook delivery not found' })
+  resendWebhookDelivery(@Param('id') id: string, @Req() req: Request) {
+    return this.adminWebhooks.resendDelivery(id, (req.user as any)?.id);
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Issue #177 — Per-user rate-limit override
+  // ────────────────────────────────────────────────────────────────
+
+  @Put('users/:id/rate-limit-override')
+  @ApiOperation({ summary: 'Set a custom rate-limit override for a user (ADMIN only)' })
+  @ApiParam({ name: 'id', description: 'User ID' })
+  @ApiResponse({ status: 200, description: 'Rate-limit override set' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  setRateLimitOverride(@Param('id') id: string, @Body() dto: SetRateLimitOverrideDto) {
+    return this.adminUsers.setRateLimitOverride(id, dto.limit);
+  }
+
+  @Delete('users/:id/rate-limit-override')
+  @ApiOperation({ summary: "Clear a user's rate-limit override, reverting to the default limit (ADMIN only)" })
+  @ApiParam({ name: 'id', description: 'User ID' })
+  @ApiResponse({ status: 200, description: 'Rate-limit override cleared' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  clearRateLimitOverride(@Param('id') id: string) {
+    return this.adminUsers.clearRateLimitOverride(id);
   }
 }

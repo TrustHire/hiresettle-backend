@@ -84,6 +84,8 @@ model User {
   company        String?        // company name (for COMPANY role users)
   role           UserRole       @default(COMPANY)
   webhookUrl     String?
+  webhookSecret  String?        // HMAC-SHA256 signing secret, generated when webhookUrl is first set
+  rateLimitOverride Int?        // custom per-user request limit for UserJwtSubThrottlerGuard; falls back to default when unset
   avatarUrl      String?        // CDN URL for user avatar
   deactivatedAt  DateTime?
   failedLoginAttempts Int       @default(0)
@@ -106,6 +108,7 @@ model User {
   auditLogs            EngagementAuditLog[]
   securityEvents       SecurityEvent[]
   engagementTemplates  EngagementTemplate[]
+  webhookDeliveries    WebhookDelivery[]
 
   @@index([role, deactivatedAt])
   @@map("users")
@@ -244,6 +247,34 @@ model SystemConfig {
   updatedAt DateTime @updatedAt
 
   @@map("system_config")
+}
+
+enum WebhookDeliveryStatus {
+  FAILED
+  RESENT
+}
+
+// Recorded when a webhook job exhausts its retry attempts, so failures are
+// tracked instead of silently dropped. Admins can resend from here.
+model WebhookDelivery {
+  id           String                @id @default(uuid())
+  userId       String?
+  url          String
+  event        String
+  payload      Json
+  attempts     Int
+  errorMessage String?
+  status       WebhookDeliveryStatus @default(FAILED)
+  resendCount  Int                   @default(0)
+  lastResendAt DateTime?
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([status])
+  @@index([userId])
+  @@map("webhook_deliveries")
 }
 
 model DeadLetterEvent {
