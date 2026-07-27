@@ -102,6 +102,31 @@ Each token object:
 
 Failed event processing is retried by `ChainEventRetryService` and moved to `DeadLetterEvent` after 3 failures.
 
+## Dispute Resolution Flow
+
+When the company disagrees with the recruiter's proof, the milestone moves into the dispute state and the assigned arbiter decides the outcome. Supporting files live off-chain alongside any on-chain action.
+
+**Sequence**
+
+1. **Proof submitted on-chain.** The recruiter calls the contract from Freighter and provides a proof hash, transitioning the milestone to `PROOF_SUBMITTED`.
+2. **Dispute raised on-chain.** The company calls the contract's dispute function. The contract transitions the milestone to `DISPUTED` and emits a `milestone_disputed` event.
+3. **Local state update.** `EventsService.handleDisputeRaised` consumes the event, calls `MilestonesService.markDisputed` to set `Milestone.status = DISPUTED`, and fans out `DISPUTE_RAISED` in-app + email notifications to the company, recruiter and arbiter, plus a `DISPUTE_RAISED` webhook.
+4. **Evidence upload (off-chain, any time after).** Either party can submit supporting material via `POST /engagements/:id/milestones/:index/evidence` (JPEG / PNG / GIF / PDF / MP4 ≤ 10 MB). Each file uploads to S3 and persists a row in the `DisputeEvidence` model.
+5. **Arbiter review.** The assigned arbiter inspects the milestone, reads any uploaded `DisputeEvidence`, then decides between `RELEASE` (favor recruiter) or `REFUND` (favor company) by calling `POST /engagements/:id/milestones/:index/resolve` (`@Roles(ARBITER)`).
+6. **`resolve_dispute` submitted.** `MilestonesService.resolveDisputeFlow` translates the choice to `approved: boolean` (`RELEASE` → `true`, `REFUND` → `false`) and submits `resolve_dispute(engagement_id, milestone_index, approved)` to the Soroban contract directly via `StellarService.resolveMilestoneDispute`. The same action exists on the `stellar-tx` BullMQ queue (`StellarTxProcessor`) for cases where the call is dispatched asynchronously (e.g., batched retries).
+7. **Contract outcome + local confirmation.** The contract emits `dispute_resolved` and either transfers escrow to the recruiter (approved) or refunds the company (rejected). `EventsService.handleDisputeResolved` completes the local view: `Milestone.status = RESOLVED` with `paymentReleased = amount` on approval, or back to `PENDING` on rejection, and a `DISPUTE_RESOLVED` notification + webhook is dispatched to both parties.
+
+**Models and files**
+
+- Prisma model: `DisputeEvidence` (see `prisma/schema.prisma`) — keys every evidence file to its `Milestone` and uploading `User`.
+- Service entry points: `MilestonesService.disputeFlow`, `resolveDisputeFlow`, `uploadEvidence`, `markDisputed`, `markResolved` (`src/modules/milestones/milestones.service.ts`).
+- REST endpoints: `MilestonesController` — `/engagements/:id/milestones/:index/evidence` and `/engagements/:id/milestones/:index/resolve` (`src/modules/milestones/milestones.controller.ts`).
+- DTOs: `DisputeMilestoneDto` (`src/modules/milestones/dto/dispute-milestone.dto.ts`), `ResolveDisputeDto` + `DisputeResolutionChoice` (`src/modules/milestones/dto/resolve-dispute.dto.ts`).
+- Chain bridge: `EventsService.handleDisputeRaised`, `handleDisputeResolved` (`src/modules/events/events.service.ts`).
+- Stellar call: `StellarService.resolveMilestoneDispute` (`src/common/stellar/stellar.service.ts`).
+- Background worker: `StellarTxProcessor` — handles the `resolve_dispute` action on the `stellar-tx` queue (`src/queues/stellar-tx.processor.ts`).
+- S3 housekeeping: `S3CleanupService` prunes orphaned evidence buckets via `DisputeEvidence.s3Path` (`src/common/s3/s3-cleanup.service.ts`).
+
 ## Retention Timer Math
 
 Stellar produces approximately 1 ledger every 5 seconds, so:
