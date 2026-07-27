@@ -14,6 +14,7 @@ import { QueuesModule } from './queues/queues.module';
 import { MetricsModule } from './metrics/metrics.module';
 
 import { PrismaModule } from './common/prisma/prisma.module';
+import { S3Module } from './common/s3/s3.module';
 import { StellarModule as CommonStellarModule } from './common/stellar/stellar.module';
 import { StellarModule } from './modules/stellar/stellar.module';
 
@@ -58,6 +59,7 @@ import stellarConfig from './config/stellar.config';
     MetricsModule,
 
     PrismaModule,
+    S3Module,
     CommonStellarModule,
     StellarModule,
     AuthModule,

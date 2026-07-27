@@ -18,4 +18,15 @@ export const envValidationSchema = Joi.object({
   // Database connection pooling
   DATABASE_POOL_MIN: Joi.number().integer().min(1).max(20).default(2),
   DATABASE_POOL_MAX: Joi.number().integer().min(2).max(50).default(10),
+
+  // S3 configuration
+  S3_PRESIGNED_URL_EXPIRY: Joi.number().integer().min(60).max(604800).default(3600),
+  S3_CLEANUP_GRACE_PERIOD_HOURS: Joi.number().integer().min(1).max(168).default(24),
+
+  // Stellar circuit breaker
+  STELLAR_BREAKER_TIMEOUT: Joi.number().integer().min(1000).max(60000).default(10000),
+  STELLAR_BREAKER_ERROR_THRESHOLD: Joi.number().integer().min(1).max(100).default(50),
+  STELLAR_BREAKER_RESET_TIMEOUT: Joi.number().integer().min(1000).max(300000).default(30000),
+  STELLAR_BREAKER_ROLLING_COUNT_TIMEOUT: Joi.number().integer().min(1000).max(60000).default(10000),
+  STELLAR_BREAKER_ROLLING_COUNT_BUCKETS: Joi.number().integer().min(1).max(20).default(10),
 }).unknown(true);
