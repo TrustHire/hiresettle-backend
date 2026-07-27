@@ -2,7 +2,8 @@ import { Injectable, NotFoundException, Inject } from '@nestjs/common';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { EngagementStatus, MilestoneStatus, MilestoneKind } from '@prisma/client';
+import { EngagementStatus, MilestoneStatus, MilestoneKind, UserRole } from '@prisma/client';
+import { SearchRecruitersDto } from './dto/search-recruiters.dto';
 
 interface CurrentUser {
   id: string;
@@ -16,6 +17,43 @@ export class RecruitersService {
     private readonly prisma: PrismaService,
     @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
   ) {}
+
+  async listRecruiters({ search, page = 1, limit = 20 }: SearchRecruitersDto = {}) {
+    const where: Parameters<typeof this.prisma.user.findMany>[0]['where'] = {
+      role: UserRole.RECRUITER,
+      deactivatedAt: null,
+      ...(search && search.trim()
+        ? { name: { contains: search.trim(), mode: 'insensitive' } }
+        : {}),
+    };
+
+    const [data, total] = await this.prisma.$transaction([
+      this.prisma.user.findMany({
+        where,
+        select: {
+          id: true,
+          name: true,
+          stellarAddress: true,
+          avatarUrl: true,
+          createdAt: true,
+        },
+        orderBy: { name: 'asc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.user.count({ where }),
+    ]);
+
+    return {
+      data,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
 
   async getStats(user: CurrentUser) {
     if (!user.stellarAddress) {
