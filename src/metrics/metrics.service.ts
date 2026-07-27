@@ -40,8 +40,31 @@ export class MetricsService {
     registers: [this.registry],
   });
 
+  readonly stellarCircuitBreakerState = new Gauge({
+    name: 'stellar_circuit_breaker_state',
+    help: 'Stellar RPC circuit breaker state (0=closed, 1=open, 2=half-open)',
+    registers: [this.registry],
+  });
+
+  readonly stellarRpcCallsTotal = new Counter({
+    name: 'stellar_rpc_calls_total',
+    help: 'Total Stellar RPC calls by result',
+    labelNames: ['result'],
+    registers: [this.registry],
+  });
+
+  readonly stellarRpcDuration = new Histogram({
+    name: 'stellar_rpc_duration_seconds',
+    help: 'Stellar RPC call duration in seconds',
+    labelNames: ['operation'],
+    buckets: [0.1, 0.5, 1, 2, 5, 10, 30],
+    registers: [this.registry],
+  });
+
   constructor() {
     collectDefaultMetrics({ register: this.registry });
+    // Initialize circuit breaker state to closed
+    this.stellarCircuitBreakerState.set(0);
   }
 
   recordHttpRequest(method: string, route: string, status: number, durationMs: number) {
@@ -52,6 +75,10 @@ export class MetricsService {
 
   recordDbQuery(model: string, action: string, durationMs: number) {
     this.dbQueryDuration.observe({ model: model ?? 'unknown', action }, durationMs / 1000);
+  }
+
+  recordStellarRpc(operation: string, durationMs: number) {
+    this.stellarRpcDuration.observe({ operation }, durationMs / 1000);
   }
 
   async getMetrics(): Promise<string> {
