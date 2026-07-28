@@ -1,14 +1,15 @@
 import {
   Injectable, NotFoundException, ConflictException, BadRequestException, Logger, ForbiddenException,
 } from '@nestjs/common';
-import { User, UserRole } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
 import { CreateEngagementDto } from './dto/create-engagement.dto';
 import { EngagementSummaryDto } from './dto/engagement-summary.dto';
-import { EngagementStatus, MilestoneKind, MilestoneStatus, NotificationType, UserRole } from '@prisma/client';
+import { User, EngagementStatus, MilestoneKind, MilestoneStatus, NotificationType, UserRole } from '@prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AuditLogService } from './audit-log.service';
+
+const IDEMPOTENCY_KEY_TTL_MS = 24 * 60 * 60 * 1000;
 
 @Injectable()
 export class EngagementsService {
@@ -25,7 +26,16 @@ export class EngagementsService {
   // CREATE — validates, checks balance, submits on-chain, persists
   // ----------------------------------------------------------
 
-  async create(user: User, dto: CreateEngagementDto) {
+  async create(user: User, dto: CreateEngagementDto, idempotencyKey?: string) {
+    if (idempotencyKey) {
+      const existingKey = await this.prisma.idempotencyKey.findUnique({
+        where: { key_userId: { key: idempotencyKey, userId: user.id } },
+      });
+      if (existingKey && existingKey.expiresAt > new Date()) {
+        return existingKey.response;
+      }
+    }
+
     const existing = await this.prisma.engagement.findUnique({
       where: { id: dto.engagementId },
     });
@@ -163,7 +173,18 @@ export class EngagementsService {
     });
 
     this.logger.log(`Engagement created on-chain and persisted: ${engagement.id} (tx: ${txHash})`);
-    return this.serialize(engagement);
+    const result = this.serialize(engagement);
+
+    if (idempotencyKey) {
+      const expiresAt = new Date(Date.now() + IDEMPOTENCY_KEY_TTL_MS);
+      await this.prisma.idempotencyKey.upsert({
+        where: { key_userId: { key: idempotencyKey, userId: user.id } },
+        create: { key: idempotencyKey, userId: user.id, response: result, expiresAt },
+        update: { response: result, expiresAt },
+      });
+    }
+
+    return result;
   }
 
   // ----------------------------------------------------------

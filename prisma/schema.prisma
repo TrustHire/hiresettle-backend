@@ -108,6 +108,7 @@ model User {
   auditLogs            EngagementAuditLog[]
   securityEvents       SecurityEvent[]
   engagementTemplates  EngagementTemplate[]
+  idempotencyKeys      IdempotencyKey[]
   webhookDeliveries    WebhookDelivery[]
 
   @@index([role, deactivatedAt])
@@ -337,6 +338,7 @@ model EngagementTemplate {
   salaryRange     String?
   location        String?
   milestoneConfig Json
+  archived        Boolean  @default(false)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -432,7 +434,8 @@ model DataDeletionRequest {
 
 // Append-only log of security-relevant events for incident response and
 // compliance. No update or delete endpoints are exposed for this table.
-model SecurityEvent {  id        String              @id @default(uuid())
+model SecurityEvent {
+  id        String              @id @default(uuid())
   userId    String?
   action    SecurityEventAction
   ip        String?
@@ -445,4 +448,22 @@ model SecurityEvent {  id        String              @id @default(uuid())
   @@index([action])
   @@index([createdAt])
   @@map("security_events")
+}
+
+// Caches responses for requests submitted with an Idempotency-Key header so
+// retried requests (e.g. after a network failure) return the original
+// response instead of creating a duplicate record.
+model IdempotencyKey {
+  id        String   @id @default(uuid())
+  key       String
+  userId    String
+  response  Json
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([key, userId])
+  @@index([expiresAt])
+  @@map("idempotency_keys")
 }
