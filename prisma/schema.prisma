@@ -151,16 +151,18 @@ model Engagement {
   replacementReason String?
   txHash           String?           // on-chain creation tx hash
   createdLedger    Int?              // ledger sequence at creation
+  templateVersionId String?          // specific EngagementTemplateVersion used to create this engagement, if any
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
   // Relations
-  company    User         @relation("CompanyEngagements",   fields: [companyAddress],   references: [stellarAddress])
-  recruiter  User         @relation("RecruiterEngagements", fields: [recruiterAddress], references: [stellarAddress])
-  arbiter    User         @relation("ArbiterEngagements",   fields: [arbiterAddress],   references: [stellarAddress])
-  milestones Milestone[]
-  events     ChainEvent[]
-  auditLogs  EngagementAuditLog[]
+  company         User                        @relation("CompanyEngagements",   fields: [companyAddress],   references: [stellarAddress])
+  recruiter       User                        @relation("RecruiterEngagements", fields: [recruiterAddress], references: [stellarAddress])
+  arbiter         User                        @relation("ArbiterEngagements",   fields: [arbiterAddress],   references: [stellarAddress])
+  templateVersion EngagementTemplateVersion?  @relation(fields: [templateVersionId], references: [id])
+  milestones      Milestone[]
+  events          ChainEvent[]
+  auditLogs       EngagementAuditLog[]
 
   @@index([status])
   @@index([companyAddress])
@@ -270,6 +272,8 @@ model NotificationPreference {
   userId       String
   type         NotificationType
   emailEnabled Boolean          @default(true)
+  inAppEnabled Boolean          @default(true)
+  sseEnabled   Boolean          @default(true)
 
   user User @relation(fields: [userId], references: [id])
 
@@ -306,13 +310,38 @@ model EngagementTemplate {
   salaryRange     String?
   location        String?
   milestoneConfig Json
+  currentVersion  Int      @default(1)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  company User @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company  User                        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  versions EngagementTemplateVersion[]
 
   @@index([companyId])
   @@map("engagement_templates")
+}
+
+// Immutable snapshot of an EngagementTemplate's fields at a point in time.
+// Created on every template update so past engagements keep referencing
+// the exact template content they were created with.
+model EngagementTemplateVersion {
+  id              String   @id @default(uuid())
+  templateId      String
+  version         Int
+  name            String
+  jobTitle        String
+  jobDescription  String?
+  salaryRange     String?
+  location        String?
+  milestoneConfig Json
+  createdAt       DateTime @default(now())
+
+  template    EngagementTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  engagements Engagement[]
+
+  @@unique([templateId, version])
+  @@index([templateId])
+  @@map("engagement_template_versions")
 }
 
 model AuditLog {
@@ -401,7 +430,8 @@ model DataDeletionRequest {
 
 // Append-only log of security-relevant events for incident response and
 // compliance. No update or delete endpoints are exposed for this table.
-model SecurityEvent {  id        String              @id @default(uuid())
+model SecurityEvent {
+  id        String              @id @default(uuid())
   userId    String?
   action    SecurityEventAction
   ip        String?
