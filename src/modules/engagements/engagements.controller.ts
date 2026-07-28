@@ -1,11 +1,11 @@
 import {
   Controller, Get, Post, Body, Param,
   Query, UseGuards, HttpCode, HttpStatus,
-  Patch,
+  Patch, Headers,
 } from '@nestjs/common';
 import {
   ApiTags, ApiOperation, ApiResponse,
-  ApiBearerAuth, ApiQuery, ApiParam,
+  ApiBearerAuth, ApiQuery, ApiParam, ApiHeader,
 } from '@nestjs/swagger';
 import { User, UserRole } from '@prisma/client';
 import { Throttle } from '@nestjs/throttler';
@@ -42,6 +42,11 @@ export class EngagementsController {
   @Roles(UserRole.COMPANY)
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Create engagement with on-chain escrow (COMPANY only)' })
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: false,
+    description: 'Unique key to safely retry this request without creating a duplicate engagement',
+  })
   @ApiResponse({ status: 201, description: 'Engagement created successfully' })
   @ApiResponse({ status: 400, description: 'Invalid request' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
@@ -50,8 +55,9 @@ export class EngagementsController {
   create(
     @CurrentUser() user: User,
     @Body() dto: CreateEngagementDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
   ) {
-    return this.engagementsService.create(user, dto);
+    return this.engagementsService.create(user, dto, idempotencyKey);
   }
 
   /**

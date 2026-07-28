@@ -1,3 +1,4 @@
+import { NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { NotificationsService } from './notifications.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -32,11 +33,13 @@ describe('NotificationsService', () => {
               create: jest.fn(),
               update: jest.fn(),
               updateMany: jest.fn(),
+              deleteMany: jest.fn(),
               count: jest.fn(),
               findMany: jest.fn(),
             },
             notificationPreference: {
               findUnique: jest.fn(),
+              upsert: jest.fn(),
             },
             $transaction: jest.fn(),
           },
@@ -275,6 +278,62 @@ describe('NotificationsService', () => {
     });
   });
 
+  describe('updatePreferences', () => {
+    const userId = 'test_user_id';
+
+    it('upserts a new preference row when none exists for the type', async () => {
+      (prisma.notificationPreference.upsert as jest.Mock).mockResolvedValue({
+        userId,
+        type: NotificationType.PAYMENT_RELEASED,
+        emailEnabled: false,
+        inAppEnabled: true,
+        sseEnabled: true,
+      });
+
+      const result = await service.updatePreferences(userId, [
+        { type: NotificationType.PAYMENT_RELEASED, emailEnabled: false },
+      ]);
+
+      expect(prisma.notificationPreference.upsert).toHaveBeenCalledWith({
+        where: { userId_type: { userId, type: NotificationType.PAYMENT_RELEASED } },
+        create: { userId, type: NotificationType.PAYMENT_RELEASED, emailEnabled: false },
+        update: { emailEnabled: false },
+      });
+      expect(result).toEqual([{
+        userId,
+        type: NotificationType.PAYMENT_RELEASED,
+        emailEnabled: false,
+        inAppEnabled: true,
+        sseEnabled: true,
+      }]);
+    });
+
+    it('only patches the channels included in the request, leaving others untouched', async () => {
+      (prisma.notificationPreference.upsert as jest.Mock).mockResolvedValue({});
+
+      await service.updatePreferences(userId, [
+        { type: NotificationType.DISPUTE_RAISED, sseEnabled: false },
+      ]);
+
+      expect(prisma.notificationPreference.upsert).toHaveBeenCalledWith({
+        where: { userId_type: { userId, type: NotificationType.DISPUTE_RAISED } },
+        create: { userId, type: NotificationType.DISPUTE_RAISED, sseEnabled: false },
+        update: { sseEnabled: false },
+      });
+    });
+
+    it('handles multiple preference updates in a single call', async () => {
+      (prisma.notificationPreference.upsert as jest.Mock).mockResolvedValue({});
+
+      await service.updatePreferences(userId, [
+        { type: NotificationType.PAYMENT_RELEASED, emailEnabled: false },
+        { type: NotificationType.MILESTONE_UNLOCKED, inAppEnabled: false },
+      ]);
+
+      expect(prisma.notificationPreference.upsert).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('getUnreadCount', () => {
     it('should return the count of unread notifications for a user', async () => {
       const userId = 'test_user_id';
@@ -315,6 +374,29 @@ describe('NotificationsService', () => {
         data: { read: true },
       });
       expect(result).toEqual({ count: 3 });
+    });
+  });
+
+  describe('remove', () => {
+    it('should delete a notification scoped to its owner', async () => {
+      const notificationId = 'notif_id';
+      const userId = 'test_user_id';
+      (prisma.notification.deleteMany as jest.Mock).mockResolvedValue({ count: 1 });
+
+      const result = await service.remove(notificationId, userId);
+
+      expect(prisma.notification.deleteMany).toHaveBeenCalledWith({
+        where: { id: notificationId, userId },
+      });
+      expect(result).toEqual({ success: true });
+    });
+
+    it('should throw NotFoundException when the notification does not belong to the user', async () => {
+      const notificationId = 'notif_id';
+      const userId = 'other_user_id';
+      (prisma.notification.deleteMany as jest.Mock).mockResolvedValue({ count: 0 });
+
+      await expect(service.remove(notificationId, userId)).rejects.toThrow(NotFoundException);
     });
   });
 });

@@ -6,15 +6,11 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
 import { CreateEngagementDto } from './dto/create-engagement.dto';
 import { EngagementSummaryDto } from './dto/engagement-summary.dto';
+import { User, EngagementStatus, MilestoneKind, MilestoneStatus, NotificationType, UserRole } from '@prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AuditLogService } from './audit-log.service';
 
-// Allow-list mapping public sort keys to their underlying Engagement columns.
-const ENGAGEMENT_SORTABLE_FIELDS: Record<string, string> = {
-  createdAt: 'createdAt',
-  amount: 'totalAmount',
-  status: 'status',
-};
+const IDEMPOTENCY_KEY_TTL_MS = 24 * 60 * 60 * 1000;
 
 @Injectable()
 export class EngagementsService {
@@ -31,7 +27,16 @@ export class EngagementsService {
   // CREATE — validates, checks balance, submits on-chain, persists
   // ----------------------------------------------------------
 
-  async create(user: User, dto: CreateEngagementDto) {
+  async create(user: User, dto: CreateEngagementDto, idempotencyKey?: string) {
+    if (idempotencyKey) {
+      const existingKey = await this.prisma.idempotencyKey.findUnique({
+        where: { key_userId: { key: idempotencyKey, userId: user.id } },
+      });
+      if (existingKey && existingKey.expiresAt > new Date()) {
+        return existingKey.response;
+      }
+    }
+
     const existing = await this.prisma.engagement.findUnique({
       where: { id: dto.engagementId },
     });
@@ -44,25 +49,31 @@ export class EngagementsService {
       throw new BadRequestException(`Token ${dto.tokenAddress} is not allowed`);
     }
 
-    // Load template if provided
-    let template: any = null;
+    // Load template if provided — pin to the specific version that is current as of
+    // now, so this engagement keeps referencing that exact snapshot even if the
+    // template is edited (and gains new versions) afterwards.
+    let templateVersion: any = null;
     if (dto.templateId) {
-      template = await this.prisma.engagementTemplate.findUnique({
+      const template = await this.prisma.engagementTemplate.findUnique({
         where: { id: dto.templateId },
       });
       if (!template) throw new NotFoundException(`Template ${dto.templateId} not found`);
       if (template.companyId !== user.id) throw new ForbiddenException('Not authorized to use this template');
+
+      templateVersion = await this.prisma.engagementTemplateVersion.findUnique({
+        where: { templateId_version: { templateId: template.id, version: template.currentVersion } },
+      });
     }
 
-    // Merge template and dto (dto overrides template)
+    // Merge template version and dto (dto overrides template)
     const mergedData = {
       ...dto,
-      jobTitle: dto.jobTitle ?? template?.jobTitle,
-      jobDescription: dto.jobDescription ?? template?.jobDescription,
-      salaryRange: dto.salaryRange ?? template?.salaryRange,
-      location: dto.location ?? template?.location,
-      milestones: dto.milestones ?? template?.milestoneConfig?.milestones,
-      retentionDays: dto.retentionDays ?? template?.milestoneConfig?.retentionDays,
+      jobTitle: dto.jobTitle ?? templateVersion?.jobTitle,
+      jobDescription: dto.jobDescription ?? templateVersion?.jobDescription,
+      salaryRange: dto.salaryRange ?? templateVersion?.salaryRange,
+      location: dto.location ?? templateVersion?.location,
+      milestones: dto.milestones ?? templateVersion?.milestoneConfig?.milestones,
+      retentionDays: dto.retentionDays ?? templateVersion?.milestoneConfig?.retentionDays,
     };
 
     // Validate required fields after merge
@@ -146,6 +157,7 @@ export class EngagementsService {
           location: mergedData.location,
           txHash,
           createdLedger,
+          templateVersionId: templateVersion?.id,
           milestones: { create: milestoneData },
         },
         include: { milestones: { orderBy: { milestoneIndex: 'asc' } } },
@@ -169,7 +181,18 @@ export class EngagementsService {
     });
 
     this.logger.log(`Engagement created on-chain and persisted: ${engagement.id} (tx: ${txHash})`);
-    return this.serialize(engagement);
+    const result = this.serialize(engagement);
+
+    if (idempotencyKey) {
+      const expiresAt = new Date(Date.now() + IDEMPOTENCY_KEY_TTL_MS);
+      await this.prisma.idempotencyKey.upsert({
+        where: { key_userId: { key: idempotencyKey, userId: user.id } },
+        create: { key: idempotencyKey, userId: user.id, response: result, expiresAt },
+        update: { response: result, expiresAt },
+      });
+    }
+
+    return result;
   }
 
   // ----------------------------------------------------------

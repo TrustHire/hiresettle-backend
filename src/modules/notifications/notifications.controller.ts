@@ -1,4 +1,4 @@
-import { Controller, Get, Patch, Param, Query, UseGuards, Res } from '@nestjs/common';
+import { Controller, Get, Patch, Delete, Param, Query, UseGuards, Res } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery, ApiParam, ApiResponse } from '@nestjs/swagger';
 import { NotificationsService } from './notifications.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -6,6 +6,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Throttle } from '@nestjs/throttler';
 import { UserJwtSubThrottlerGuard } from '../../common/guards/user-jwt-sub-throttler.guard';
 import { Response } from 'express';
+import { UpdateNotificationPreferencesDto } from './dto/update-notification-preferences.dto';
 
 @ApiTags('notifications')
 @ApiBearerAuth()
@@ -38,6 +39,18 @@ export class NotificationsController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   getPreferences(@CurrentUser('id') userId: string) {
     return this.notificationsService.getPreferences(userId);
+  }
+
+  @Patch('preferences')
+  @ApiOperation({ summary: 'Update notification channel preferences for the current user (upserts missing rows, supports partial updates)' })
+  @ApiResponse({ status: 200, description: 'Preferences updated' })
+  @ApiResponse({ status: 400, description: 'Validation failed' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  updatePreferences(
+    @CurrentUser('id') userId: string,
+    @Body() dto: UpdateNotificationPreferencesDto,
+  ) {
+    return this.notificationsService.updatePreferences(userId, dto.preferences);
   }
 
   @Get('unread-count')
@@ -83,11 +96,21 @@ export class NotificationsController {
     return this.notificationsService.markRead(id, userId);
   }
 
-  @Patch('mark-all-read')
+  @Patch('read-all')
   @ApiOperation({ summary: 'Mark all notifications as read' })
   @ApiResponse({ status: 200, description: 'All notifications marked as read' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   markAllRead(@CurrentUser('id') userId: string) {
     return this.notificationsService.markAllRead(userId);
+  }
+
+  @Delete(':id')
+  @ApiOperation({ summary: 'Delete a notification' })
+  @ApiParam({ name: 'id', description: 'Notification ID' })
+  @ApiResponse({ status: 200, description: 'Notification deleted' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 404, description: 'Notification not found' })
+  remove(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.notificationsService.remove(id, userId);
   }
 }

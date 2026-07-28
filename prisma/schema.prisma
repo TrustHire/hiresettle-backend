@@ -84,6 +84,8 @@ model User {
   company        String?        // company name (for COMPANY role users)
   role           UserRole       @default(COMPANY)
   webhookUrl     String?
+  webhookSecret  String?        // HMAC-SHA256 signing secret, generated when webhookUrl is first set
+  rateLimitOverride Int?        // custom per-user request limit for UserJwtSubThrottlerGuard; falls back to default when unset
   avatarUrl      String?        // CDN URL for user avatar
   deactivatedAt  DateTime?
   failedLoginAttempts Int       @default(0)
@@ -106,8 +108,8 @@ model User {
   auditLogs            EngagementAuditLog[]
   securityEvents       SecurityEvent[]
   engagementTemplates  EngagementTemplate[]
-  engagementNotes      EngagementNote[]
-  webhookSubscriptions WebhookSubscription[]
+  idempotencyKeys      IdempotencyKey[]
+  webhookDeliveries    WebhookDelivery[]
 
   @@index([role, deactivatedAt])
   @@map("users")
@@ -153,17 +155,18 @@ model Engagement {
   replacementReason String?
   txHash           String?           // on-chain creation tx hash
   createdLedger    Int?              // ledger sequence at creation
+  templateVersionId String?          // specific EngagementTemplateVersion used to create this engagement, if any
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
   // Relations
-  company    User         @relation("CompanyEngagements",   fields: [companyAddress],   references: [stellarAddress])
-  recruiter  User         @relation("RecruiterEngagements", fields: [recruiterAddress], references: [stellarAddress])
-  arbiter    User         @relation("ArbiterEngagements",   fields: [arbiterAddress],   references: [stellarAddress])
-  milestones Milestone[]
-  events     ChainEvent[]
-  auditLogs  EngagementAuditLog[]
-  notes      EngagementNote[]
+  company         User                        @relation("CompanyEngagements",   fields: [companyAddress],   references: [stellarAddress])
+  recruiter       User                        @relation("RecruiterEngagements", fields: [recruiterAddress], references: [stellarAddress])
+  arbiter         User                        @relation("ArbiterEngagements",   fields: [arbiterAddress],   references: [stellarAddress])
+  templateVersion EngagementTemplateVersion?  @relation(fields: [templateVersionId], references: [id])
+  milestones      Milestone[]
+  events          ChainEvent[]
+  auditLogs       EngagementAuditLog[]
 
   @@index([status])
   @@index([companyAddress])
@@ -265,6 +268,34 @@ model SystemConfig {
   @@map("system_config")
 }
 
+enum WebhookDeliveryStatus {
+  FAILED
+  RESENT
+}
+
+// Recorded when a webhook job exhausts its retry attempts, so failures are
+// tracked instead of silently dropped. Admins can resend from here.
+model WebhookDelivery {
+  id           String                @id @default(uuid())
+  userId       String?
+  url          String
+  event        String
+  payload      Json
+  attempts     Int
+  errorMessage String?
+  status       WebhookDeliveryStatus @default(FAILED)
+  resendCount  Int                   @default(0)
+  lastResendAt DateTime?
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([status])
+  @@index([userId])
+  @@map("webhook_deliveries")
+}
+
 model DeadLetterEvent {
   id           String    @id @default(uuid())
   originalId   String    @unique
@@ -289,6 +320,8 @@ model NotificationPreference {
   userId       String
   type         NotificationType
   emailEnabled Boolean          @default(true)
+  inAppEnabled Boolean          @default(true)
+  sseEnabled   Boolean          @default(true)
 
   user User @relation(fields: [userId], references: [id])
 
@@ -325,27 +358,39 @@ model EngagementTemplate {
   salaryRange     String?
   location        String?
   milestoneConfig Json
+  currentVersion  Int      @default(1)
+  archived        Boolean  @default(false)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  company User @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company  User                        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  versions EngagementTemplateVersion[]
 
   @@index([companyId])
   @@map("engagement_templates")
 }
 
-// A company-registered target URL that receives outgoing webhook events
-// (see WebhooksModule). A company may register more than one.
-model WebhookSubscription {
-  id        String   @id @default(uuid())
-  companyId String
-  url       String
-  createdAt DateTime @default(now())
+// Immutable snapshot of an EngagementTemplate's fields at a point in time.
+// Created on every template update so past engagements keep referencing
+// the exact template content they were created with.
+model EngagementTemplateVersion {
+  id              String   @id @default(uuid())
+  templateId      String
+  version         Int
+  name            String
+  jobTitle        String
+  jobDescription  String?
+  salaryRange     String?
+  location        String?
+  milestoneConfig Json
+  createdAt       DateTime @default(now())
 
-  company User @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  template    EngagementTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  engagements Engagement[]
 
-  @@index([companyId])
-  @@map("webhook_subscriptions")
+  @@unique([templateId, version])
+  @@index([templateId])
+  @@map("engagement_template_versions")
 }
 
 model AuditLog {
@@ -448,4 +493,22 @@ model SecurityEvent {
   @@index([action])
   @@index([createdAt])
   @@map("security_events")
+}
+
+// Caches responses for requests submitted with an Idempotency-Key header so
+// retried requests (e.g. after a network failure) return the original
+// response instead of creating a duplicate record.
+model IdempotencyKey {
+  id        String   @id @default(uuid())
+  key       String
+  userId    String
+  response  Json
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([key, userId])
+  @@index([expiresAt])
+  @@map("idempotency_keys")
 }

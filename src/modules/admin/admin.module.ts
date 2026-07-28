@@ -5,12 +5,14 @@ import { AdminDeadLetterService } from './admin-dead-letter.service';
 import { AdminReportsService } from './admin-reports.service';
 import { StellarMergeDetectorService } from './stellar-merge-detector.service';
 import { AdminAuditLogsService } from './admin-audit-logs.service';
+import { AdminWebhooksService } from './admin-webhooks.service';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { PrismaModule } from '../../common/prisma/prisma.module';
 import { UsersModule } from '../users/users.module';
+import { WebhooksModule } from '../webhooks/webhooks.module';
 
 @Module({
-  imports: [NotificationsModule, PrismaModule, UsersModule],
+  imports: [NotificationsModule, PrismaModule, UsersModule, WebhooksModule],
   controllers: [AdminController],
   providers: [
     AdminUsersService,
@@ -18,6 +20,7 @@ import { UsersModule } from '../users/users.module';
     AdminReportsService,
     StellarMergeDetectorService,
     AdminAuditLogsService,
+    AdminWebhooksService,
   ],
   exports: [AdminUsersService],
 })

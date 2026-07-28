@@ -9,6 +9,7 @@ import {
 import { EngagementTemplatesService } from './engagement-templates.service';
 import { CreateEngagementTemplateDto } from './dto/create-engagement-template.dto';
 import { UpdateEngagementTemplateDto } from './dto/update-engagement-template.dto';
+import { CloneEngagementTemplateDto } from './dto/clone-engagement-template.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -58,16 +59,42 @@ export class EngagementTemplatesController {
     return this.templatesService.findOne(id, user.id);
   }
 
+  @Get(':id/versions')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.COMPANY)
+  @ApiOperation({ summary: 'List version history for a template' })
+  @ApiResponse({ status: 404, description: 'Template not found' })
+  findVersions(
+    @CurrentUser() user: User,
+    @Param('id') id: string,
+  ) {
+    return this.templatesService.findVersions(id, user.id);
+  }
+
   @Patch(':id')
   @UseGuards(RolesGuard)
   @Roles(UserRole.COMPANY)
-  @ApiOperation({ summary: 'Update a template' })
+  @ApiOperation({ summary: 'Update a template (creates a new version rather than mutating the original)' })
   update(
     @CurrentUser() user: User,
     @Param('id') id: string,
     @Body() dto: UpdateEngagementTemplateDto,
   ) {
     return this.templatesService.update(id, user.id, dto);
+  }
+
+  @Post(':id/clone')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.COMPANY)
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Clone a template into a new, independent template' })
+  @ApiResponse({ status: 404, description: 'Template not found' })
+  clone(
+    @CurrentUser() user: User,
+    @Param('id') id: string,
+    @Body() dto: CloneEngagementTemplateDto,
+  ) {
+    return this.templatesService.clone(id, user.id, dto?.name);
   }
 
   @Delete(':id')
