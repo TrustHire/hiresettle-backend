@@ -39,6 +39,7 @@ describe('NotificationsService', () => {
             },
             notificationPreference: {
               findUnique: jest.fn(),
+              upsert: jest.fn(),
             },
             $transaction: jest.fn(),
           },
@@ -274,6 +275,62 @@ describe('NotificationsService', () => {
         take: 10,
       });
       expect(result.data).toEqual(notifications);
+    });
+  });
+
+  describe('updatePreferences', () => {
+    const userId = 'test_user_id';
+
+    it('upserts a new preference row when none exists for the type', async () => {
+      (prisma.notificationPreference.upsert as jest.Mock).mockResolvedValue({
+        userId,
+        type: NotificationType.PAYMENT_RELEASED,
+        emailEnabled: false,
+        inAppEnabled: true,
+        sseEnabled: true,
+      });
+
+      const result = await service.updatePreferences(userId, [
+        { type: NotificationType.PAYMENT_RELEASED, emailEnabled: false },
+      ]);
+
+      expect(prisma.notificationPreference.upsert).toHaveBeenCalledWith({
+        where: { userId_type: { userId, type: NotificationType.PAYMENT_RELEASED } },
+        create: { userId, type: NotificationType.PAYMENT_RELEASED, emailEnabled: false },
+        update: { emailEnabled: false },
+      });
+      expect(result).toEqual([{
+        userId,
+        type: NotificationType.PAYMENT_RELEASED,
+        emailEnabled: false,
+        inAppEnabled: true,
+        sseEnabled: true,
+      }]);
+    });
+
+    it('only patches the channels included in the request, leaving others untouched', async () => {
+      (prisma.notificationPreference.upsert as jest.Mock).mockResolvedValue({});
+
+      await service.updatePreferences(userId, [
+        { type: NotificationType.DISPUTE_RAISED, sseEnabled: false },
+      ]);
+
+      expect(prisma.notificationPreference.upsert).toHaveBeenCalledWith({
+        where: { userId_type: { userId, type: NotificationType.DISPUTE_RAISED } },
+        create: { userId, type: NotificationType.DISPUTE_RAISED, sseEnabled: false },
+        update: { sseEnabled: false },
+      });
+    });
+
+    it('handles multiple preference updates in a single call', async () => {
+      (prisma.notificationPreference.upsert as jest.Mock).mockResolvedValue({});
+
+      await service.updatePreferences(userId, [
+        { type: NotificationType.PAYMENT_RELEASED, emailEnabled: false },
+        { type: NotificationType.MILESTONE_UNLOCKED, inAppEnabled: false },
+      ]);
+
+      expect(prisma.notificationPreference.upsert).toHaveBeenCalledTimes(2);
     });
   });
 

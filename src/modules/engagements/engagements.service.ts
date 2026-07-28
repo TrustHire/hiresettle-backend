@@ -48,25 +48,31 @@ export class EngagementsService {
       throw new BadRequestException(`Token ${dto.tokenAddress} is not allowed`);
     }
 
-    // Load template if provided
-    let template: any = null;
+    // Load template if provided — pin to the specific version that is current as of
+    // now, so this engagement keeps referencing that exact snapshot even if the
+    // template is edited (and gains new versions) afterwards.
+    let templateVersion: any = null;
     if (dto.templateId) {
-      template = await this.prisma.engagementTemplate.findUnique({
+      const template = await this.prisma.engagementTemplate.findUnique({
         where: { id: dto.templateId },
       });
       if (!template) throw new NotFoundException(`Template ${dto.templateId} not found`);
       if (template.companyId !== user.id) throw new ForbiddenException('Not authorized to use this template');
+
+      templateVersion = await this.prisma.engagementTemplateVersion.findUnique({
+        where: { templateId_version: { templateId: template.id, version: template.currentVersion } },
+      });
     }
 
-    // Merge template and dto (dto overrides template)
+    // Merge template version and dto (dto overrides template)
     const mergedData = {
       ...dto,
-      jobTitle: dto.jobTitle ?? template?.jobTitle,
-      jobDescription: dto.jobDescription ?? template?.jobDescription,
-      salaryRange: dto.salaryRange ?? template?.salaryRange,
-      location: dto.location ?? template?.location,
-      milestones: dto.milestones ?? template?.milestoneConfig?.milestones,
-      retentionDays: dto.retentionDays ?? template?.milestoneConfig?.retentionDays,
+      jobTitle: dto.jobTitle ?? templateVersion?.jobTitle,
+      jobDescription: dto.jobDescription ?? templateVersion?.jobDescription,
+      salaryRange: dto.salaryRange ?? templateVersion?.salaryRange,
+      location: dto.location ?? templateVersion?.location,
+      milestones: dto.milestones ?? templateVersion?.milestoneConfig?.milestones,
+      retentionDays: dto.retentionDays ?? templateVersion?.milestoneConfig?.retentionDays,
     };
 
     // Validate required fields after merge
@@ -150,6 +156,7 @@ export class EngagementsService {
           location: mergedData.location,
           txHash,
           createdLedger,
+          templateVersionId: templateVersion?.id,
           milestones: { create: milestoneData },
         },
         include: { milestones: { orderBy: { milestoneIndex: 'asc' } } },
