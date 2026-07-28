@@ -26,7 +26,7 @@ const REFRESH_TOKEN_DAYS = 7;
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MINUTES = 15;
 
-type AuthUser = Omit<User, 'passwordHash'>;
+type AuthUser = Omit<User, 'passwordHash' | 'webhookSecret'>;
 
 export interface RequestMeta {
   ip?: string;
@@ -218,15 +218,26 @@ export class AuthService {
     return { revoked: true };
   }
 
-  async updateProfile(userId: string, dto: any) {
-    return this.prisma.user.update({
+  async updateProfile(userId: string, dto: any): Promise<AuthUser & { webhookSecret?: string }> {
+    const existing = await this.prisma.user.findUnique({ where: { id: userId } });
+
+    // Generate a signing secret the first time a webhook subscription is created.
+    const isNewWebhookSubscription = !!dto.webhookUrl && !existing?.webhookUrl;
+    const webhookSecret = isNewWebhookSubscription ? randomBytes(32).toString('hex') : undefined;
+
+    const updated = await this.prisma.user.update({
       where: { id: userId },
       data: {
         ...(dto.name !== undefined ? { name: dto.name } : {}),
         ...(dto.company !== undefined ? { company: dto.company } : {}),
         ...(dto.webhookUrl !== undefined ? { webhookUrl: dto.webhookUrl } : {}),
+        ...(webhookSecret ? { webhookSecret } : {}),
       },
     });
+
+    const safeUser = this.sanitizeUser(updated);
+    // Returned once, at creation time — never persisted in a response again.
+    return webhookSecret ? { ...safeUser, webhookSecret } : safeUser;
   }
 
   async getSessions(userId: string) {
@@ -482,7 +493,7 @@ export class AuthService {
   }
 
   private sanitizeUser(user: User): AuthUser {
-    const { passwordHash, ...safeUser } = user;
+    const { passwordHash, webhookSecret, ...safeUser } = user;
     return safeUser;
   }
 

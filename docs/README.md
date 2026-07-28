@@ -14,3 +14,4 @@ This directory contains the technical documentation for the HireSettle backend.
 | [Security](./security.md) | Security practices and recommendations. |
 | [Stellar Integration](./stellar-integration.md) | Integration details with the Stellar blockchain. |
 | [Tracing](./tracing.md) | Application tracing and observability documentation. |
+| [Webhooks](./webhooks.md) | Outgoing webhook signature verification and retry behavior. |

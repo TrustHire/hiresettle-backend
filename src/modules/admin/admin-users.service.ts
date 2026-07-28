@@ -13,6 +13,7 @@ const USER_SELECT = {
   company: true,
   role: true,
   deactivatedAt: true,
+  rateLimitOverride: true,
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.UserSelect;
@@ -274,5 +275,27 @@ export class AdminUsersService {
 
   async invalidateMetricsCache(): Promise<void> {
     await this.cache.del(AdminUsersService.METRICS_CACHE_KEY);
+  }
+
+  async setRateLimitOverride(id: string, limit: number) {
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException('User not found');
+
+    return this.prisma.user.update({
+      where: { id },
+      data: { rateLimitOverride: limit },
+      select: USER_SELECT,
+    });
+  }
+
+  async clearRateLimitOverride(id: string) {
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException('User not found');
+
+    return this.prisma.user.update({
+      where: { id },
+      data: { rateLimitOverride: null },
+      select: USER_SELECT,
+    });
   }
 }
