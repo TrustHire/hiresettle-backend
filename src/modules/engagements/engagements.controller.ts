@@ -1,12 +1,11 @@
 import {
   Controller, Get, Post, Body, Param,
   Query, UseGuards, HttpCode, HttpStatus,
-  Patch,
+  Patch, Headers,
 } from '@nestjs/common';
-import { User } from '@prisma/client';
 import {
   ApiTags, ApiOperation, ApiResponse,
-  ApiBearerAuth, ApiQuery, ApiParam,
+  ApiBearerAuth, ApiQuery, ApiParam, ApiHeader,
 } from '@nestjs/swagger';
 import { User, UserRole } from '@prisma/client';
 import { Throttle } from '@nestjs/throttler';
@@ -21,7 +20,6 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { UserJwtSubThrottlerGuard } from '../../common/guards/user-jwt-sub-throttler.guard';
 import { AdminUsersService } from '../admin/admin-users.service';
-import { UpdateEngagementStatusDto } from './dto/update-engagement-status.dto';
 import { CancelEngagementDto } from './dto/cancel-engagement.dto';
 import { RequestReplacementDto } from './dto/request-replacement.dto';
 
@@ -43,6 +41,11 @@ export class EngagementsController {
   @Roles(UserRole.COMPANY)
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Create engagement with on-chain escrow (COMPANY only)' })
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: false,
+    description: 'Unique key to safely retry this request without creating a duplicate engagement',
+  })
   @ApiResponse({ status: 201, description: 'Engagement created successfully' })
   @ApiResponse({ status: 400, description: 'Invalid request' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
@@ -51,8 +54,9 @@ export class EngagementsController {
   create(
     @CurrentUser() user: User,
     @Body() dto: CreateEngagementDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
   ) {
-    return this.engagementsService.create(user, dto);
+    return this.engagementsService.create(user, dto, idempotencyKey);
   }
 
   /**

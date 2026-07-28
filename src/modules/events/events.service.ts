@@ -158,15 +158,19 @@ export class EventsService implements OnModuleInit {
     try {
       const companyUser = await this.prisma.user.findFirst({
         where: { stellarAddress: companyAddress },
-        select: { webhookUrl: true },
+        select: { id: true, webhookUrl: true, webhookSecret: true },
       });
 
-      await this.webhooks.sendWebhook(companyUser?.webhookUrl, {
-        event: eventDetails.event,
-        engagementId: eventDetails.engagementId,
-        status: eventDetails.status,
-        timestamp: new Date().toISOString(),
-      });
+      await this.webhooks.sendWebhook(
+        companyUser?.webhookUrl,
+        {
+          event: eventDetails.event,
+          engagementId: eventDetails.engagementId,
+          status: eventDetails.status,
+          timestamp: new Date().toISOString(),
+        },
+        { userId: companyUser?.id, secret: companyUser?.webhookSecret },
+      );
     } catch (err) {
       this.logger.error(`Webhook runtime dispatcher encounter error for engagement ${eventDetails.engagementId}:`, err.message);
     }

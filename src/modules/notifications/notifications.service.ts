@@ -1,4 +1,4 @@
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import { InjectQueue } from '@nestjs/bullmq';
@@ -209,6 +209,14 @@ export class NotificationsService {
       where: { userId, read: false },
       data: { read: true },
     });
+  }
+
+  async remove(notificationId: string, userId: string) {
+    const { count } = await this.prisma.notification.deleteMany({
+      where: { id: notificationId, userId },
+    });
+    if (count === 0) throw new NotFoundException(`Notification ${notificationId} not found`);
+    return { success: true };
   }
 
   async sendEmailDirect(

@@ -43,7 +43,7 @@ export class EngagementTemplatesService {
 
   async findAll(companyId: string) {
     return this.prisma.engagementTemplate.findMany({
-      where: { companyId },
+      where: { companyId, archived: false },
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -95,8 +95,9 @@ export class EngagementTemplatesService {
 
   async remove(id: string, companyId: string) {
     await this.findOne(id, companyId);
-    await this.prisma.engagementTemplate.delete({
+    await this.prisma.engagementTemplate.update({
       where: { id },
+      data: { archived: true },
     });
     return { success: true };
   }
