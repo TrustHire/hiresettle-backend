@@ -6,12 +6,12 @@ This directory contains the technical documentation for the HireSettle backend.
 
 | Document | Description |
 |----------|-------------|
-| [Architecture](./architecture.md) | High-level system architecture and design. |
+| [Caching](./caching.md) | Overview of the caching layer, Redis/in-memory backends, and usage. |
+| [Contributing](../CONTRIBUTING.md) | Branching strategy, commit conventions, and PR process. |
 | [Database Schema](./database-schema.md) | Summary of all Prisma models, their purpose, key fields, and relationships. |
-| [Performance](./performance.md) | Performance optimization guidelines and best practices. |
-| [Runbook](./runbook.md) | Operational procedures for deployment and maintenance. |
-| [Secrets](./secrets.md) | Secret management and environment configuration. |
-| [Security](./security.md) | Security practices and recommendations. |
-| [Stellar Integration](./stellar-integration.md) | Integration details with the Stellar blockchain. |
-| [Tracing](./tracing.md) | Application tracing and observability documentation. |
-| [Webhooks](./webhooks.md) | Outgoing webhook signature verification and retry behavior. |
+| [Deployment](./deployment.md) | Production deployment, build process, and migration ordering. |
+| [Notifications Guide](./notifications-guide.md) | How in-app, email, and SSE notifications are delivered and configured. |
+| [S3 Cleanup](./s3-cleanup.md) | Presigned URL configuration and the orphaned S3 object cleanup job. |
+| [Secrets](./secrets.md) | Secret management, credential rotation procedures, and production injection. |
+| [Security](./security.md) | Dependency vulnerability scanning and triage process. |
+| [Stellar Integration](./stellar-integration.md) | Integration details with the Stellar blockchain, event polling, and contract interaction. |
