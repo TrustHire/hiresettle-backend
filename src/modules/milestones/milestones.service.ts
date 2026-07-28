@@ -2,8 +2,9 @@ import { Injectable, NotFoundException, Logger, UnprocessableEntityException, Fo
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
 import { S3Service } from '../../common/s3/s3.service';
-import { MilestoneStatus, NotificationType } from '@prisma/client';
+import { MilestoneKind, MilestoneStatus, NotificationType } from '@prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
+import { BulkMilestoneItemDto } from './dto/bulk-create-milestones.dto';
 
 @Injectable()
 export class MilestonesService {
@@ -96,6 +97,78 @@ export class MilestonesService {
       unlockable: false,
       estimatedUnlockAt: milestone.unlockEstimatedAt,
     };
+  }
+
+  // ----------------------------------------------------------
+  // BULK CREATE (Issue #172)
+  // ----------------------------------------------------------
+
+  /**
+   * Appends a batch of milestones to an engagement in a single transactional
+   * pass. The batch's paymentPercent values must sum to exactly 100
+   * (enforced by @MilestonesSum100() on BulkCreateMilestonesDto — the same
+   * validator used for single-call engagement creation).
+   */
+  async bulkCreate(engagementId: string, items: BulkMilestoneItemDto[], user: any) {
+    const engagement = await this.prisma.engagement.findUnique({ where: { id: engagementId } });
+    if (!engagement) throw new NotFoundException(`Engagement ${engagementId} not found`);
+
+    if (user?.role !== 'ADMIN' && engagement.companyAddress !== user?.stellarAddress) {
+      throw new ForbiddenException('Only the company party may add milestones to this engagement');
+    }
+
+    const lastMilestone = await this.prisma.milestone.findFirst({
+      where: { engagementId },
+      orderBy: { milestoneIndex: 'desc' },
+    });
+    const startIndex = lastMilestone ? lastMilestone.milestoneIndex + 1 : 0;
+
+    const currentLedger = await this.stellar.getLatestLedger();
+
+    const milestoneData = items.map((item, offset) => {
+      const isRetention = item.kind === 'RETENTION';
+      const validAfterLedger = isRetention && item.retentionDays
+        ? currentLedger + item.retentionDays * 17_280
+        : null;
+      const unlockEstimatedAt = validAfterLedger
+        ? this.stellar.ledgerToDateTime(validAfterLedger, currentLedger)
+        : null;
+
+      return {
+        engagementId,
+        milestoneIndex: startIndex + offset,
+        name: item.name,
+        kind: item.kind as MilestoneKind,
+        paymentPercent: item.paymentPercent,
+        retentionDays: isRetention ? (item.retentionDays ?? null) : null,
+        validAfterLedger,
+        unlockEstimatedAt,
+        status: isRetention ? MilestoneStatus.LOCKED : MilestoneStatus.PENDING,
+      };
+    });
+
+    return this.prisma.$transaction(async (tx) => {
+      const created = [];
+      for (const data of milestoneData) {
+        created.push(await tx.milestone.create({ data }));
+      }
+
+      for (const m of created) {
+        if (m.kind === MilestoneKind.RETENTION && m.unlockEstimatedAt && m.validAfterLedger) {
+          await tx.retentionSchedule.create({
+            data: {
+              engagementId,
+              milestoneIndex: m.milestoneIndex,
+              validAfterLedger: m.validAfterLedger,
+              unlockAt: m.unlockEstimatedAt,
+              notifyAt: new Date(m.unlockEstimatedAt.getTime() - 3 * 24 * 60 * 60 * 1000),
+            },
+          });
+        }
+      }
+
+      return created;
+    });
   }
 
   // ----------------------------------------------------------

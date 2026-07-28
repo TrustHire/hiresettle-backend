@@ -175,6 +175,22 @@ model Engagement {
   @@map("engagements")
 }
 
+// Internal notes left by either party on an engagement (visible to both).
+// Not to be confused with milestone proof text — these are free-form comments.
+model EngagementNote {
+  id           String   @id @default(uuid())
+  engagementId String
+  authorId     String
+  body         String
+  createdAt    DateTime @default(now())
+
+  engagement Engagement @relation(fields: [engagementId], references: [id])
+  author     User       @relation(fields: [authorId], references: [id])
+
+  @@index([engagementId])
+  @@map("engagement_notes")
+}
+
 model EngagementAuditLog {
   id           String   @id @default(cuid())
   engagementId String
