@@ -22,6 +22,8 @@ This is **Repo 2 of 3** in the HireSettle project:
 - Issues JWT tokens via Sign-In With Stellar (no passwords)
 - Swagger docs at `/docs`
 
+For more detailed technical documentation, see the docs/ directory.
+
 ---
 
 ## What's Different From ChainSettle Backend
