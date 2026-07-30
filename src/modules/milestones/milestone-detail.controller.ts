@@ -9,7 +9,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 @ApiTags('milestones')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, UserJwtSubThrottlerGuard)
-@Throttle(100, 60)
+@Throttle({ default: { limit: 100, ttl: 60 } })
 @Controller('milestones')
 export class MilestoneDetailController {
   constructor(private readonly milestonesService: MilestonesService) {}

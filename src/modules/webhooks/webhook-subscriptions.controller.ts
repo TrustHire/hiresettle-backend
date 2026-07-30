@@ -21,7 +21,7 @@ import { UserJwtSubThrottlerGuard } from '../../common/guards/user-jwt-sub-throt
 @UseGuards(JwtAuthGuard)
 @UseGuards(RolesGuard)
 @Roles(UserRole.COMPANY)
-@Throttle(100, 60)
+@Throttle({ default: { limit: 100, ttl: 60 } })
 @Controller('webhooks/subscriptions')
 export class WebhookSubscriptionsController {
   constructor(private readonly subscriptionsService: WebhookSubscriptionsService) {}

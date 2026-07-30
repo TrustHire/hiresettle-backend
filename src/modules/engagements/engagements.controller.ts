@@ -28,7 +28,7 @@ import { CreateEngagementNoteDto } from './dto/create-engagement-note.dto';
 @ApiBearerAuth()
 @UseGuards(UserJwtSubThrottlerGuard)
 @UseGuards(JwtAuthGuard)
-@Throttle(100, 60)
+@Throttle({ default: { limit: 100, ttl: 60 } })
 @Controller('engagements')
 export class EngagementsController {
   constructor(

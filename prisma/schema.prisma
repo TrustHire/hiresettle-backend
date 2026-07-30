@@ -110,6 +110,7 @@ model User {
   engagementTemplates  EngagementTemplate[]
   idempotencyKeys      IdempotencyKey[]
   webhookDeliveries    WebhookDelivery[]
+  engagementNotes      EngagementNote[]
 
   @@index([role, deactivatedAt])
   @@map("users")
@@ -167,6 +168,7 @@ model Engagement {
   milestones      Milestone[]
   events          ChainEvent[]
   auditLogs       EngagementAuditLog[]
+  notes           EngagementNote[]
 
   @@index([status])
   @@index([companyAddress])
@@ -271,6 +273,17 @@ model SystemConfig {
 enum WebhookDeliveryStatus {
   FAILED
   RESENT
+}
+
+// Webhook subscriptions managed per-company via the API.
+model WebhookSubscription {
+  id        String   @id @default(uuid())
+  companyId String
+  url       String
+  createdAt DateTime @default(now())
+
+  @@index([companyId])
+  @@map("webhook_subscriptions")
 }
 
 // Recorded when a webhook job exhausts its retry attempts, so failures are
