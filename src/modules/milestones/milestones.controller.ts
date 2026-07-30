@@ -27,7 +27,7 @@ const ALLOWED_EVIDENCE_MIME_TYPES = [
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 @UseGuards(UserJwtSubThrottlerGuard)
-@Throttle(100, 60)
+@Throttle({ default: { limit: 100, ttl: 60 } })
 @Controller('engagements/:engagementId/milestones')
 export class MilestonesController {
 

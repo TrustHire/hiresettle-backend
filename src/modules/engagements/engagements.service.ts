@@ -6,9 +6,16 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
 import { CreateEngagementDto } from './dto/create-engagement.dto';
 import { EngagementSummaryDto } from './dto/engagement-summary.dto';
-import { User, EngagementStatus, MilestoneKind, MilestoneStatus, NotificationType, UserRole } from '@prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AuditLogService } from './audit-log.service';
+
+const ENGAGEMENT_SORTABLE_FIELDS: Record<string, string> = {
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt',
+  status: 'status',
+  jobTitle: 'jobTitle',
+  totalAmount: 'totalAmount',
+};
 
 const IDEMPOTENCY_KEY_TTL_MS = 24 * 60 * 60 * 1000;
 

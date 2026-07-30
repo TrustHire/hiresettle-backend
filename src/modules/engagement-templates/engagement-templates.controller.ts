@@ -22,7 +22,7 @@ import { UserJwtSubThrottlerGuard } from '../../common/guards/user-jwt-sub-throt
 @ApiBearerAuth()
 @UseGuards(UserJwtSubThrottlerGuard)
 @UseGuards(JwtAuthGuard)
-@Throttle(100, 60)
+@Throttle({ default: { limit: 100, ttl: 60 } })
 @Controller('engagement-templates')
 export class EngagementTemplatesController {
   constructor(private readonly templatesService: EngagementTemplatesService) {}

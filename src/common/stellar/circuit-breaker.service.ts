@@ -116,7 +116,7 @@ export class CircuitBreakerService implements OnModuleInit {
    */
   async execute<T>(fn: () => Promise<T>, fallback?: () => Promise<T>): Promise<T> {
     try {
-      return await this.breaker.fire(fn);
+      return await this.breaker.fire(fn) as T;
     } catch (error) {
       // Circuit open and fallback provided
       if (fallback && this.breaker.opened) {

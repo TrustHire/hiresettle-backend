@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { HealthIndicatorResult, HealthIndicatorService } from '@nestjs/terminus';
+import { HealthIndicatorResult } from '@nestjs/terminus';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 
@@ -22,18 +22,16 @@ export class QueueHealthIndicator {
 
   constructor(
     @InjectQueue('email') private readonly emailQueue: Queue,
-    private readonly healthIndicatorService: HealthIndicatorService,
   ) {}
 
   async isHealthy(): Promise<HealthIndicatorResult> {
-    const indicator = this.healthIndicatorService.check('queues');
     try {
       // Access the underlying ioredis client and send a PING
-      const client = await this.emailQueue.client;
+      const client = await this.emailQueue.client as any;
       const pong = await client.ping();
 
       if (pong !== 'PONG') {
-        return indicator.down({ message: `Unexpected Redis response: ${pong}` });
+        return { queues: { status: 'down', message: `Unexpected Redis response: ${pong}` } };
       }
 
       // Surface lightweight queue counts to aid operator visibility
@@ -44,10 +42,10 @@ export class QueueHealthIndicator {
         this.emailQueue.getFailedCount(),
       ]);
 
-      return indicator.up({ redis: 'connected', waiting, active, delayed, failed });
+      return { queues: { status: 'up', redis: 'connected', waiting, active, delayed, failed } };
     } catch (error) {
       this.logger.error('Queue health check failed', error.message);
-      return indicator.down({ message: error.message });
+      return { queues: { status: 'down', message: error.message } };
     }
   }
 }

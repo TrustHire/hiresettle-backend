@@ -27,9 +27,7 @@ export class UserJwtSubThrottlerGuard extends ThrottlerGuard {
     super(options, storageService, reflector);
   }
 
-  protected getTracker(req: Record<string, any>): string {
-    // req.user is set by JwtStrategy.validate() + Passport.
-    // In this app: { id: payload.sub, stellarAddress, role }
+  protected async getTracker(req: Record<string, any>): Promise<string> {
     const user = req.user;
     const sub = user?.id;
     return sub ? `sub:${sub}` : 'anonymous';

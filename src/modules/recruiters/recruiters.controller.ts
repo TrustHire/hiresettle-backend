@@ -18,7 +18,7 @@ import { SearchRecruitersDto } from './dto/search-recruiters.dto';
 @ApiBearerAuth()
 @UseGuards(UserJwtSubThrottlerGuard)
 @UseGuards(JwtAuthGuard)
-@Throttle(100, 60)
+@Throttle({ default: { limit: 100, ttl: 60 } })
 @Controller('recruiters')
 export class RecruitersController {
   constructor(private readonly recruitersService: RecruitersService) {}

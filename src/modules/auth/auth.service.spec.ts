@@ -54,6 +54,7 @@ const makeMockPrisma = () => ({
   refreshToken: {
     create: jest.fn(),
     findUnique: jest.fn(),
+    findMany: jest.fn(),
     update: jest.fn(),
     updateMany: jest.fn(),
   },

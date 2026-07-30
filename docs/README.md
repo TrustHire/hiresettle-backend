@@ -7,6 +7,7 @@ This directory contains the technical documentation for the HireSettle backend.
 | Document | Description |
 |----------|-------------|
 | [Caching](./caching.md) | Overview of the caching layer, Redis/in-memory backends, and usage. |
+| [Rate Limiting](./rate-limiting.md) | Default throttle limits, per-route overrides, and Retry-After headers. |
 | [Contributing](../CONTRIBUTING.md) | Branching strategy, commit conventions, and PR process. |
 | [Database Schema](./database-schema.md) | Summary of all Prisma models, their purpose, key fields, and relationships. |
 | [Deployment](./deployment.md) | Production deployment, build process, and migration ordering. |

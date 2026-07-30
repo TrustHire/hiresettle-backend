@@ -38,9 +38,8 @@ import stellarConfig from './config/stellar.config';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
-        ttl: config.get<number>('THROTTLE_TTL', 60),
-        limit: config.get<number>('THROTTLE_LIMIT', 100),
-        ignoreRoutes: ['/health'],
+        throttlers: [{ ttl: config.get<number>('THROTTLE_TTL', 60), limit: config.get<number>('THROTTLE_LIMIT', 100) }],
+        skipIf: (context) => context.switchToHttp().getRequest().url === '/health',
       }),
     }),
     ScheduleModule.forRoot(),

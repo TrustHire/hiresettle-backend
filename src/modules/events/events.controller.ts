@@ -12,7 +12,7 @@ import { UserJwtSubThrottlerGuard } from '../../common/guards/user-jwt-sub-throt
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, UserJwtSubThrottlerGuard)
 @Roles(UserRole.ADMIN)
-@Throttle(100, 60)
+@Throttle({ default: { limit: 100, ttl: 60 } })
 @Controller('events')
 export class EventsController {
   constructor(private readonly eventsService: EventsService) {}
