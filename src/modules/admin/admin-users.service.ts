@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { ListUsersDto } from './dto/list-users.dto';
-import { Prisma, UserRole, MilestoneStatus } from '@prisma/client';
+import { EngagementStatus, MilestoneStatus, Prisma, UserRole } from '@prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
 import { CacheService } from '../../common/cache/cache.service';
 
@@ -145,42 +145,61 @@ export class AdminUsersService {
     const cached = await this.cache.get<object>(AdminUsersService.METRICS_CACHE_KEY);
     if (cached) return cached;
 
-    // Get arbiters with active disputes count
-    const arbiters = await this.prisma.user.findMany({
-      where: { role: UserRole.ARBITER },
-      include: {
-        arbiterEngagements: {
-          include: {
-            milestones: {
-              where: { status: MilestoneStatus.DISPUTED },
-            },
-          },
-        },
+    const engagementStatusCountsQuery = this.prisma.engagement.groupBy({
+      by: ['status'],
+      _count: { _all: true },
+    });
+    const engagementAmountsQuery = this.prisma.engagement.aggregate({
+      _sum: {
+        totalAmount: true,
+        releasedAmount: true,
       },
     });
-
-    const arbiterWorkload = arbiters.map((arbiter) => {
-      const activeDisputes = arbiter.arbiterEngagements.reduce((count, eng) => {
-        return count + eng.milestones.length;
-      }, 0);
-
-      return {
-        arbiterId: arbiter.id,
-        name: arbiter.name,
-        email: arbiter.email,
-        activeDisputes,
-      };
-    });
-
-    const totalEngagements = await this.prisma.engagement.count();
-    const totalDisputedMilestones = await this.prisma.milestone.count({
+    const activeDisputesCountQuery = this.prisma.milestone.count({
       where: { status: MilestoneStatus.DISPUTED },
     });
+    const userRoleCountsQuery = this.prisma.user.groupBy({
+      by: ['role'],
+      _count: { _all: true },
+    });
+
+    const [
+      engagementStatusCounts,
+      engagementAmounts,
+      activeDisputesCount,
+      userRoleCounts,
+    ] = await this.prisma.$transaction([
+      engagementStatusCountsQuery,
+      engagementAmountsQuery,
+      activeDisputesCountQuery,
+      userRoleCountsQuery,
+    ]);
+
+    const engagementsByStatus = Object.fromEntries(
+      Object.values(EngagementStatus).map((status) => [status, 0]),
+    ) as Record<EngagementStatus, number>;
+    for (const row of engagementStatusCounts) {
+      engagementsByStatus[row.status] = row._count._all;
+    }
+
+    const usersByRole = Object.fromEntries(
+      Object.values(UserRole).map((role) => [role, 0]),
+    ) as Record<UserRole, number>;
+    for (const row of userRoleCounts) {
+      usersByRole[row.role] = row._count._all;
+    }
+
+    const totalMilestoneVolume = engagementAmounts._sum.totalAmount ?? 0n;
+    const releasedAmount = engagementAmounts._sum.releasedAmount ?? 0n;
+    const lockedAmount = totalMilestoneVolume - releasedAmount;
 
     const result = {
-      totalEngagements,
-      totalDisputedMilestones,
-      arbiterWorkload,
+      engagementsByStatus,
+      totalMilestoneVolume: totalMilestoneVolume.toString(),
+      releasedAmount: releasedAmount.toString(),
+      lockedAmount: lockedAmount.toString(),
+      activeDisputesCount,
+      usersByRole,
     };
     await this.cache.set(AdminUsersService.METRICS_CACHE_KEY, result, AdminUsersService.METRICS_TTL_S);
     return result;

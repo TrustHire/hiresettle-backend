@@ -67,7 +67,10 @@ export class AdminController {
   }
 
   @Get('metrics')
-  @ApiOperation({ summary: 'Get admin metrics including arbiter workload' })
+  @ApiOperation({ summary: 'Get cached dashboard metrics (ADMIN only)' })
+  @ApiResponse({ status: 200, description: 'Aggregate platform metrics retrieved' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
   getMetrics() {
     return this.adminUsers.getAdminMetrics();
   }
