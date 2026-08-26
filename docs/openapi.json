@@ -1,0 +1,26 @@
+{
+  "info": {
+    "description": "Backend API for HireSettle — milestone-based recruiter fee escrow on Stellar Soroban",
+    "title": "HireSettle API",
+    "version": "1.0"
+  },
+  "openapi": "3.0.0",
+  "paths": {},
+  "components": {
+    "schemas": {},
+    "securitySchemes": {
+      "bearer": {
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "tags": [
+    { "description": "Recruitment engagement lifecycle", "name": "engagements" },
+    { "description": "Milestone proof, unlock, and confirmation", "name": "milestones" },
+    { "description": "On-chain Stellar event feed", "name": "events" },
+    { "description": "User notifications", "name": "notifications" },
+    { "description": "Email/password authentication", "name": "auth" },
+    { "description": "Health check endpoints", "name": "health" }
+  ]
+}

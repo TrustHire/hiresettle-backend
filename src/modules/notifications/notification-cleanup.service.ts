@@ -1,38 +1,28 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
-import { ConfigService } from '@nestjs/config';
-import { PrismaService } from '../../common/prisma/prisma.service';
 
+/**
+ * NotificationCleanupService
+ *
+ * This service previously owned a 02:00 UTC cron that deleted read
+ * notifications older than NOTIFICATION_RETENTION_DAYS. That logic has been
+ * consolidated into DataRetentionService (src/common/retention/), which runs
+ * at 03:00 UTC and handles all data categories — including read notifications
+ * (RETENTION_NOTIFICATIONS_DAYS) and unread notifications
+ * (RETENTION_NOTIFICATIONS_UNREAD_DAYS) — under a single scheduled job with
+ * a structured per-run summary log.
+ *
+ * This stub is kept so nothing breaks if other services reference it by token,
+ * but it no longer schedules or deletes anything itself.
+ *
+ * See: src/common/retention/data-retention.service.ts
+ */
 @Injectable()
 export class NotificationCleanupService {
   private readonly logger = new Logger(NotificationCleanupService.name);
 
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly config: ConfigService,
-  ) {}
-
-  @Cron(CronExpression.EVERY_DAY_AT_2AM, { timeZone: 'UTC' })
-  async cleanupOldNotifications() {
-    this.logger.log('Starting notification cleanup job...');
-
-    const retentionDays = this.config.get<number>('NOTIFICATION_RETENTION_DAYS', 90);
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
-
-    try {
-      const { count } = await this.prisma.notification.deleteMany({
-        where: {
-          read: true,
-          createdAt: {
-            lt: cutoffDate,
-          },
-        },
-      });
-
-      this.logger.log(`Deleted ${count} old, read notifications.`);
-    } catch (error) {
-      this.logger.error('Failed to cleanup old notifications:', error.message);
-    }
+  constructor() {
+    this.logger.debug(
+      'NotificationCleanupService loaded (cron superseded by DataRetentionService)',
+    );
   }
 }

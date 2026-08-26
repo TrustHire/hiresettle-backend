@@ -12,6 +12,7 @@ import { SecurityEventsModule } from './common/security-events/security-events.m
 import { QueuesModule } from './queues/queues.module';
 
 import { MetricsModule } from './metrics/metrics.module';
+import { DataRetentionModule } from './common/retention/data-retention.module';
 
 import { PrismaModule } from './common/prisma/prisma.module';
 import { S3Module } from './common/s3/s3.module';
@@ -56,6 +57,7 @@ import stellarConfig from './config/stellar.config';
     }),
     QueuesModule,
     MetricsModule,
+    DataRetentionModule,
 
     PrismaModule,
     S3Module,
@@ -63,6 +65,7 @@ import stellarConfig from './config/stellar.config';
     StellarModule,
     AuthModule,
     EngagementsModule,
+    EngagementTemplatesModule,
     RecruitersModule,
     MilestonesModule,
     EventsModule,

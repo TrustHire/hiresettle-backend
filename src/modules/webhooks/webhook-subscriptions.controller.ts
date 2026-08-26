@@ -1,6 +1,6 @@
 import {
   Controller, Get, Post, Body, Param, Delete,
-  UseGuards, HttpCode, HttpStatus,
+  UseGuards, HttpCode, HttpStatus, UseInterceptors,
 } from '@nestjs/common';
 import {
   ApiTags, ApiOperation, ApiResponse, ApiBearerAuth,
@@ -14,6 +14,8 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { UserJwtSubThrottlerGuard } from '../../common/guards/user-jwt-sub-throttler.guard';
+import { Idempotent } from '../../common/decorators/idempotent.decorator';
+import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
 
 @ApiTags('webhooks')
 @ApiBearerAuth()
@@ -28,6 +30,8 @@ export class WebhookSubscriptionsController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
+  @Idempotent()
+  @UseInterceptors(IdempotencyInterceptor)
   @ApiOperation({ summary: 'Register a webhook subscription URL (COMPANY only)' })
   @ApiResponse({ status: 201, description: 'Subscription created' })
   @ApiResponse({ status: 400, description: 'Invalid URL (must be https)' })

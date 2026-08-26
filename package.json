@@ -17,7 +17,9 @@
     "test:cov": "jest --coverage",
     "format": "prettier --write \"src/**/*.ts\"",
     "release": "standard-version",
-    "prepare": "husky install"
+    "prepare": "husky install",
+    "generate:openapi": "ts-node --project tsconfig.json -r tsconfig-paths/register scripts/generate-openapi.ts",
+    "diff:openapi": "ts-node --project tsconfig.json -r tsconfig-paths/register scripts/diff-openapi.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.0.0",

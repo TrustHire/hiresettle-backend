@@ -17,8 +17,6 @@ const ENGAGEMENT_SORTABLE_FIELDS: Record<string, string> = {
   totalAmount: 'totalAmount',
 };
 
-const IDEMPOTENCY_KEY_TTL_MS = 24 * 60 * 60 * 1000;
-
 @Injectable()
 export class EngagementsService {
   private readonly logger = new Logger(EngagementsService.name);
@@ -34,15 +32,7 @@ export class EngagementsService {
   // CREATE — validates, checks balance, submits on-chain, persists
   // ----------------------------------------------------------
 
-  async create(user: User, dto: CreateEngagementDto, idempotencyKey?: string) {
-    if (idempotencyKey) {
-      const existingKey = await this.prisma.idempotencyKey.findUnique({
-        where: { key_userId: { key: idempotencyKey, userId: user.id } },
-      });
-      if (existingKey && existingKey.expiresAt > new Date()) {
-        return existingKey.response;
-      }
-    }
+  async create(user: User, dto: CreateEngagementDto) {
 
     const existing = await this.prisma.engagement.findUnique({
       where: { id: dto.engagementId },
@@ -189,15 +179,6 @@ export class EngagementsService {
 
     this.logger.log(`Engagement created on-chain and persisted: ${engagement.id} (tx: ${txHash})`);
     const result = this.serialize(engagement);
-
-    if (idempotencyKey) {
-      const expiresAt = new Date(Date.now() + IDEMPOTENCY_KEY_TTL_MS);
-      await this.prisma.idempotencyKey.upsert({
-        where: { key_userId: { key: idempotencyKey, userId: user.id } },
-        create: { key: idempotencyKey, userId: user.id, response: result, expiresAt },
-        update: { response: result, expiresAt },
-      });
-    }
 
     return result;
   }

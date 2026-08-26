@@ -13,6 +13,8 @@ import { MilestonesService } from './milestones.service';
 import { ResolveDisputeDto } from './dto/resolve-dispute.dto';
 import { UpdateMilestoneStatusDto } from './dto/update-milestone-status.dto';
 import { BulkCreateMilestonesDto } from './dto/bulk-create-milestones.dto';
+import { Idempotent } from '../../common/decorators/idempotent.decorator';
+import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
 
 const ALLOWED_EVIDENCE_MIME_TYPES = [
   'image/jpeg',
@@ -64,6 +66,8 @@ export class MilestonesController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.COMPANY)
   @HttpCode(HttpStatus.CREATED)
+  @Idempotent()
+  @UseInterceptors(IdempotencyInterceptor)
   @ApiOperation({ summary: 'Create multiple milestones on an engagement in one transactional call (COMPANY only)' })
   @ApiResponse({ status: 201, description: 'Milestones created successfully' })
   @ApiResponse({ status: 400, description: 'paymentPercent values do not sum to 100' })
@@ -93,6 +97,8 @@ export class MilestonesController {
   @Post(':index/resolve')
   @UseGuards(RolesGuard)
   @Roles(UserRole.ARBITER)
+  @Idempotent()
+  @UseInterceptors(IdempotencyInterceptor)
   @ApiOperation({ summary: 'Resolve a dispute on a milestone (arbiter only)' })
   @ApiResponse({ status: 200, description: 'Dispute resolved successfully' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
