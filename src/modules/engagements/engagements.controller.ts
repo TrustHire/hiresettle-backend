@@ -1,41 +1,52 @@
 import {
   Controller, Get, Post, Body, Param,
-  Query, UseGuards, HttpCode, HttpStatus, Patch,
+  Query, UseGuards, HttpCode, HttpStatus,
+  Patch, Headers,
 } from '@nestjs/common';
-import { User } from '@prisma/client';
 import {
   ApiTags, ApiOperation, ApiResponse,
-  ApiBearerAuth, ApiQuery, ApiParam,
+  ApiBearerAuth, ApiQuery, ApiParam, ApiHeader,
 } from '@nestjs/swagger';
+import { User, UserRole } from '@prisma/client';
+import { Throttle } from '@nestjs/throttler';
 import { EngagementsService } from './engagements.service';
 import { CreateEngagementDto } from './dto/create-engagement.dto';
+import { UpdateEngagementStatusDto } from './dto/update-engagement-status.dto';
+import { AuditLogService } from './audit-log.service';
+import { AuditLogEntryDto } from './dto/audit-log-response.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
-import { UserRole } from '@prisma/client';
-import { Throttle } from '@nestjs/throttler';
 import { UserJwtSubThrottlerGuard } from '../../common/guards/user-jwt-sub-throttler.guard';
 import { AdminUsersService } from '../admin/admin-users.service';
-import { UpdateEngagementStatusDto } from './dto/update-engagement-status.dto';
+import { CancelEngagementDto } from './dto/cancel-engagement.dto';
+import { RequestReplacementDto } from './dto/request-replacement.dto';
+import { CreateEngagementNoteDto } from './dto/create-engagement-note.dto';
 
 @ApiTags('engagements')
 @ApiBearerAuth()
 @UseGuards(UserJwtSubThrottlerGuard)
 @UseGuards(JwtAuthGuard)
-@Throttle(100, 60)
+@Throttle({ default: { limit: 100, ttl: 60 } })
 @Controller('engagements')
 export class EngagementsController {
   constructor(
     private readonly engagementsService: EngagementsService,
     private readonly adminUsersService: AdminUsersService,
-  ) { }
+    private readonly auditLogService: AuditLogService,
+  ) {}
 
   @Post()
   @UseGuards(RolesGuard)
   @Roles(UserRole.COMPANY)
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Create engagement with on-chain escrow (COMPANY only)' })
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: false,
+    description: 'Unique key to safely retry this request without creating a duplicate engagement',
+  })
   @ApiResponse({ status: 201, description: 'Engagement created successfully' })
   @ApiResponse({ status: 400, description: 'Invalid request' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
@@ -44,8 +55,9 @@ export class EngagementsController {
   create(
     @CurrentUser() user: User,
     @Body() dto: CreateEngagementDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
   ) {
-    return this.engagementsService.create(user, dto);
+    return this.engagementsService.create(user, dto, idempotencyKey);
   }
 
   /**
@@ -62,7 +74,10 @@ export class EngagementsController {
   @ApiQuery({ name: 'createdTo', required: false, description: 'ISO date string (e.g., 2026-12-31)' })
   @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number' })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page' })
+  @ApiQuery({ name: 'sortBy', required: false, enum: ['createdAt', 'amount', 'status'], description: 'Field to sort by (default: createdAt)' })
+  @ApiQuery({ name: 'sortOrder', required: false, enum: ['asc', 'desc'], description: 'Sort direction (default: desc)' })
   @ApiResponse({ status: 200, description: 'Engagements list retrieved' })
+  @ApiResponse({ status: 400, description: 'Invalid sortBy or sortOrder value' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   findAll(
     @Query('companyAddress') companyAddress?: string,
@@ -73,6 +88,8 @@ export class EngagementsController {
     @Query('createdTo') createdTo?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
+    @Query('sortBy') sortBy?: string,
+    @Query('sortOrder') sortOrder?: string,
   ) {
     return this.engagementsService.findAll({
       companyAddress,
@@ -83,6 +100,8 @@ export class EngagementsController {
       createdTo,
       page,
       limit,
+      sortBy,
+      sortOrder,
     });
   }
 
@@ -108,6 +127,61 @@ export class EngagementsController {
   @ApiResponse({ status: 404, description: 'Engagement not found' })
   async getEngagementSummary(@Param('id') id: string, @CurrentUser() user: any) {
     return this.engagementsService.getSummary(id, user.id);
+  }
+
+  /**
+   * GET /api/v1/engagements/:id/audit-log
+   * Returns the full status transition history for an engagement.
+   */
+  @Get(':id/audit-log')
+  @ApiOperation({ summary: 'Get engagement audit log' })
+  @ApiParam({ name: 'id', description: 'Engagement ID' })
+  @ApiResponse({ status: 200, description: 'Audit log retrieved' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 404, description: 'Engagement not found' })
+  getAuditLog(
+    @Param('id') engagementId: string,
+    @CurrentUser() user: { id: string; role: string },
+  ): Promise<AuditLogEntryDto[]> {
+    return this.auditLogService.findByEngagement(engagementId, user.id, user.role);
+  }
+
+  /**
+   * POST /api/v1/engagements/:id/notes
+   * Add an internal note to an engagement (participants only).
+   */
+  @Post(':id/notes')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Add an internal note to an engagement (participants only)' })
+  @ApiParam({ name: 'id', description: 'Engagement ID' })
+  @ApiResponse({ status: 201, description: 'Note created' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Not a participant of this engagement' })
+  @ApiResponse({ status: 404, description: 'Engagement not found' })
+  createNote(
+    @Param('id') id: string,
+    @Body() dto: CreateEngagementNoteDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.engagementsService.createNote(id, user, dto.body);
+  }
+
+  /**
+   * GET /api/v1/engagements/:id/notes
+   * List internal notes on an engagement (participants only).
+   */
+  @Get(':id/notes')
+  @ApiOperation({ summary: 'List internal notes on an engagement (participants only)' })
+  @ApiParam({ name: 'id', description: 'Engagement ID' })
+  @ApiResponse({ status: 200, description: 'Notes retrieved' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Not a participant of this engagement' })
+  @ApiResponse({ status: 404, description: 'Engagement not found' })
+  getNotes(
+    @Param('id') id: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.engagementsService.findNotes(id, user);
   }
 
   /**

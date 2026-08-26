@@ -1,14 +1,46 @@
-import { Controller, Get, Delete, Post, Param, Query, UseGuards, Patch, Body, HttpCode, HttpStatus } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam, ApiQuery, ApiResponse } from '@nestjs/swagger';
-import { UserRole } from '@prisma/client';
+import {
+  Controller,
+  Get,
+  Delete,
+  Post,
+  Put,
+  Param,
+  Query,
+  UseGuards,
+  Patch,
+  Body,
+  HttpCode,
+  HttpStatus,
+  Res,
+  Req,
+} from '@nestjs/common';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiBearerAuth,
+  ApiParam,
+  ApiQuery,
+  ApiResponse,
+} from '@nestjs/swagger';
+import { SecurityEventAction, UserRole } from '@prisma/client';
+import { Request, Response } from 'express';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { AdminUsersService } from './admin-users.service';
 import { AdminDeadLetterService } from './admin-dead-letter.service';
+import { AdminReportsService } from './admin-reports.service';
+import { StellarMergeDetectorService } from './stellar-merge-detector.service';
+import { AdminAuditLogsService } from './admin-audit-logs.service';
+import { AdminWebhooksService } from './admin-webhooks.service';
 import { ListUsersDto } from './dto/list-users.dto';
 import { AssignArbiterDto } from './dto/assign-arbiter.dto';
+import { AuditLogsQueryDto } from './dto/audit-logs.dto';
+import { SetRateLimitOverrideDto } from './dto/set-rate-limit-override.dto';
 import { CacheService } from '../../common/cache/cache.service';
+import { SecurityEventsService } from '../../common/security-events/security-events.service';
+import { ListSecurityEventsDto } from '../../common/security-events/dto/list-security-events.dto';
+import { GdprService } from '../users/gdpr.service';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -20,6 +52,12 @@ export class AdminController {
     private readonly adminUsers: AdminUsersService,
     private readonly deadLetter: AdminDeadLetterService,
     private readonly cacheService: CacheService,
+    private readonly reports: AdminReportsService,
+    private readonly mergeDetector: StellarMergeDetectorService,
+    private readonly securityEvents: SecurityEventsService,
+    private readonly auditLogs: AdminAuditLogsService,
+    private readonly gdpr: GdprService,
+    private readonly adminWebhooks: AdminWebhooksService,
   ) {}
 
   @Get('users')
@@ -38,8 +76,15 @@ export class AdminController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Forbidden' })
   @ApiResponse({ status: 404, description: 'User not found' })
-  deactivateUser(@Param('id') id: string) {
-    return this.adminUsers.deactivateUser(id);
+  async deactivateUser(@Param('id') id: string, @Req() req: Request) {
+    const result = await this.adminUsers.deactivateUser(id);
+    await this.securityEvents.log({
+      userId: (req.user as any)?.id,
+      action: SecurityEventAction.ADMIN_OVERRIDE,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+    return result;
   }
 
   @Post('users/:id/reactivate')
@@ -50,8 +95,15 @@ export class AdminController {
   @ApiResponse({ status: 403, description: 'Forbidden' })
   @ApiResponse({ status: 404, description: 'User not found' })
   @ApiResponse({ status: 409, description: 'User already active' })
-  reactivateUser(@Param('id') id: string) {
-    return this.adminUsers.reactivateUser(id);
+  async reactivateUser(@Param('id') id: string, @Req() req: Request) {
+    const result = await this.adminUsers.reactivateUser(id);
+    await this.securityEvents.log({
+      userId: (req.user as any)?.id,
+      action: SecurityEventAction.ADMIN_OVERRIDE,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+    return result;
   }
 
   @Patch('engagements/:id/arbiter')
@@ -101,7 +153,10 @@ export class AdminController {
   }
 
   @Post('dead-letter-events/:id/requeue')
-  @ApiOperation({ summary: 'Requeue a dead-letter event back into chain_events for retry (ADMIN only)' })
+  @ApiOperation({
+    summary:
+      'Requeue a dead-letter event back into chain_events for retry (ADMIN only)',
+  })
   @ApiParam({ name: 'id', description: 'Dead-letter event ID' })
   @ApiResponse({ status: 201, description: 'Event requeued' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
@@ -109,5 +164,185 @@ export class AdminController {
   @ApiResponse({ status: 404, description: 'Dead-letter event not found' })
   requeueDeadLetterEvent(@Param('id') id: string) {
     return this.deadLetter.requeue(id);
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Issue #62 — Admin reports / CSV export
+  // ────────────────────────────────────────────────────────────────
+
+  @Get('reports/engagements.csv')
+  @ApiOperation({
+    summary: 'Export engagements as CSV for a date range (max 90 days)',
+  })
+  @ApiQuery({
+    name: 'from',
+    required: true,
+    description: 'Start date (ISO 8601)',
+  })
+  @ApiQuery({ name: 'to', required: true, description: 'End date (ISO 8601)' })
+  @ApiResponse({ status: 200, description: 'CSV stream' })
+  @ApiResponse({ status: 400, description: 'Invalid or missing date range' })
+  streamEngagementsCsv(
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Res() res: Response,
+  ) {
+    return this.reports.streamEngagementsCsv(from, to, res);
+  }
+
+  @Get('reports/payments.csv')
+  @ApiOperation({
+    summary: 'Export released payments as CSV for a date range (max 90 days)',
+  })
+  @ApiQuery({
+    name: 'from',
+    required: true,
+    description: 'Start date (ISO 8601)',
+  })
+  @ApiQuery({ name: 'to', required: true, description: 'End date (ISO 8601)' })
+  @ApiResponse({ status: 200, description: 'CSV stream' })
+  @ApiResponse({ status: 400, description: 'Invalid or missing date range' })
+  streamPaymentsCsv(
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Res() res: Response,
+  ) {
+    return this.reports.streamPaymentsCsv(from, to, res);
+  }
+
+  @Get('reports/disputes.csv')
+  @ApiOperation({
+    summary: 'Export dispute log as CSV for a date range (max 90 days)',
+  })
+  @ApiQuery({
+    name: 'from',
+    required: true,
+    description: 'Start date (ISO 8601)',
+  })
+  @ApiQuery({ name: 'to', required: true, description: 'End date (ISO 8601)' })
+  @ApiResponse({ status: 200, description: 'CSV stream' })
+  @ApiResponse({ status: 400, description: 'Invalid or missing date range' })
+  streamDisputesCsv(
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Res() res: Response,
+  ) {
+    return this.reports.streamDisputesCsv(from, to, res);
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Issue #59 — Stellar account merge detection
+  // ────────────────────────────────────────────────────────────────
+
+  @Get('merged-accounts')
+  @ApiOperation({
+    summary: 'List engagements flagged as ACCOUNT_MERGED (ADMIN only)',
+  })
+  @ApiResponse({ status: 200, description: 'Flagged engagements' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  listMergedAccounts() {
+    return this.mergeDetector.listMergedEngagements();
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Issue #87 — Security audit event log
+  // ────────────────────────────────────────────────────────────────
+
+  @Get('security-events')
+  @ApiOperation({
+    summary: 'List security audit events (ADMIN only, append-only)',
+  })
+  @ApiQuery({ name: 'userId', required: false })
+  @ApiQuery({ name: 'from', required: false, description: 'ISO 8601 start date' })
+  @ApiQuery({ name: 'to', required: false, description: 'ISO 8601 end date' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'Security events retrieved' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  listSecurityEvents(@Query() dto: ListSecurityEventsDto) {
+    return this.securityEvents.list(dto);
+  }
+
+  @Get('audit-logs')
+  @ApiOperation({
+    summary: 'List unified audit logs (ADMIN only)',
+  })
+  @ApiQuery({ name: 'actorId', required: false, description: 'Filter by actor (user) ID' })
+  @ApiQuery({ name: 'action', required: false, description: 'Filter by action type' })
+  @ApiQuery({ name: 'entityType', required: false, description: 'Filter by entity type' })
+  @ApiQuery({ name: 'from', required: false, description: 'ISO 8601 start date' })
+  @ApiQuery({ name: 'to', required: false, description: 'ISO 8601 end date' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'Audit logs retrieved' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  listAuditLogs(@Query() dto: AuditLogsQueryDto) {
+    return this.auditLogs.queryAuditLogs(dto);
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Issue #97 — GDPR data deletion queue
+  // ────────────────────────────────────────────────────────────────
+
+  @Get('data-deletion-requests')
+  @ApiOperation({ summary: 'List GDPR data deletion requests (ADMIN only)' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'Deletion requests retrieved' })
+  listDeletionRequests(@Query('page') page?: number, @Query('limit') limit?: number) {
+    return this.gdpr.listRequests(Number(page) || 1, Number(limit) || 20);
+  }
+
+  @Post('data-deletion-requests/:id/process')
+  @ApiOperation({ summary: 'Mark a GDPR deletion request as processed (ADMIN only)' })
+  @ApiParam({ name: 'id', description: 'DataDeletionRequest ID' })
+  @ApiResponse({ status: 201, description: 'Request marked as processed' })
+  @ApiResponse({ status: 404, description: 'Request not found' })
+  processDeletionRequest(@Param('id') id: string, @Req() req: Request) {
+    return this.gdpr.processRequest(id, (req.user as any)?.id);
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Issue #176 — Manual resend of a failed webhook delivery
+  // ────────────────────────────────────────────────────────────────
+
+  @Post('webhooks/deliveries/:id/resend')
+  @ApiOperation({ summary: 'Manually resend a failed webhook delivery (ADMIN only)' })
+  @ApiParam({ name: 'id', description: 'WebhookDelivery ID' })
+  @ApiResponse({ status: 201, description: 'Resend triggered' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  @ApiResponse({ status: 404, description: 'Webhook delivery not found' })
+  resendWebhookDelivery(@Param('id') id: string, @Req() req: Request) {
+    return this.adminWebhooks.resendDelivery(id, (req.user as any)?.id);
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Issue #177 — Per-user rate-limit override
+  // ────────────────────────────────────────────────────────────────
+
+  @Put('users/:id/rate-limit-override')
+  @ApiOperation({ summary: 'Set a custom rate-limit override for a user (ADMIN only)' })
+  @ApiParam({ name: 'id', description: 'User ID' })
+  @ApiResponse({ status: 200, description: 'Rate-limit override set' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  setRateLimitOverride(@Param('id') id: string, @Body() dto: SetRateLimitOverrideDto) {
+    return this.adminUsers.setRateLimitOverride(id, dto.limit);
+  }
+
+  @Delete('users/:id/rate-limit-override')
+  @ApiOperation({ summary: "Clear a user's rate-limit override, reverting to the default limit (ADMIN only)" })
+  @ApiParam({ name: 'id', description: 'User ID' })
+  @ApiResponse({ status: 200, description: 'Rate-limit override cleared' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  clearRateLimitOverride(@Param('id') id: string) {
+    return this.adminUsers.clearRateLimitOverride(id);
   }
 }

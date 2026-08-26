@@ -1,12 +1,20 @@
-import { Module } from '@nestjs/common';
+import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { TerminusModule } from '@nestjs/terminus';
+import { BullModule } from '@nestjs/bullmq';
 import { AppCacheModule } from './common/cache/cache.module';
+import { envValidationSchema } from './config/env.validation';
+import { AppLoggerModule } from './common/logger/logger.module';
+import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
+import { SecurityEventsModule } from './common/security-events/security-events.module';
+import { QueuesModule } from './queues/queues.module';
 
+import { MetricsModule } from './metrics/metrics.module';
 
 import { PrismaModule } from './common/prisma/prisma.module';
+import { S3Module } from './common/s3/s3.module';
 import { StellarModule as CommonStellarModule } from './common/stellar/stellar.module';
 import { StellarModule } from './modules/stellar/stellar.module';
 
@@ -30,16 +38,27 @@ import stellarConfig from './config/stellar.config';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
-        ttl: config.get<number>('THROTTLE_TTL', 60),
-        limit: config.get<number>('THROTTLE_LIMIT', 100),
-        ignoreRoutes: ['/health'],
+        throttlers: [{ ttl: config.get<number>('THROTTLE_TTL', 60), limit: config.get<number>('THROTTLE_LIMIT', 100) }],
+        skipIf: (context) => context.switchToHttp().getRequest().url === '/health',
       }),
     }),
     ScheduleModule.forRoot(),
     TerminusModule,
     AppCacheModule,
+    AppLoggerModule,
+    SecurityEventsModule,
+    BullModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        connection: { url: config.get<string>('REDIS_URL', 'redis://localhost:6379') },
+      }),
+    }),
+    QueuesModule,
+    MetricsModule,
 
     PrismaModule,
+    S3Module,
     CommonStellarModule,
     StellarModule,
     AuthModule,
@@ -54,4 +73,8 @@ import stellarConfig from './config/stellar.config';
     BillingModule,
   ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(RequestIdMiddleware).forRoutes('*');
+  }
+}

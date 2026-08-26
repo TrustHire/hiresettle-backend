@@ -20,6 +20,7 @@ enum EngagementStatus {
   COMPLETED
   CANCELLED
   REPLACEMENT_REQUESTED
+  ACCOUNT_MERGED
 }
 
 enum MilestoneStatus {
@@ -50,6 +51,7 @@ enum NotificationType {
   ARBITER_ASSIGNED
   ARBITER_REASSIGNED
   ARBITER_RECUSAL_REQUESTED
+  ACCOUNT_MERGE_DETECTED
 }
 
 enum UserRole {
@@ -57,6 +59,16 @@ enum UserRole {
   RECRUITER
   ARBITER
   ADMIN
+}
+
+enum SecurityEventAction {
+  LOGIN_SUCCESS
+  LOGIN_FAILURE
+  LOGOUT
+  PASSWORD_RESET
+  EMAIL_VERIFICATION
+  ROLE_CHANGE
+  ADMIN_OVERRIDE
 }
 
 // ============================================================
@@ -72,22 +84,35 @@ model User {
   company        String?        // company name (for COMPANY role users)
   role           UserRole       @default(COMPANY)
   webhookUrl     String?
+  webhookSecret  String?        // HMAC-SHA256 signing secret, generated when webhookUrl is first set
+  rateLimitOverride Int?        // custom per-user request limit for UserJwtSubThrottlerGuard; falls back to default when unset
   avatarUrl      String?        // CDN URL for user avatar
   deactivatedAt  DateTime?
+  failedLoginAttempts Int       @default(0)
+  lockedUntil    DateTime?
+  totpSecret     String?        // TOTP secret for 2FA
+  totpEnabled    Boolean         @default(false)
+  deletedAt      DateTime?      // GDPR anonymisation timestamp
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
   // Relations
-  companyEngagements   Engagement[]   @relation("CompanyEngagements")
-  recruiterEngagements Engagement[]   @relation("RecruiterEngagements")
-  arbiterEngagements   Engagement[]   @relation("ArbiterEngagements")
+  companyEngagements   Engagement[]            @relation("CompanyEngagements")
+  recruiterEngagements Engagement[]            @relation("RecruiterEngagements")
+  arbiterEngagements   Engagement[]            @relation("ArbiterEngagements")
   notifications        Notification[]
   refreshTokens        RefreshToken[]
+  notificationPrefs    NotificationPreference[]
   milestoneAuditLogs   MilestoneAuditLog[]
-  disputeEvidence      DisputeEvidence[]
-  notificationPreferences NotificationPreference[]
+  disputeEvidences     DisputeEvidence[]
+  auditLogs            EngagementAuditLog[]
+  securityEvents       SecurityEvent[]
   engagementTemplates  EngagementTemplate[]
+  idempotencyKeys      IdempotencyKey[]
+  webhookDeliveries    WebhookDelivery[]
+  engagementNotes      EngagementNote[]
 
+  @@index([role, deactivatedAt])
   @@map("users")
 }
 
@@ -128,19 +153,60 @@ model Engagement {
   salaryRange      String?           // off-chain metadata
   location         String?           // off-chain metadata
   status           EngagementStatus  @default(ACTIVE)
+  replacementReason String?
   txHash           String?           // on-chain creation tx hash
   createdLedger    Int?              // ledger sequence at creation
+  templateVersionId String?          // specific EngagementTemplateVersion used to create this engagement, if any
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
   // Relations
-  company    User         @relation("CompanyEngagements",   fields: [companyAddress],   references: [stellarAddress])
-  recruiter  User         @relation("RecruiterEngagements", fields: [recruiterAddress], references: [stellarAddress])
-  arbiter    User         @relation("ArbiterEngagements",   fields: [arbiterAddress],   references: [stellarAddress])
-  milestones Milestone[]
-  events     ChainEvent[]
+  company         User                        @relation("CompanyEngagements",   fields: [companyAddress],   references: [stellarAddress])
+  recruiter       User                        @relation("RecruiterEngagements", fields: [recruiterAddress], references: [stellarAddress])
+  arbiter         User                        @relation("ArbiterEngagements",   fields: [arbiterAddress],   references: [stellarAddress])
+  templateVersion EngagementTemplateVersion?  @relation(fields: [templateVersionId], references: [id])
+  milestones      Milestone[]
+  events          ChainEvent[]
+  auditLogs       EngagementAuditLog[]
+  notes           EngagementNote[]
 
+  @@index([status])
+  @@index([companyAddress])
+  @@index([recruiterAddress])
+  @@index([status, createdAt])
   @@map("engagements")
+}
+
+// Internal notes left by either party on an engagement (visible to both).
+// Not to be confused with milestone proof text — these are free-form comments.
+model EngagementNote {
+  id           String   @id @default(uuid())
+  engagementId String
+  authorId     String
+  body         String
+  createdAt    DateTime @default(now())
+
+  engagement Engagement @relation(fields: [engagementId], references: [id])
+  author     User       @relation(fields: [authorId], references: [id])
+
+  @@index([engagementId])
+  @@map("engagement_notes")
+}
+
+model EngagementAuditLog {
+  id           String   @id @default(cuid())
+  engagementId String
+  fromStatus   String
+  toStatus     String
+  changedBy    String
+  reason       String?
+  createdAt    DateTime @default(now())
+
+  engagement   Engagement @relation(fields: [engagementId], references: [id])
+  changedByUser User       @relation(fields: [changedBy], references: [id])
+
+  @@index([engagementId])
+  @@index([changedBy])
 }
 
 model Milestone {
@@ -164,11 +230,14 @@ model Milestone {
   updatedAt        DateTime        @updatedAt
 
   // Relations
-  engagement       Engagement          @relation(fields: [engagementId], references: [id])
-  auditLogs        MilestoneAuditLog[]
-  disputeEvidence  DisputeEvidence[]
+  engagement         Engagement          @relation(fields: [engagementId], references: [id])
+  milestoneAuditLogs MilestoneAuditLog[]
+  disputeEvidences   DisputeEvidence[]
 
   @@unique([engagementId, milestoneIndex])
+  @@index([status])
+  @@index([engagementId])
+  @@index([status, engagementId])
   @@map("milestones")
 }
 
@@ -201,6 +270,45 @@ model SystemConfig {
   @@map("system_config")
 }
 
+enum WebhookDeliveryStatus {
+  FAILED
+  RESENT
+}
+
+// Webhook subscriptions managed per-company via the API.
+model WebhookSubscription {
+  id        String   @id @default(uuid())
+  companyId String
+  url       String
+  createdAt DateTime @default(now())
+
+  @@index([companyId])
+  @@map("webhook_subscriptions")
+}
+
+// Recorded when a webhook job exhausts its retry attempts, so failures are
+// tracked instead of silently dropped. Admins can resend from here.
+model WebhookDelivery {
+  id           String                @id @default(uuid())
+  userId       String?
+  url          String
+  event        String
+  payload      Json
+  attempts     Int
+  errorMessage String?
+  status       WebhookDeliveryStatus @default(FAILED)
+  resendCount  Int                   @default(0)
+  lastResendAt DateTime?
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([status])
+  @@index([userId])
+  @@map("webhook_deliveries")
+}
+
 model DeadLetterEvent {
   id           String    @id @default(uuid())
   originalId   String    @unique
@@ -218,6 +326,21 @@ model DeadLetterEvent {
   @@index([eventName])
   @@index([engagementId])
   @@map("dead_letter_events")
+}
+
+model NotificationPreference {
+  id           String           @id @default(uuid())
+  userId       String
+  type         NotificationType
+  emailEnabled Boolean          @default(true)
+  inAppEnabled Boolean          @default(true)
+  sseEnabled   Boolean          @default(true)
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, type])
+  @@index([userId])
+  @@map("notification_preferences")
 }
 
 model Notification {
@@ -239,20 +362,6 @@ model Notification {
   @@map("notifications")
 }
 
-model NotificationPreference {
-  id           String           @id @default(uuid())
-  userId       String
-  type         NotificationType
-  emailEnabled Boolean          @default(true)
-  createdAt    DateTime         @default(now())
-  updatedAt    DateTime         @updatedAt
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, type])
-  @@map("notification_preferences")
-}
-
 model EngagementTemplate {
   id              String   @id @default(uuid())
   companyId       String
@@ -262,13 +371,39 @@ model EngagementTemplate {
   salaryRange     String?
   location        String?
   milestoneConfig Json
+  currentVersion  Int      @default(1)
+  archived        Boolean  @default(false)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  company User @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company  User                        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  versions EngagementTemplateVersion[]
 
   @@index([companyId])
   @@map("engagement_templates")
+}
+
+// Immutable snapshot of an EngagementTemplate's fields at a point in time.
+// Created on every template update so past engagements keep referencing
+// the exact template content they were created with.
+model EngagementTemplateVersion {
+  id              String   @id @default(uuid())
+  templateId      String
+  version         Int
+  name            String
+  jobTitle        String
+  jobDescription  String?
+  salaryRange     String?
+  location        String?
+  milestoneConfig Json
+  createdAt       DateTime @default(now())
+
+  template    EngagementTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  engagements Engagement[]
+
+  @@unique([templateId, version])
+  @@index([templateId])
+  @@map("engagement_template_versions")
 }
 
 model AuditLog {
@@ -340,4 +475,53 @@ model DisputeEvidence {
   @@index([milestoneId])
   @@index([uploadedBy])
   @@map("dispute_evidence")
+}
+
+// GDPR right-to-erasure queue. Created when a user requests account deletion.
+// Admins review and process via POST /admin/data-deletion-requests/:id/process.
+model DataDeletionRequest {
+  id          String    @id @default(uuid())
+  userId      String
+  requestedAt DateTime  @default(now())
+  processedAt DateTime?
+  processedBy String?   // admin userId
+
+  @@index([processedAt])
+  @@map("data_deletion_requests")
+}
+
+// Append-only log of security-relevant events for incident response and
+// compliance. No update or delete endpoints are exposed for this table.
+model SecurityEvent {
+  id        String              @id @default(uuid())
+  userId    String?
+  action    SecurityEventAction
+  ip        String?
+  userAgent String?
+  createdAt DateTime            @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("security_events")
+}
+
+// Caches responses for requests submitted with an Idempotency-Key header so
+// retried requests (e.g. after a network failure) return the original
+// response instead of creating a duplicate record.
+model IdempotencyKey {
+  id        String   @id @default(uuid())
+  key       String
+  userId    String
+  response  Json
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([key, userId])
+  @@index([expiresAt])
+  @@map("idempotency_keys")
 }

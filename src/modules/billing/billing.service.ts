@@ -1,6 +1,20 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { User } from '@prisma/client';
+import { User, UserRole } from '@prisma/client';
+
+/** Escape a value for safe inclusion in a CSV cell. */
+function csvCell(value: string | number | null | undefined): string {
+  const str = value == null ? '' : String(value);
+  // Wrap in quotes if the value contains a comma, quote, or newline
+  if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+function buildCsvRow(cells: (string | number | null | undefined)[]): string {
+  return cells.map(csvCell).join(',');
+}
 
 @Injectable()
 export class BillingService {
@@ -103,5 +117,56 @@ export class BillingService {
     ].join('\n');
 
     return csvContent;
+  }
+
+  /**
+   * Export billing history as a CSV.
+   *
+   * Scoping rules:
+   *   - COMPANY: only their own engagements (filtered by stellarAddress)
+   *   - ADMIN:   all engagements in the system
+   *
+   * Columns (acceptance criteria): date, engagement reference, amount, status
+   */
+  async exportBillingHistory(
+    requestingUser: User,
+    fromDate?: Date,
+    toDate?: Date,
+  ): Promise<string> {
+    const isAdmin = requestingUser.role === UserRole.ADMIN;
+
+    const now = new Date();
+    const startDate = fromDate ?? new Date(now.getFullYear(), now.getMonth(), 1);
+    const endDate =
+      toDate ?? new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+
+    const where: Parameters<typeof this.prisma.engagement.findMany>[0]['where'] = {
+      createdAt: { gte: startDate, lte: endDate },
+      // Admins see everything; companies see only their own
+      ...(!isAdmin && { companyAddress: requestingUser.stellarAddress }),
+    };
+
+    const engagements = await this.prisma.engagement.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const CSV_HEADER = buildCsvRow([
+      'Date',
+      'Engagement Reference',
+      'Amount (stroops)',
+      'Status',
+    ]);
+
+    const rows = engagements.map((e) =>
+      buildCsvRow([
+        e.createdAt.toISOString(),
+        e.id,
+        e.totalAmount.toString(),
+        e.status,
+      ]),
+    );
+
+    return [CSV_HEADER, ...rows].join('\n');
   }
 }

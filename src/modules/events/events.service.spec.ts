@@ -215,7 +215,7 @@ describe('EventsService', () => {
         engagementId,
         status: 'COMPLETED',
         timestamp: expect.any(String),
-      });
+      }, { userId: undefined, secret: undefined });
     });
   });
 
@@ -259,7 +259,7 @@ describe('EventsService', () => {
         engagementId,
         status: 'DISPUTED',
         timestamp: expect.any(String),
-      });
+      }, { userId: undefined, secret: undefined });
     });
   });
 
@@ -303,7 +303,7 @@ describe('EventsService', () => {
         engagementId,
         status: 'COMPLETED',
         timestamp: expect.any(String),
-      });
+      }, { userId: undefined, secret: undefined });
     });
 
     it('should mark milestone as resolved, sync engagement, notify company and recruiter, and dispatch webhook for rejected dispute', async () => {
@@ -345,7 +345,7 @@ describe('EventsService', () => {
         engagementId,
         status: 'IN_PROGRESS',
         timestamp: expect.any(String),
-      });
+      }, { userId: undefined, secret: undefined });
     });
   });
 
@@ -386,7 +386,7 @@ describe('EventsService', () => {
         engagementId,
         status: 'REPLACEMENT_REQUESTED',
         timestamp: expect.any(String),
-      });
+      }, { userId: undefined, secret: undefined });
     });
   });
 
@@ -423,7 +423,7 @@ describe('EventsService', () => {
         engagementId,
         status: 'CANCELLED',
         timestamp: expect.any(String),
-      });
+      }, { userId: undefined, secret: undefined });
     });
   });
 

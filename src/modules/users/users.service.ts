@@ -1,21 +1,25 @@
-import { Injectable, NotFoundException, BadRequestException, Optional } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
 import { NotificationType } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { S3Service } from '../../common/s3/s3.service';
+import { CacheService } from '../../common/cache/cache.service';
 import { UpdatePreferencesDto } from './dto/update-preferences.dto';
 import { PublicUserDto } from './dto/public-user.dto';
 import { UserProfileDto } from './dto/user-profile.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
-import { CacheService } from '../../common/cache/cache.service';
 
 @Injectable()
 export class UsersService {
-  private static readonly PROFILE_TTL_S = 300;
+  private static readonly PROFILE_TTL_S = 60;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly s3Service: S3Service,
-    @Optional() private readonly cache?: CacheService,
+    private readonly cache: CacheService,
   ) {}
 
   async getPreferences(userId: string) {
@@ -78,10 +82,15 @@ export class UsersService {
     return user;
   }
 
-  async updateProfile(userId: string, dto: UpdateProfileDto): Promise<UserProfileDto> {
+  async updateProfile(
+    userId: string,
+    dto: UpdateProfileDto,
+  ): Promise<UserProfileDto> {
     // Prevent stellarAddress modification
     if (dto.stellarAddress !== undefined) {
-      throw new BadRequestException('stellarAddress is immutable and cannot be updated');
+      throw new BadRequestException(
+        'stellarAddress is immutable and cannot be updated',
+      );
     }
 
     const user = await this.prisma.user.update({
@@ -104,7 +113,24 @@ export class UsersService {
     return user;
   }
 
-  async updateAvatar(userId: string, avatarUrl: string): Promise<UserProfileDto> {
+  async getAvatarUploadUrl(userId: string, contentType: string): Promise<{ uploadUrl: string; key: string }> {
+    const ext = contentType === 'image/png' ? 'png' : 'jpg';
+    const key = `avatars/${userId}/${Date.now()}.${ext}`;
+    const uploadUrl = await this.s3Service.getPresignedUploadUrl(key, contentType);
+    // Store the key on the user record so the CDN URL is available after upload
+    const cdnBase = process.env.S3_CDN_URL || process.env.S3_ENDPOINT;
+    const avatarUrl = `${cdnBase}/${key}`;
+    const existing = await this.prisma.user.findUnique({ where: { id: userId }, select: { avatarUrl: true } });
+    // Note: old avatar key is not deleted here — cleanup of orphaned objects should
+    // be handled by a scheduled S3 lifecycle rule or the s3-cleanup service.
+    await this.prisma.user.update({ where: { id: userId }, data: { avatarUrl } });
+    return { uploadUrl, key };
+  }
+
+  async updateAvatar(
+    userId: string,
+    avatarUrl: string,
+  ): Promise<UserProfileDto> {
     const user = await this.prisma.user.update({
       where: { id: userId },
       data: { avatarUrl },
@@ -121,30 +147,29 @@ export class UsersService {
     return user;
   }
 
-  async uploadAvatar(userId: string, file: Express.Multer.File): Promise<UserProfileDto> {
-    // Validate file type
+  async uploadAvatar(
+    userId: string,
+    file: Express.Multer.File,
+  ): Promise<UserProfileDto> {
     const allowedMimeTypes = ['image/jpeg', 'image/png', 'image/jpg'];
     if (!allowedMimeTypes.includes(file.mimetype)) {
-      throw new BadRequestException('Invalid file type. Only JPEG and PNG are allowed.');
+      throw new BadRequestException(
+        'Invalid file type. Only JPEG and PNG are allowed.',
+      );
     }
 
-    // Validate file size (2 MB = 2 * 1024 * 1024 bytes)
     const maxSize = 2 * 1024 * 1024;
     if (file.size > maxSize) {
       throw new BadRequestException('File size exceeds 2 MB limit.');
     }
 
-    // Generate unique key for S3
     const fileExtension = file.mimetype === 'image/png' ? 'png' : 'jpg';
     const key = `avatars/${userId}/${Date.now()}.${fileExtension}`;
 
-    // Upload to S3
     await this.s3Service.uploadFile(key, file.buffer, file.mimetype);
 
-    // Generate CDN URL (assuming S3 endpoint is the CDN URL)
     const cdnUrl = `${process.env.S3_CDN_URL || process.env.S3_ENDPOINT}/${key}`;
 
-    // Update user's avatar URL
     return this.updateAvatar(userId, cdnUrl);
   }
 }

@@ -1,8 +1,10 @@
 import { Injectable, NotFoundException, Logger, UnprocessableEntityException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
-import { MilestoneStatus, NotificationType } from '@prisma/client';
+import { S3Service } from '../../common/s3/s3.service';
+import { MilestoneKind, MilestoneStatus, NotificationType } from '@prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
+import { BulkMilestoneItemDto } from './dto/bulk-create-milestones.dto';
 
 @Injectable()
 export class MilestonesService {
@@ -12,6 +14,7 @@ export class MilestonesService {
     private readonly prisma: PrismaService,
     private readonly stellar: StellarService,
     private readonly notifications: NotificationsService,
+    private readonly s3: S3Service,
   ) {}
 
   async findByEngagement(engagementId: string) {
@@ -94,6 +97,78 @@ export class MilestonesService {
       unlockable: false,
       estimatedUnlockAt: milestone.unlockEstimatedAt,
     };
+  }
+
+  // ----------------------------------------------------------
+  // BULK CREATE (Issue #172)
+  // ----------------------------------------------------------
+
+  /**
+   * Appends a batch of milestones to an engagement in a single transactional
+   * pass. The batch's paymentPercent values must sum to exactly 100
+   * (enforced by @MilestonesSum100() on BulkCreateMilestonesDto — the same
+   * validator used for single-call engagement creation).
+   */
+  async bulkCreate(engagementId: string, items: BulkMilestoneItemDto[], user: any) {
+    const engagement = await this.prisma.engagement.findUnique({ where: { id: engagementId } });
+    if (!engagement) throw new NotFoundException(`Engagement ${engagementId} not found`);
+
+    if (user?.role !== 'ADMIN' && engagement.companyAddress !== user?.stellarAddress) {
+      throw new ForbiddenException('Only the company party may add milestones to this engagement');
+    }
+
+    const lastMilestone = await this.prisma.milestone.findFirst({
+      where: { engagementId },
+      orderBy: { milestoneIndex: 'desc' },
+    });
+    const startIndex = lastMilestone ? lastMilestone.milestoneIndex + 1 : 0;
+
+    const currentLedger = await this.stellar.getLatestLedger();
+
+    const milestoneData = items.map((item, offset) => {
+      const isRetention = item.kind === 'RETENTION';
+      const validAfterLedger = isRetention && item.retentionDays
+        ? currentLedger + item.retentionDays * 17_280
+        : null;
+      const unlockEstimatedAt = validAfterLedger
+        ? this.stellar.ledgerToDateTime(validAfterLedger, currentLedger)
+        : null;
+
+      return {
+        engagementId,
+        milestoneIndex: startIndex + offset,
+        name: item.name,
+        kind: item.kind as MilestoneKind,
+        paymentPercent: item.paymentPercent,
+        retentionDays: isRetention ? (item.retentionDays ?? null) : null,
+        validAfterLedger,
+        unlockEstimatedAt,
+        status: isRetention ? MilestoneStatus.LOCKED : MilestoneStatus.PENDING,
+      };
+    });
+
+    return this.prisma.$transaction(async (tx) => {
+      const created = [];
+      for (const data of milestoneData) {
+        created.push(await tx.milestone.create({ data }));
+      }
+
+      for (const m of created) {
+        if (m.kind === MilestoneKind.RETENTION && m.unlockEstimatedAt && m.validAfterLedger) {
+          await tx.retentionSchedule.create({
+            data: {
+              engagementId,
+              milestoneIndex: m.milestoneIndex,
+              validAfterLedger: m.validAfterLedger,
+              unlockAt: m.unlockEstimatedAt,
+              notifyAt: new Date(m.unlockEstimatedAt.getTime() - 3 * 24 * 60 * 60 * 1000),
+            },
+          });
+        }
+      }
+
+      return created;
+    });
   }
 
   // ----------------------------------------------------------
@@ -408,6 +483,40 @@ export class MilestonesService {
   // ----------------------------------------------------------
   // ADMIN OVERRIDES
   // ----------------------------------------------------------
+
+  async uploadEvidence(
+    engagementId: string,
+    milestoneIndex: number,
+    file: Express.Multer.File,
+    user: any,
+  ) {
+    const milestone = await this.prisma.milestone.findUnique({
+      where: { engagementId_milestoneIndex: { engagementId, milestoneIndex } },
+      include: { engagement: true },
+    });
+    if (!milestone) {
+      throw new NotFoundException(`Milestone ${milestoneIndex} not found on engagement ${engagementId}`);
+    }
+    this.checkPartyAccess((milestone as any).engagement, user);
+
+    const key = `evidence/${engagementId}/${milestoneIndex}/${user.id}/${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    await this.s3.uploadFile(key, file.buffer, file.mimetype);
+    const s3Url = await this.s3.getPresignedUrl(key);
+
+    const evidence = await this.prisma.disputeEvidence.create({
+      data: {
+        milestoneId: milestone.id,
+        uploadedBy: user.id,
+        fileName: file.originalname,
+        fileSize: file.size,
+        mimeType: file.mimetype,
+        s3Path: key,
+        s3Url,
+      },
+    });
+
+    return { id: evidence.id, fileName: evidence.fileName, s3Url };
+  }
 
   async updateMilestoneStatusByAdmin(
     engagementId: string,

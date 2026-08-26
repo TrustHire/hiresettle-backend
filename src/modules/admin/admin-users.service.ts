@@ -13,6 +13,7 @@ const USER_SELECT = {
   company: true,
   role: true,
   deactivatedAt: true,
+  rateLimitOverride: true,
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.UserSelect;
@@ -145,67 +146,156 @@ export class AdminUsersService {
     const cached = await this.cache.get<object>(AdminUsersService.METRICS_CACHE_KEY);
     if (cached) return cached;
 
-    const engagementStatusCountsQuery = this.prisma.engagement.groupBy({
-      by: ['status'],
-      _count: { _all: true },
-    });
-    const engagementAmountsQuery = this.prisma.engagement.aggregate({
-      _sum: {
-        totalAmount: true,
-        releasedAmount: true,
-      },
-    });
-    const activeDisputesCountQuery = this.prisma.milestone.count({
-      where: { status: MilestoneStatus.DISPUTED },
-    });
-    const userRoleCountsQuery = this.prisma.user.groupBy({
-      by: ['role'],
-      _count: { _all: true },
-    });
-
+    // Execute all metrics queries in parallel for better performance
     const [
-      engagementStatusCounts,
-      engagementAmounts,
-      activeDisputesCount,
-      userRoleCounts,
-    ] = await this.prisma.$transaction([
-      engagementStatusCountsQuery,
-      engagementAmountsQuery,
-      activeDisputesCountQuery,
-      userRoleCountsQuery,
+      engagementsByStatus,
+      milestoneVolume,
+      releasedAmount,
+      activeDisputes,
+      usersByRole,
+      totalEngagements,
+      totalDisputedMilestones,
+      arbiters,
+    ] = await Promise.all([
+      // Total engagements by status
+      this.prisma.engagement.groupBy({
+        by: ['status'],
+        _count: true,
+      }),
+      
+      // Total milestone volume (sum of totalAmount across all engagements)
+      this.prisma.engagement.aggregate({
+        _sum: {
+          totalAmount: true,
+        },
+      }),
+      
+      // Total released amount across all engagements
+      this.prisma.engagement.aggregate({
+        _sum: {
+          releasedAmount: true,
+        },
+      }),
+      
+      // Active disputes count (milestones with DISPUTED status)
+      this.prisma.milestone.count({
+        where: { status: MilestoneStatus.DISPUTED },
+      }),
+      
+      // Registered users by role
+      this.prisma.user.groupBy({
+        by: ['role'],
+        _count: true,
+        where: {
+          deactivatedAt: null, // Only count active users
+        },
+      }),
+      
+      // Total engagements (for backward compatibility)
+      this.prisma.engagement.count(),
+      
+      // Total disputed milestones (for backward compatibility)
+      this.prisma.milestone.count({
+        where: { status: MilestoneStatus.DISPUTED },
+      }),
+      
+      // Get arbiters with active disputes count (for backward compatibility)
+      this.prisma.user.findMany({
+        where: { role: UserRole.ARBITER },
+        include: {
+          arbiterEngagements: {
+            include: {
+              milestones: {
+                where: { status: MilestoneStatus.DISPUTED },
+              },
+            },
+          },
+        },
+      }),
     ]);
 
-    const engagementsByStatus = Object.fromEntries(
-      Object.values(EngagementStatus).map((status) => [status, 0]),
-    ) as Record<EngagementStatus, number>;
-    for (const row of engagementStatusCounts) {
-      engagementsByStatus[row.status] = row._count._all;
-    }
+    // Calculate locked amount (totalAmount - releasedAmount)
+    const totalVolume = milestoneVolume._sum.totalAmount || BigInt(0);
+    const totalReleased = releasedAmount._sum.releasedAmount || BigInt(0);
+    const lockedAmount = totalVolume - totalReleased;
 
-    const usersByRole = Object.fromEntries(
-      Object.values(UserRole).map((role) => [role, 0]),
-    ) as Record<UserRole, number>;
-    for (const row of userRoleCounts) {
-      usersByRole[row.role] = row._count._all;
-    }
+    // Format engagements by status
+    const engagementsByStatusFormatted = engagementsByStatus.reduce((acc, item) => {
+      acc[item.status] = item._count;
+      return acc;
+    }, {} as Record<string, number>);
 
-    const totalMilestoneVolume = engagementAmounts._sum.totalAmount ?? 0n;
-    const releasedAmount = engagementAmounts._sum.releasedAmount ?? 0n;
-    const lockedAmount = totalMilestoneVolume - releasedAmount;
+    // Format users by role
+    const usersByRoleFormatted = usersByRole.reduce((acc, item) => {
+      acc[item.role] = item._count;
+      return acc;
+    }, {} as Record<string, number>);
+
+    // Format arbiter workload (for backward compatibility)
+    const arbiterWorkload = arbiters.map((arbiter) => {
+      const activeDisputes = arbiter.arbiterEngagements.reduce((count, eng) => {
+        return count + eng.milestones.length;
+      }, 0);
+
+      return {
+        arbiterId: arbiter.id,
+        name: arbiter.name,
+        email: arbiter.email,
+        activeDisputes,
+      };
+    });
 
     const result = {
-      engagementsByStatus,
-      totalMilestoneVolume: totalMilestoneVolume.toString(),
-      releasedAmount: releasedAmount.toString(),
-      lockedAmount: lockedAmount.toString(),
-      activeDisputesCount,
-      usersByRole,
+      // New metrics as requested
+      engagements: {
+        byStatus: engagementsByStatusFormatted,
+        total: totalEngagements,
+      },
+      milestones: {
+        totalVolume: totalVolume.toString(),
+        releasedAmount: totalReleased.toString(),
+        lockedAmount: lockedAmount.toString(),
+      },
+      disputes: {
+        activeCount: activeDisputes,
+      },
+      users: {
+        byRole: usersByRoleFormatted,
+        totalActive: Object.values(usersByRoleFormatted).reduce((sum, count) => sum + count, 0),
+      },
+      // Backward compatible metrics
+      totalEngagements,
+      totalDisputedMilestones,
+      arbiterWorkload,
     };
+    
     await this.cache.set(AdminUsersService.METRICS_CACHE_KEY, result, AdminUsersService.METRICS_TTL_S);
     return result;
   }
 
   async invalidateMetricsCache(): Promise<void> {
     await this.cache.del(AdminUsersService.METRICS_CACHE_KEY);
+  }
+
+  async setRateLimitOverride(id: string, limit: number) {
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException('User not found');
+
+    return this.prisma.user.update({
+      where: { id },
+      data: { rateLimitOverride: limit },
+      select: USER_SELECT,
+    });
+  }
+
+  async clearRateLimitOverride(id: string) {
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException('User not found');
+
+    return this.prisma.user.update({
+      where: { id },
+      data: { rateLimitOverride: null },
+      select: USER_SELECT,
+    });
   }
 }

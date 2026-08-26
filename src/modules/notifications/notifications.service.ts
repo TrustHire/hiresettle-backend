@@ -1,8 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { NotificationType, Notification } from '@prisma/client';
+import { MetricsService } from '../../metrics/metrics.service';
 
 @Injectable()
 export class NotificationsService {
@@ -13,6 +16,8 @@ export class NotificationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    @Optional() @InjectQueue('email') private readonly emailQueue?: Queue,
+    @Optional() private readonly metrics?: MetricsService,
   ) {
     this.transporter = nodemailer.createTransport({
       host: this.config.get('SMTP_HOST'),
@@ -30,13 +35,15 @@ export class NotificationsService {
       this.userConnections.set(userId, []);
     }
     this.userConnections.get(userId)!.push(res);
-    
+    this.metrics?.sseActiveConnections.inc();
+
     res.on('close', () => {
       const connections = this.userConnections.get(userId);
       if (connections) {
         const index = connections.indexOf(res);
         if (index > -1) {
           connections.splice(index, 1);
+          this.metrics?.sseActiveConnections.dec();
         }
         if (connections.length === 0) {
           this.userConnections.delete(userId);
@@ -51,6 +58,7 @@ export class NotificationsService {
       const index = connections.indexOf(res);
       if (index > -1) {
         connections.splice(index, 1);
+        this.metrics?.sseActiveConnections.dec();
       }
       if (connections.length === 0) {
         this.userConnections.delete(userId);
@@ -105,20 +113,35 @@ export class NotificationsService {
         data: { userId, type, title, message, data: data ?? {} },
       });
 
-      this.pushToConnections(notification);
+      const pref = await this.prisma.notificationPreference.findUnique({
+        where: { userId_type: { userId, type } },
+      });
+      const sseEnabled = pref ? pref.sseEnabled : true;
+
+      if (sseEnabled) {
+        this.pushToConnections(notification);
+      }
 
       if (user.email) {
-        const pref = await this.prisma.notificationPreference.findUnique({
-          where: { userId_type: { userId, type } },
-        });
         const emailEnabled = pref ? pref.emailEnabled : true;
 
         if (emailEnabled) {
-          await this.sendEmail(user.email, title, message, type, data);
-          await this.prisma.notification.update({
-            where: { id: notification.id },
-            data: { emailSent: true },
-          });
+          if (this.emailQueue) {
+            await this.emailQueue.add('send', {
+              to: user.email,
+              subject: title,
+              message,
+              type,
+              notificationId: notification.id,
+              data,
+            });
+          } else {
+            await this.sendEmail(user.email, title, message, type, data);
+            await this.prisma.notification.update({
+              where: { id: notification.id },
+              data: { emailSent: true },
+            });
+          }
         }
       }
 
@@ -126,6 +149,32 @@ export class NotificationsService {
     } catch (error) {
       this.logger.error(`Failed to notify user ${userId}`, error.message);
     }
+  }
+
+  async getPreferences(userId: string) {
+    const saved = await this.prisma.notificationPreference.findMany({ where: { userId } });
+    return Object.values(NotificationType).map((type) => {
+      const pref = saved.find((p) => p.type === type);
+      return {
+        type,
+        emailEnabled: pref ? pref.emailEnabled : true,
+        inAppEnabled: pref ? pref.inAppEnabled : true,
+        sseEnabled: pref ? pref.sseEnabled : true,
+      };
+    });
+  }
+
+  async updatePreferences(
+    userId: string,
+    items: { type: NotificationType; emailEnabled?: boolean; inAppEnabled?: boolean; sseEnabled?: boolean }[],
+  ) {
+    return Promise.all(
+      items.map(({ type, ...changes }) => this.prisma.notificationPreference.upsert({
+        where: { userId_type: { userId, type } },
+        create: { userId, type, ...changes },
+        update: changes,
+      })),
+    );
   }
 
   async findForUser(userId: string, unreadOnly = false, page = 1, limit = 20) {
@@ -141,7 +190,7 @@ export class NotificationsService {
     const total = await this.prisma.notification.count({ where });
     const unreadCount = await this.prisma.notification.count({ where: { userId, read: false } });
 
-    return { data: notifications, meta: { total, page, limit, unreadCount } };
+    return { data: notifications, meta: { total, page, limit, totalPages: Math.ceil(total / limit), unreadCount } };
   }
 
   async getUnreadCount(userId: string) {
@@ -159,6 +208,31 @@ export class NotificationsService {
     return this.prisma.notification.updateMany({
       where: { userId, read: false },
       data: { read: true },
+    });
+  }
+
+  async remove(notificationId: string, userId: string) {
+    const { count } = await this.prisma.notification.deleteMany({
+      where: { id: notificationId, userId },
+    });
+    if (count === 0) throw new NotFoundException(`Notification ${notificationId} not found`);
+    return { success: true };
+  }
+
+  async sendEmailDirect(
+    to: string,
+    subject: string,
+    message: string,
+    type: NotificationType,
+    data?: Record<string, any>,
+  ) {
+    return this.sendEmail(to, subject, message, type, data);
+  }
+
+  async markEmailSent(notificationId: string) {
+    await this.prisma.notification.update({
+      where: { id: notificationId },
+      data: { emailSent: true },
     });
   }
 
