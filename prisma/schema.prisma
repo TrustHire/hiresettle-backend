@@ -165,6 +165,7 @@ model Engagement {
   txHash           String?           // on-chain creation tx hash
   createdLedger    Int?              // ledger sequence at creation
   templateVersionId String?          // specific EngagementTemplateVersion used to create this engagement, if any
+  archivedAt       DateTime?         // soft-archive timestamp — excluded from default list views
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
@@ -182,6 +183,7 @@ model Engagement {
   @@index([companyAddress])
   @@index([recruiterAddress])
   @@index([status, createdAt])
+  @@index([archivedAt])
   @@map("engagements")
 }
 
