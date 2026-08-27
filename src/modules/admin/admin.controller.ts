@@ -43,6 +43,8 @@ import { SecurityEventsService } from '../../common/security-events/security-eve
 import { ListSecurityEventsDto } from '../../common/security-events/dto/list-security-events.dto';
 import { GdprService } from '../users/gdpr.service';
 import { AuthService, RequestMeta } from '../auth/auth.service';
+import { ApiKeysService } from '../auth/api-keys.service';
+import { CreateApiKeyDto } from '../auth/dto/create-api-key.dto';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -61,6 +63,7 @@ export class AdminController {
     private readonly gdpr: GdprService,
     private readonly adminWebhooks: AdminWebhooksService,
     private readonly authService: AuthService,
+    private readonly apiKeys: ApiKeysService,
   ) {}
 
   @Get('users')
@@ -376,15 +379,36 @@ export class AdminController {
     return this.adminUsers.clearRateLimitOverride(id);
   }
 
-  @Patch('users/:id/verification')
-  @ApiOperation({ summary: 'Set or clear company verification (ADMIN only)' })
-  @ApiParam({ name: 'id', description: 'Company user ID' })
-  @ApiResponse({ status: 200, description: 'Company verification updated' })
-  @ApiResponse({ status: 400, description: 'User is not a company' })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
-  @ApiResponse({ status: 403, description: 'Forbidden' })
+  // ────────────────────────────────────────────────────────────────
+  // Issue #238 — API keys for server-to-server integrations
+  // ────────────────────────────────────────────────────────────────
+
+  @Post('api-keys')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Create an API key for a user (ADMIN only). Raw key is returned once and never again.',
+  })
+  @ApiResponse({ status: 201, description: 'API key created; raw key included in response once' })
   @ApiResponse({ status: 404, description: 'User not found' })
-  setCompanyVerification(@Param('id') id: string, @Body() dto: SetCompanyVerificationDto) {
-    return this.adminUsers.setCompanyVerification(id, dto.verified);
+  createApiKey(@Body() dto: CreateApiKeyDto) {
+    return this.apiKeys.create(dto);
+  }
+
+  @Get('api-keys')
+  @ApiOperation({ summary: 'List API keys (optionally filtered by userId). Hashes are never returned.' })
+  @ApiQuery({ name: 'userId', required: false, description: 'Filter by owning user ID' })
+  @ApiResponse({ status: 200, description: 'API key metadata list' })
+  listApiKeys(@Query('userId') userId?: string) {
+    return this.apiKeys.list(userId);
+  }
+
+  @Delete('api-keys/:id')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Revoke an API key (ADMIN only)' })
+  @ApiParam({ name: 'id', description: 'API key ID' })
+  @ApiResponse({ status: 200, description: 'API key revoked' })
+  @ApiResponse({ status: 404, description: 'API key not found' })
+  revokeApiKey(@Param('id') id: string) {
+    return this.apiKeys.revoke(id);
   }
 }

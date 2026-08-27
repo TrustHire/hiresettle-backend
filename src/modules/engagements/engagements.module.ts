@@ -7,9 +7,10 @@ import { PrismaModule } from '../../common/prisma/prisma.module';
 import { AuditLogService } from './audit-log.service';
 import { IdempotencyModule } from '../../common/idempotency/idempotency.module';
 import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
+import { AuthModule } from '../auth/auth.module';
 
 @Module({
-  imports: [NotificationsModule, AdminModule, PrismaModule, IdempotencyModule],
+  imports: [NotificationsModule, AdminModule, PrismaModule, IdempotencyModule, AuthModule],
   controllers: [EngagementsController],
   providers: [EngagementsService, AuditLogService, IdempotencyInterceptor],
   exports: [EngagementsService, AuditLogService],
