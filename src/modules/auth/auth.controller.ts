@@ -1,9 +1,14 @@
-import { Controller, Post, Get, Patch, Delete, Param, Body, Query, HttpCode, HttpStatus, UseGuards, Request, Req } from '@nestjs/common';
+import {
+  Controller, Post, Get, Patch, Delete, Param, Body, Query, HttpCode, HttpStatus,
+  UseGuards, Request, Req, Res, UnauthorizedException,
+} from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiResponse, ApiQuery } from '@nestjs/swagger';
-import { Request as ExpressRequest } from 'express';
+import { ConfigService } from '@nestjs/config';
+import { ThrottlerGuard } from '@nestjs/throttler';
+import { Request as ExpressRequest, Response } from 'express';
+import { randomBytes } from 'crypto';
 import { AuthService, RequestMeta } from './auth.service';
 import { LoginDto } from './dto/login.dto';
-import { RegisterDto } from './dto/register.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { RevokeSessionDto } from './dto/revoke-session.dto';
@@ -18,7 +23,77 @@ function requestMeta(req: ExpressRequest): RequestMeta {
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) { }
+  /** Short-lived OAuth CSRF states (in-memory; sufficient for single-instance / sticky sessions). */
+  private readonly oauthStates = new Map<string, number>();
+
+  constructor(
+    private readonly authService: AuthService,
+    private readonly config: ConfigService,
+  ) { }
+
+  private createOAuthState(): string {
+    const state = randomBytes(24).toString('hex');
+    this.oauthStates.set(state, Date.now() + 10 * 60 * 1000);
+    for (const [key, expiresAt] of this.oauthStates) {
+      if (expiresAt < Date.now()) this.oauthStates.delete(key);
+    }
+    return state;
+  }
+
+  private consumeOAuthState(state: string | undefined): boolean {
+    if (!state) return false;
+    const expiresAt = this.oauthStates.get(state);
+    this.oauthStates.delete(state);
+    return !!expiresAt && expiresAt >= Date.now();
+  }
+
+  @Get('google')
+  @UseGuards(ThrottlerGuard)
+  @RateLimit(20, 60)
+  @ApiOperation({ summary: 'Start Google OAuth2 login (redirects to Google)' })
+  @ApiResponse({ status: 302, description: 'Redirect to Google authorization' })
+  @ApiResponse({ status: 400, description: 'Google OAuth is not configured' })
+  @ApiResponse({ status: 429, description: 'Too many requests' })
+  googleAuth(@Res() res: Response) {
+    const state = this.createOAuthState();
+    const url = this.authService.getGoogleAuthUrl(state);
+    return res.redirect(url);
+  }
+
+  @Get('google/callback')
+  @UseGuards(ThrottlerGuard)
+  @RateLimit(20, 60)
+  @ApiOperation({ summary: 'Google OAuth2 callback — issues standard access/refresh JWTs' })
+  @ApiQuery({ name: 'code', required: true })
+  @ApiQuery({ name: 'state', required: true })
+  @ApiResponse({ status: 200, description: 'Login successful, JWT pair returned (or redirected to frontend)' })
+  @ApiResponse({ status: 401, description: 'OAuth failed or invalid state' })
+  async googleCallback(
+    @Query('code') code: string,
+    @Query('state') state: string,
+    @Req() req: ExpressRequest,
+    @Res() res: Response,
+  ) {
+    if (!this.consumeOAuthState(state)) {
+      throw new UnauthorizedException('Invalid or expired OAuth state');
+    }
+    if (!code) {
+      throw new UnauthorizedException('Missing authorization code');
+    }
+
+    const profile = await this.authService.exchangeGoogleCode(code);
+    const tokens = await this.authService.loginWithGoogle(profile, requestMeta(req));
+
+    const frontendRedirect = this.config.get<string>('GOOGLE_OAUTH_SUCCESS_REDIRECT');
+    if (frontendRedirect) {
+      const redirectUrl = new URL(frontendRedirect);
+      redirectUrl.searchParams.set('accessToken', tokens.accessToken);
+      redirectUrl.searchParams.set('refreshToken', tokens.refreshToken);
+      return res.redirect(redirectUrl.toString());
+    }
+
+    return res.status(HttpStatus.OK).json(tokens);
+  }
 
   @Get('challenge')
   @ApiOperation({ summary: 'Get a challenge nonce for a Stellar address (5 min TTL)' })

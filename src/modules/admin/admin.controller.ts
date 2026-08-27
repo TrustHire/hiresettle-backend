@@ -37,15 +37,14 @@ import { ListUsersDto } from './dto/list-users.dto';
 import { AssignArbiterDto } from './dto/assign-arbiter.dto';
 import { AuditLogsQueryDto } from './dto/audit-logs.dto';
 import { SetRateLimitOverrideDto } from './dto/set-rate-limit-override.dto';
+import { SetCompanyVerificationDto } from './dto/set-company-verification.dto';
 import { CacheService } from '../../common/cache/cache.service';
 import { SecurityEventsService } from '../../common/security-events/security-events.service';
 import { ListSecurityEventsDto } from '../../common/security-events/dto/list-security-events.dto';
 import { GdprService } from '../users/gdpr.service';
 import { AuthService, RequestMeta } from '../auth/auth.service';
-import { MaintenanceModeService } from '../../common/maintenance/maintenance-mode.service';
-import { AllowDuringMaintenance } from '../../common/maintenance/maintenance-mode.decorator';
-import { SetMaintenanceModeDto } from './dto/set-maintenance-mode.dto';
-import { RevenueDashboardDto } from './dto/revenue-dashboard.dto';
+import { ApiKeysService } from '../auth/api-keys.service';
+import { CreateApiKeyDto } from '../auth/dto/create-api-key.dto';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -64,7 +63,7 @@ export class AdminController {
     private readonly gdpr: GdprService,
     private readonly adminWebhooks: AdminWebhooksService,
     private readonly authService: AuthService,
-    private readonly maintenanceMode: MaintenanceModeService,
+    private readonly apiKeys: ApiKeysService,
   ) {}
 
   @Get('maintenance-mode')
@@ -327,6 +326,22 @@ export class AdminController {
     return this.auditLogs.queryAuditLogs(dto);
   }
 
+  @Get('audit-log/export')
+  @ApiOperation({ summary: 'Export the full audit trail as CSV (ADMIN only)' })
+  @ApiQuery({ name: 'from', required: true, description: 'ISO 8601 start date' })
+  @ApiQuery({ name: 'to', required: true, description: 'ISO 8601 end date' })
+  @ApiResponse({ status: 200, description: 'Audit trail CSV stream' })
+  @ApiResponse({ status: 400, description: 'Invalid date range' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  streamAuditLogExport(
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Res() res: Response,
+  ) {
+    return this.auditLogs.streamAuditLogCsv(from, to, res);
+  }
+
   // ────────────────────────────────────────────────────────────────
   // Issue #97 — GDPR data deletion queue
   // ────────────────────────────────────────────────────────────────
@@ -388,5 +403,38 @@ export class AdminController {
   @ApiResponse({ status: 404, description: 'User not found' })
   clearRateLimitOverride(@Param('id') id: string) {
     return this.adminUsers.clearRateLimitOverride(id);
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Issue #238 — API keys for server-to-server integrations
+  // ────────────────────────────────────────────────────────────────
+
+  @Post('api-keys')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Create an API key for a user (ADMIN only). Raw key is returned once and never again.',
+  })
+  @ApiResponse({ status: 201, description: 'API key created; raw key included in response once' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  createApiKey(@Body() dto: CreateApiKeyDto) {
+    return this.apiKeys.create(dto);
+  }
+
+  @Get('api-keys')
+  @ApiOperation({ summary: 'List API keys (optionally filtered by userId). Hashes are never returned.' })
+  @ApiQuery({ name: 'userId', required: false, description: 'Filter by owning user ID' })
+  @ApiResponse({ status: 200, description: 'API key metadata list' })
+  listApiKeys(@Query('userId') userId?: string) {
+    return this.apiKeys.list(userId);
+  }
+
+  @Delete('api-keys/:id')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Revoke an API key (ADMIN only)' })
+  @ApiParam({ name: 'id', description: 'API key ID' })
+  @ApiResponse({ status: 200, description: 'API key revoked' })
+  @ApiResponse({ status: 404, description: 'API key not found' })
+  revokeApiKey(@Param('id') id: string) {
+    return this.apiKeys.revoke(id);
   }
 }

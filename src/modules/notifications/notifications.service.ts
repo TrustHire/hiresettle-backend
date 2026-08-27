@@ -6,6 +6,7 @@ import { Queue } from 'bullmq';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { NotificationType, Notification } from '@prisma/client';
 import { MetricsService } from '../../metrics/metrics.service';
+import { cursorPage } from '../../common/pagination/cursor-pagination';
 
 @Injectable()
 export class NotificationsService {
@@ -177,18 +178,24 @@ export class NotificationsService {
     );
   }
 
-  async findForUser(userId: string, unreadOnly = false, page = 1, limit = 20) {
+  async findForUser(userId: string, unreadOnly = false, page = 1, limit = 20, cursor?: string) {
     const where: any = { userId };
     if (unreadOnly) where.read = false;
 
     const notifications = await this.prisma.notification.findMany({
       where,
       orderBy: { createdAt: 'desc' },
-      skip: (page - 1) * limit,
-      take: limit,
+      ...(cursor
+        ? { cursor: { id: cursor }, skip: 1, take: limit + 1 }
+        : { skip: (page - 1) * limit, take: limit }),
     });
     const total = await this.prisma.notification.count({ where });
     const unreadCount = await this.prisma.notification.count({ where: { userId, read: false } });
+
+    if (cursor) {
+      const pageResult = cursorPage(notifications, limit);
+      return { data: pageResult.data, meta: { total, limit, unreadCount, nextCursor: pageResult.nextCursor } };
+    }
 
     return { data: notifications, meta: { total, page, limit, totalPages: Math.ceil(total / limit), unreadCount } };
   }

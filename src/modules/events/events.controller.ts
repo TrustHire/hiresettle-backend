@@ -29,6 +29,7 @@ export class EventsController {
   @ApiQuery({ name: 'processed', required: false, description: 'Filter by processed status (true | false)' })
   @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number (default 1)' })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page (default 20)' })
+  @ApiQuery({ name: 'cursor', required: false, type: String, description: 'ID of the last event from the previous page' })
   @ApiResponse({ status: 200, description: 'Events list retrieved' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Forbidden — ADMIN role required' })
@@ -38,10 +39,11 @@ export class EventsController {
     @Query('processed') processed?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
+    @Query('cursor') cursor?: string,
   ) {
     const processedFilter =
       processed === 'true' ? true : processed === 'false' ? false : undefined;
-    return this.eventsService.findAll(engagementId, eventName, processedFilter, page, limit);
+    return this.eventsService.findAll(engagementId, eventName, processedFilter, page, limit, cursor);
   }
 
   @Post('process-unprocessed')

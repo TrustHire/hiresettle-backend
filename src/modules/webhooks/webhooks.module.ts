@@ -6,12 +6,14 @@ import { WebhookSubscriptionsController } from './webhook-subscriptions.controll
 import { PrismaModule } from '../../common/prisma/prisma.module';
 import { IdempotencyModule } from '../../common/idempotency/idempotency.module';
 import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
+import { AuthModule } from '../auth/auth.module';
 
 @Module({
   imports: [
     BullModule.registerQueue({ name: 'webhook' }),
     PrismaModule,
     IdempotencyModule,
+    AuthModule,
   ],
   controllers: [WebhookSubscriptionsController],
   providers: [WebhooksService, WebhookSubscriptionsService, IdempotencyInterceptor],
