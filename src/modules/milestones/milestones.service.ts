@@ -362,6 +362,37 @@ export class MilestonesService {
     return updated;
   }
 
+  async bulkResolveDisputes(disputeIds: string[], resolution: string) {
+    const results = [];
+
+    for (const disputeId of disputeIds) {
+      try {
+        const milestone = await this.prisma.milestone.findUnique({
+          where: { id: disputeId },
+        });
+
+        if (!milestone) {
+          throw new NotFoundException(`Dispute ${disputeId} not found`);
+        }
+
+        const data = await this.resolveDisputeFlow(
+          milestone.engagementId,
+          milestone.milestoneIndex,
+          resolution,
+        );
+        results.push({ disputeId, success: true, data });
+      } catch (error) {
+        results.push({
+          disputeId,
+          success: false,
+          error: error instanceof Error ? error.message : 'Unable to resolve dispute',
+        });
+      }
+    }
+
+    return { results };
+  }
+
   // ----------------------------------------------------------
   // State update methods — called by EventsService
   // ----------------------------------------------------------

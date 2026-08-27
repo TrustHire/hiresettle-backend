@@ -519,6 +519,19 @@ export class EngagementsService {
       ]);
       if (!onChain) return;
 
+      const engagement = await this.prisma.engagement.findUnique({
+        where: { id: engagementId },
+      });
+      if (!engagement) return;
+
+      const releasedAmount = BigInt(onChain.released_amount ?? 0);
+      const { balance: escrowBalance } = await this.stellar.getBalance(
+        this.stellar.getContractId(),
+        engagement.tokenAddress,
+      );
+      const expectedEscrowBalance = engagement.totalAmount - releasedAmount;
+      const fundingShortfall = escrowBalance !== expectedEscrowBalance;
+
       const statusMap: Record<string, EngagementStatus> = {
         Active: EngagementStatus.ACTIVE,
         Completed: EngagementStatus.COMPLETED,
@@ -530,9 +543,34 @@ export class EngagementsService {
         where: { id: engagementId },
         data: {
           status: statusMap[onChain.status] ?? EngagementStatus.ACTIVE,
-          releasedAmount: BigInt(onChain.released_amount ?? 0),
+          releasedAmount,
+          escrowBalance,
+          fundingShortfall,
         },
       });
+
+      if (fundingShortfall && !engagement.fundingShortfall) {
+        const message =
+          `Engagement ${engagementId} has a funding shortfall. ` +
+          `Expected ${expectedEscrowBalance.toString()} stroops, ` +
+          `but the escrow contains ${escrowBalance.toString()} stroops.`;
+        await Promise.all([
+          this.notifications.notifyUser(
+            engagement.companyAddress,
+            NotificationType.FUNDING_SHORTFALL_DETECTED,
+            'Engagement funding shortfall detected',
+            message,
+            { engagementId, expectedEscrowBalance: expectedEscrowBalance.toString(), escrowBalance: escrowBalance.toString() },
+          ),
+          this.notifications.notifyUser(
+            engagement.recruiterAddress,
+            NotificationType.FUNDING_SHORTFALL_DETECTED,
+            'Engagement funding shortfall detected',
+            message,
+            { engagementId, expectedEscrowBalance: expectedEscrowBalance.toString(), escrowBalance: escrowBalance.toString() },
+          ),
+        ]);
+      }
 
       this.logger.log(`Synced engagement ${engagementId} from chain`);
     } catch (error) {
@@ -611,6 +649,7 @@ export class EngagementsService {
       ...engagement,
       totalAmount: engagement.totalAmount?.toString(),
       releasedAmount: engagement.releasedAmount?.toString(),
+      escrowBalance: engagement.escrowBalance?.toString() ?? null,
       milestones: engagement.milestones?.map((m: any) => ({
         ...m,
         paymentReleased: m.paymentReleased?.toString() ?? null,

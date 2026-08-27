@@ -5,6 +5,8 @@ import { ListSecurityEventsDto } from './dto/list-security-events.dto';
 
 export interface LogSecurityEventInput {
   userId?: string | null;
+  actorId?: string | null;
+  targetUserId?: string | null;
   action: SecurityEventAction;
   ip?: string | null;
   userAgent?: string | null;
@@ -19,6 +21,8 @@ export class SecurityEventsService {
     return this.prisma.securityEvent.create({
       data: {
         userId: input.userId ?? undefined,
+        actorId: input.actorId ?? undefined,
+        targetUserId: input.targetUserId ?? undefined,
         action: input.action,
         ip: input.ip ?? undefined,
         userAgent: input.userAgent ?? undefined,
