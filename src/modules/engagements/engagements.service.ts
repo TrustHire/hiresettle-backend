@@ -198,15 +198,20 @@ export class EngagementsService {
     limit?: number;
     sortBy?: string;       // one of ENGAGEMENT_SORTABLE_FIELDS
     sortOrder?: string;    // 'asc' | 'desc'
+    includeArchived?: boolean;
   }) {
     const {
       companyAddress, recruiterAddress, status, search, createdFrom, createdTo,
-      page = 1, limit = 20, sortBy, sortOrder,
+      page = 1, limit = 20, sortBy, sortOrder, includeArchived,
     } = filters;
 
     const where: any = {};
     if (companyAddress) where.companyAddress = companyAddress;
     if (recruiterAddress) where.recruiterAddress = recruiterAddress;
+
+    if (!includeArchived) {
+      where.archivedAt = null;
+    }
 
     if (status) {
       const statuses = status.split(',').map((s) => s.trim()) as EngagementStatus[];
@@ -604,6 +609,52 @@ export class EngagementsService {
     }
 
     return { message: 'Recusal request sent successfully' };
+  }
+
+  // ----------------------------------------------------------
+  // ARCHIVE / RESTORE
+  // ----------------------------------------------------------
+
+  async archive(engagementId: string) {
+    const engagement = await this.prisma.engagement.findUnique({
+      where: { id: engagementId },
+    });
+    if (!engagement) {
+      throw new NotFoundException(`Engagement ${engagementId} not found`);
+    }
+    if (engagement.archivedAt) {
+      throw new ConflictException(`Engagement ${engagementId} is already archived`);
+    }
+
+    const updated = await this.prisma.engagement.update({
+      where: { id: engagementId },
+      data: { archivedAt: new Date() },
+      include: { milestones: { orderBy: { milestoneIndex: 'asc' } } },
+    });
+
+    this.logger.log(`Engagement ${engagementId} archived`);
+    return this.serialize(updated);
+  }
+
+  async restore(engagementId: string) {
+    const engagement = await this.prisma.engagement.findUnique({
+      where: { id: engagementId },
+    });
+    if (!engagement) {
+      throw new NotFoundException(`Engagement ${engagementId} not found`);
+    }
+    if (!engagement.archivedAt) {
+      throw new ConflictException(`Engagement ${engagementId} is not archived`);
+    }
+
+    const updated = await this.prisma.engagement.update({
+      where: { id: engagementId },
+      data: { archivedAt: null },
+      include: { milestones: { orderBy: { milestoneIndex: 'asc' } } },
+    });
+
+    this.logger.log(`Engagement ${engagementId} restored`);
+    return this.serialize(updated);
   }
 
   private serialize(engagement: any) {

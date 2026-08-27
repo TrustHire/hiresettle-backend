@@ -70,7 +70,7 @@ export class RecruitersService {
 
     // Get all engagements for recruiter
     const engagements = await this.prisma.engagement.findMany({
-      where: { recruiterAddress },
+      where: { recruiterAddress, archivedAt: null },
       include: { milestones: true },
     });
 
@@ -126,7 +126,7 @@ export class RecruitersService {
 
     const recruiterAddress = user.stellarAddress;
 
-    const where = { recruiterAddress };
+    const where = { recruiterAddress, archivedAt: null };
     const [engagements, total] = await this.prisma.$transaction([
       this.prisma.engagement.findMany({
         where,
