@@ -1,4 +1,11 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { EngagementStatus } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { UserDataExportDto } from './dto/user-data-export.dto';
 
@@ -6,6 +13,7 @@ import { UserDataExportDto } from './dto/user-data-export.dto';
 export class GdprService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly authService: AuthService,
   ) {}
 
   /** GET /users/me/export — GDPR right-to-access JSON bundle scoped to the requester */
@@ -102,6 +110,14 @@ export class GdprService {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundException('User not found');
 
+    if (user.deletedAt) {
+      throw new ConflictException('Account deletion has already been requested');
+    }
+
+    await this.requireReauthentication(user, dto);
+    await this.assertNoActiveEngagements(user);
+
+    const now = new Date();
     await this.prisma.$transaction([
       this.prisma.user.update({
         where: { id: userId },
@@ -112,7 +128,10 @@ export class GdprService {
       }),
     ]);
 
-    return { message: 'Account anonymised. A deletion request has been queued for admin review.' };
+    return {
+      message:
+        'Account closed and PII anonymised. A deletion request has been queued for admin review.',
+    };
   }
 
   /** GET /admin/data-deletion-requests */
@@ -138,5 +157,83 @@ export class GdprService {
       where: { id: requestId },
       data: { processedAt: new Date(), processedBy: adminId },
     });
+  }
+
+  private async requireReauthentication(
+    user: {
+      id: string;
+      passwordHash: string | null;
+      stellarAddress: string | null;
+    },
+    dto: DeleteAccountDto,
+  ) {
+    if (dto.password) {
+      if (!user.passwordHash) {
+        throw new BadRequestException('Account does not support password re-authentication');
+      }
+      const ok = await this.authService.checkPassword(dto.password, user.passwordHash);
+      if (!ok) {
+        throw new UnauthorizedException('Invalid password');
+      }
+      return;
+    }
+
+    if (dto.signature) {
+      if (!user.stellarAddress) {
+        throw new BadRequestException('Account has no Stellar address for signature re-authentication');
+      }
+      if (!dto.nonce) {
+        throw new BadRequestException('nonce is required when providing a signature');
+      }
+      const ok = this.authService.verifyWalletSignature(
+        user.stellarAddress,
+        dto.nonce,
+        dto.signature,
+      );
+      if (!ok) {
+        throw new UnauthorizedException('Invalid signature or expired challenge nonce');
+      }
+      return;
+    }
+
+    throw new UnauthorizedException(
+      'Re-authentication required: provide password or a signed challenge nonce',
+    );
+  }
+
+  private async assertNoActiveEngagements(user: {
+    id: string;
+    stellarAddress: string | null;
+  }) {
+    const activeStatuses: EngagementStatus[] = [
+      EngagementStatus.ACTIVE,
+      EngagementStatus.REPLACEMENT_REQUESTED,
+    ];
+
+    const orFilters: Array<Record<string, unknown>> = [
+      { companyId: user.id },
+      { recruiterId: user.id },
+      { arbiterId: user.id },
+    ];
+    if (user.stellarAddress) {
+      orFilters.push(
+        { companyAddress: user.stellarAddress },
+        { recruiterAddress: user.stellarAddress },
+        { arbiterAddress: user.stellarAddress },
+      );
+    }
+
+    const activeCount = await this.prisma.engagement.count({
+      where: {
+        status: { in: activeStatuses },
+        OR: orFilters,
+      },
+    });
+
+    if (activeCount > 0) {
+      throw new ConflictException(
+        `Cannot delete account while ${activeCount} active engagement(s) are in progress. Complete or cancel them first.`,
+      );
+    }
   }
 }

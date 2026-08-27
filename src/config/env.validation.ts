@@ -17,6 +17,13 @@ export const envValidationSchema = Joi.object({
     .default('log'),
   NOTIFICATION_RETENTION_DAYS: Joi.number().integer().min(1).default(90),
 
+  // Password complexity policy
+  PASSWORD_MIN_LENGTH: Joi.number().integer().min(6).max(128).default(8),
+  PASSWORD_REQUIRE_UPPERCASE: Joi.boolean().truthy('true', '1', 'yes').falsy('false', '0', 'no').default(true),
+  PASSWORD_REQUIRE_LOWERCASE: Joi.boolean().truthy('true', '1', 'yes').falsy('false', '0', 'no').default(true),
+  PASSWORD_REQUIRE_NUMBER: Joi.boolean().truthy('true', '1', 'yes').falsy('false', '0', 'no').default(true),
+  PASSWORD_REQUIRE_SPECIAL: Joi.boolean().truthy('true', '1', 'yes').falsy('false', '0', 'no').default(false),
+
   // Data retention windows — per category (set to -1 to disable a category)
   DATA_RETENTION_DAYS: Joi.number().integer().min(-1).default(365),
   PII_ANONYMIZATION_WINDOW_DAYS: Joi.number().integer().min(1).default(30),

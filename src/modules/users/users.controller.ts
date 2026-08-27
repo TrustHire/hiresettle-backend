@@ -43,11 +43,15 @@ export class UsersController {
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'GDPR right-to-erasure: anonymise current user PII' })
-  @ApiResponse({ status: 200, description: 'Account anonymised and deletion request queued' })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
-  deleteMe(@CurrentUser('id') userId: string) {
-    return this.gdprService.requestErasure(userId);
+  @ApiOperation({ summary: 'GDPR right-to-erasure: close account after re-authentication' })
+  @ApiResponse({ status: 200, description: 'Account closed, PII anonymised, deletion request queued' })
+  @ApiResponse({ status: 401, description: 'Unauthorized or re-authentication failed' })
+  @ApiResponse({ status: 409, description: 'Active engagements block deletion' })
+  deleteMe(
+    @CurrentUser('id') userId: string,
+    @Body() dto: DeleteAccountDto,
+  ) {
+    return this.gdprService.requestErasure(userId, dto);
   }
 
   @Get('me/notification-preferences')

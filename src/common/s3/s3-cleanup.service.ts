@@ -17,6 +17,7 @@ import { S3Service } from './s3.service';
  * that have no corresponding DB reference in either:
  * - User.avatarUrl (for avatar uploads)
  * - DisputeEvidence.s3Path (for evidence uploads)
+ * - KycDocument.s3Path (for KYC uploads)
  */
 @Injectable()
 export class S3CleanupService {
@@ -48,6 +49,10 @@ export class S3CleanupService {
       // Cleanup orphaned evidence uploads
       const deletedEvidence = await this.cleanupOrphanedEvidence(cutoffDate);
       totalDeleted += deletedEvidence;
+
+      // Cleanup orphaned KYC uploads
+      const deletedKyc = await this.cleanupOrphanedKyc(cutoffDate);
+      totalDeleted += deletedKyc;
 
       this.logger.log(
         `Cleanup completed. Deleted ${totalDeleted} orphaned objects (grace period: ${this.gracePeriodHours}h)`,
@@ -116,6 +121,31 @@ export class S3CleanupService {
   }
 
   /**
+   * Cleanup orphaned KYC uploads in the kyc/ prefix.
+   */
+  private async cleanupOrphanedKyc(cutoffDate: Date): Promise<number> {
+    const kycObjects = await this.s3.listObjects('kyc/');
+    const referencedPaths = await this.getReferencedKycPaths();
+
+    let deleted = 0;
+
+    for (const obj of kycObjects) {
+      if (obj.lastModified > cutoffDate) {
+        continue;
+      }
+
+      if (!referencedPaths.includes(obj.key)) {
+        await this.s3.deleteObject(obj.key);
+        deleted++;
+        this.logger.debug(`Deleted orphaned KYC document: ${obj.key}`);
+      }
+    }
+
+    this.logger.log(`Deleted ${deleted} orphaned KYC file(s)`);
+    return deleted;
+  }
+
+  /**
    * Get all avatar URLs referenced in the database.
    */
   private async getReferencedAvatarPaths(): Promise<(string | null)[]> {
@@ -138,5 +168,16 @@ export class S3CleanupService {
     });
 
     return evidences.map((e) => e.s3Path);
+  }
+
+  /**
+   * Get all S3 paths referenced in KycDocument.
+   */
+  private async getReferencedKycPaths(): Promise<string[]> {
+    const docs = await this.prisma.kycDocument.findMany({
+      select: { s3Path: true },
+    });
+
+    return docs.map((d) => d.s3Path);
   }
 }

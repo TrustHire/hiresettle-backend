@@ -17,8 +17,10 @@ import { TOTP } from 'otpauth';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
 import { SecurityEventsService } from '../../common/security-events/security-events.service';
+import { PasswordPolicyService } from '../../common/password/password-policy.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { Keypair } from '@stellar/stellar-sdk';
 
 const scrypt = promisify(scryptCallback);
 const PASSWORD_KEY_LENGTH = 64;
@@ -47,6 +49,7 @@ export class AuthService {
     private readonly config: ConfigService,
     private readonly stellar: StellarService,
     private readonly securityEvents: SecurityEventsService,
+    private readonly passwordPolicy: PasswordPolicyService,
   ) {}
 
   generateNonce(stellarAddress: string): string {
@@ -58,7 +61,21 @@ export class AuthService {
     return nonce;
   }
 
+  /** Consume and validate a challenge nonce for a Stellar address. */
+  consumeNonce(stellarAddress: string, nonce: string): boolean {
+    const entry = this.nonces.get(stellarAddress);
+    if (!entry) return false;
+    if (entry.expiresAt < Date.now()) {
+      this.nonces.delete(stellarAddress);
+      return false;
+    }
+    if (entry.nonce !== nonce) return false;
+    this.nonces.delete(stellarAddress);
+    return true;
+  }
+
   async register(dto: RegisterDto) {
+    this.passwordPolicy.validate(dto.password);
     const email = dto.email.toLowerCase();
     const passwordHash = await this.hashPassword(dto.password);
 
