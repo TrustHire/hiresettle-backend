@@ -14,6 +14,16 @@ export const envValidationSchema = Joi.object({
     .valid('error', 'warn', 'log', 'debug', 'verbose')
     .default('log'),
   NOTIFICATION_RETENTION_DAYS: Joi.number().integer().min(1).default(90),
+
+  // Data retention windows — per category (set to -1 to disable a category)
+  DATA_RETENTION_DAYS: Joi.number().integer().min(-1).default(365),
+  PII_ANONYMIZATION_WINDOW_DAYS: Joi.number().integer().min(1).default(30),
+  RETENTION_NOTIFICATIONS_DAYS: Joi.number().integer().min(-1).default(90),
+  RETENTION_NOTIFICATIONS_UNREAD_DAYS: Joi.number().integer().min(-1).default(365),
+  RETENTION_SECURITY_EVENTS_DAYS: Joi.number().integer().min(-1).default(365),
+  RETENTION_IDEMPOTENCY_KEYS_DAYS: Joi.number().integer().min(-1).default(0),
+  RETENTION_REFRESH_TOKENS_DAYS: Joi.number().integer().min(-1).default(30),
+  RETENTION_DATA_DELETION_REQS_DAYS: Joi.number().integer().min(-1).default(365),
   
   // Database connection pooling
   DATABASE_POOL_MIN: Joi.number().integer().min(1).max(20).default(2),

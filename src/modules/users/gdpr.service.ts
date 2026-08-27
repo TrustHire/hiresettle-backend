@@ -1,13 +1,10 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
-import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../common/prisma/prisma.service';
 
 @Injectable()
 export class GdprService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly config: ConfigService,
   ) {}
 
   /** DELETE /users/me — anonymise PII, retain stellarAddress for on-chain integrity */
@@ -51,18 +48,5 @@ export class GdprService {
       where: { id: requestId },
       data: { processedAt: new Date(), processedBy: adminId },
     });
-  }
-
-  /** Purge old notifications and audit records beyond retention window */
-  @Cron(CronExpression.EVERY_DAY_AT_3AM, { timeZone: 'UTC' })
-  async purgeExpiredRecords() {
-    const retentionDays = this.config.get<number>('DATA_RETENTION_DAYS', 365);
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - retentionDays);
-
-    await Promise.all([
-      this.prisma.notification.deleteMany({ where: { createdAt: { lt: cutoff } } }),
-      this.prisma.securityEvent.deleteMany({ where: { createdAt: { lt: cutoff } } }),
-    ]);
   }
 }

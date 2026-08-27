@@ -1,6 +1,6 @@
 import {
   Controller, Get, Post, Body, Param, Patch, Delete,
-  UseGuards, HttpCode, HttpStatus,
+  UseGuards, HttpCode, HttpStatus, UseInterceptors,
 } from '@nestjs/common';
 import {
   ApiTags, ApiOperation, ApiResponse,
@@ -17,6 +17,8 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { UserRole, User } from '@prisma/client';
 import { Throttle } from '@nestjs/throttler';
 import { UserJwtSubThrottlerGuard } from '../../common/guards/user-jwt-sub-throttler.guard';
+import { Idempotent } from '../../common/decorators/idempotent.decorator';
+import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
 
 @ApiTags('engagement-templates')
 @ApiBearerAuth()
@@ -31,6 +33,8 @@ export class EngagementTemplatesController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.COMPANY)
   @HttpCode(HttpStatus.CREATED)
+  @Idempotent()
+  @UseInterceptors(IdempotencyInterceptor)
   @ApiOperation({ summary: 'Create a new engagement template (COMPANY only)' })
   create(
     @CurrentUser() user: User,
@@ -87,6 +91,8 @@ export class EngagementTemplatesController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.COMPANY)
   @HttpCode(HttpStatus.CREATED)
+  @Idempotent()
+  @UseInterceptors(IdempotencyInterceptor)
   @ApiOperation({ summary: 'Clone a template into a new, independent template' })
   @ApiResponse({ status: 404, description: 'Template not found' })
   clone(

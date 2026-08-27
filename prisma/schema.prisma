@@ -92,7 +92,8 @@ model User {
   lockedUntil    DateTime?
   totpSecret     String?        // TOTP secret for 2FA
   totpEnabled    Boolean         @default(false)
-  deletedAt      DateTime?      // GDPR anonymisation timestamp
+  deletedAt      DateTime?      // GDPR anonymisation timestamp — set when erasure is requested
+  anonymizedAt   DateTime?      // Set by PiiAnonymizationSchedulerService once all PII fields are wiped
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
@@ -113,6 +114,7 @@ model User {
   engagementNotes      EngagementNote[]
 
   @@index([role, deactivatedAt])
+  @@index([deletedAt, anonymizedAt]) // Used by PiiAnonymizationSchedulerService
   @@map("users")
 }
 
