@@ -32,6 +32,7 @@ import { AdminModule } from './modules/admin/admin.module';
 import { BillingModule } from './modules/billing/billing.module';
 import { GraphqlModule } from './graphql/graphql.module';
 import stellarConfig from './config/stellar.config';
+import { MaintenanceModeModule } from './common/maintenance/maintenance-mode.module';
 
 @Module({
   imports: [

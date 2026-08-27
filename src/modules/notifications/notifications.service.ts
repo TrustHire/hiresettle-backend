@@ -261,6 +261,7 @@ export class NotificationsService {
       RETENTION_WINDOW_APPROACHING: '⏰',
       ENGAGEMENT_CANCELLED: '❌',
       ENGAGEMENT_CREATED: '🎉', // Added for completeness
+      STELLAR_BALANCE_LOW: '⚠️',
     };
 
     try {

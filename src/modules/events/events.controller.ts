@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards, Post } from '@nestjs/common';
+import { Body, Controller, Get, Query, UseGuards, Post } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery, ApiResponse } from '@nestjs/swagger';
 import { EventsService } from './events.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -7,6 +7,8 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { UserRole } from '@prisma/client';
 import { Throttle } from '@nestjs/throttler';
 import { UserJwtSubThrottlerGuard } from '../../common/guards/user-jwt-sub-throttler.guard';
+import { HorizonIndexerService } from './horizon-indexer.service';
+import { BackfillEventsDto } from './dto/backfill-events.dto';
 
 @ApiTags('events')
 @ApiBearerAuth()
@@ -15,7 +17,10 @@ import { UserJwtSubThrottlerGuard } from '../../common/guards/user-jwt-sub-throt
 @Throttle({ default: { limit: 100, ttl: 60 } })
 @Controller('events')
 export class EventsController {
-  constructor(private readonly eventsService: EventsService) {}
+  constructor(
+    private readonly eventsService: EventsService,
+    private readonly horizonIndexer: HorizonIndexerService,
+  ) {}
 
   @Get()
   @ApiOperation({ summary: 'List indexed chain events (ADMIN only)' })
@@ -48,5 +53,17 @@ export class EventsController {
   @ApiResponse({ status: 403, description: 'Forbidden — ADMIN role required' })
   processUnprocessed() {
     return this.eventsService.processUnprocessedEvents();
+  }
+
+  @Post('backfill')
+  @ApiOperation({ summary: 'Backfill contract events for a ledger range (ADMIN only)' })
+  @ApiResponse({ status: 201, description: 'Events backfilled' })
+  @ApiResponse({ status: 400, description: 'Invalid ledger range' })
+  backfill(@Body() dto: BackfillEventsDto) {
+    return this.horizonIndexer.backfillEvents(dto.fromLedger, dto.toLedger).then((backfilled) => ({
+      fromLedger: dto.fromLedger,
+      toLedger: dto.toLedger,
+      backfilled,
+    }));
   }
 }

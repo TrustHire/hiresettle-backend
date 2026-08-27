@@ -26,6 +26,10 @@ export const envValidationSchema = Joi.object({
   RETENTION_IDEMPOTENCY_KEYS_DAYS: Joi.number().integer().min(-1).default(0),
   RETENTION_REFRESH_TOKENS_DAYS: Joi.number().integer().min(-1).default(30),
   RETENTION_DATA_DELETION_REQS_DAYS: Joi.number().integer().min(-1).default(365),
+
+  // Stellar backend account balance alert
+  STELLAR_BALANCE_ALERT_INTERVAL_MS: Joi.number().integer().min(60000).default(300000),
+  STELLAR_BALANCE_ALERT_THRESHOLD_STROOPS: Joi.number().integer().min(0).default(10000000),
   
   // Database connection pooling
   DATABASE_POOL_MIN: Joi.number().integer().min(1).max(20).default(2),

@@ -190,6 +190,19 @@ export class StellarService implements OnModuleInit {
     }
   }
 
+  async fetchContractEventsRange(
+    startLedger: number,
+    endLedger: number,
+  ): Promise<SorobanRpc.Api.EventResponse[]> {
+    const result = await this.rpcClient.getEvents({
+      startLedger,
+      endLedger,
+      filters: [{ type: 'contract', contractIds: [this.contractId] }],
+      limit: 100,
+    } as any);
+    return result.events ?? [];
+  }
+
   // ----------------------------------------------------------
   // READ-ONLY CONTRACT SIMULATION
   // ----------------------------------------------------------
@@ -757,6 +770,18 @@ export class StellarService implements OnModuleInit {
     return { sufficient: balance >= requiredAmount, balance };
   }
 
+  getBackendAccountAddress(): string | undefined {
+    return this.backendKeypair?.publicKey();
+  }
+
+  async getBackendAccountBalance(): Promise<bigint> {
+    const address = this.getBackendAccountAddress();
+    if (!address) return 0n;
+
+    const { balance } = await this.getBalance(address, 'native');
+    return balance;
+  }
+
   /**
    * Get the token balance for a Stellar account.
    * Queries Horizon for trustline balance.
@@ -766,7 +791,8 @@ export class StellarService implements OnModuleInit {
     tokenAddress: string,
   ): Promise<{ balance: bigint }> {
     try {
-      const tokenConfig = this.getTokenConfig(tokenAddress);
+      const isNative = tokenAddress === "native" || tokenAddress === "XLM";
+      if (!isNative) this.getTokenConfig(tokenAddress);
       const response = await fetch(`${this.horizonUrl}/accounts/${accountAddress}`);
       if (!response.ok) {
         // For balance endpoint and validations we want a hard failure.
@@ -777,7 +803,6 @@ export class StellarService implements OnModuleInit {
 
       const account = await response.json();
 
-      const isNative = tokenAddress === "native" || tokenAddress === "XLM";
       if (isNative) {
         // Horizon accounts endpoint returns native balance as XLM string.
         // For consistency with the existing usdcToStroops logic, we convert XLM stroops-like decimal into stroops.
