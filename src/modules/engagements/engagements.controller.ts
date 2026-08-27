@@ -73,6 +73,7 @@ export class EngagementsController {
   @ApiQuery({ name: 'createdTo', required: false, description: 'ISO date string (e.g., 2026-12-31)' })
   @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number' })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page' })
+  @ApiQuery({ name: 'cursor', required: false, type: String, description: 'ID of the last engagement from the previous page' })
   @ApiQuery({ name: 'sortBy', required: false, enum: ['createdAt', 'amount', 'status'], description: 'Field to sort by (default: createdAt)' })
   @ApiQuery({ name: 'sortOrder', required: false, enum: ['asc', 'desc'], description: 'Sort direction (default: desc)' })
   @ApiQuery({ name: 'includeArchived', required: false, type: Boolean, description: 'Include archived engagements (default: false)' })
@@ -88,6 +89,7 @@ export class EngagementsController {
     @Query('createdTo') createdTo?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
+    @Query('cursor') cursor?: string,
     @Query('sortBy') sortBy?: string,
     @Query('sortOrder') sortOrder?: string,
     @Query('includeArchived') includeArchived?: boolean,
@@ -101,6 +103,7 @@ export class EngagementsController {
       createdTo,
       page,
       limit,
+      cursor,
       sortBy,
       sortOrder,
       includeArchived,

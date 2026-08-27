@@ -37,6 +37,7 @@ import { ListUsersDto } from './dto/list-users.dto';
 import { AssignArbiterDto } from './dto/assign-arbiter.dto';
 import { AuditLogsQueryDto } from './dto/audit-logs.dto';
 import { SetRateLimitOverrideDto } from './dto/set-rate-limit-override.dto';
+import { SetCompanyVerificationDto } from './dto/set-company-verification.dto';
 import { CacheService } from '../../common/cache/cache.service';
 import { SecurityEventsService } from '../../common/security-events/security-events.service';
 import { ListSecurityEventsDto } from '../../common/security-events/dto/list-security-events.dto';
@@ -297,6 +298,22 @@ export class AdminController {
   @ApiResponse({ status: 403, description: 'Forbidden' })
   listAuditLogs(@Query() dto: AuditLogsQueryDto) {
     return this.auditLogs.queryAuditLogs(dto);
+  }
+
+  @Get('audit-log/export')
+  @ApiOperation({ summary: 'Export the full audit trail as CSV (ADMIN only)' })
+  @ApiQuery({ name: 'from', required: true, description: 'ISO 8601 start date' })
+  @ApiQuery({ name: 'to', required: true, description: 'ISO 8601 end date' })
+  @ApiResponse({ status: 200, description: 'Audit trail CSV stream' })
+  @ApiResponse({ status: 400, description: 'Invalid date range' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  streamAuditLogExport(
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Res() res: Response,
+  ) {
+    return this.auditLogs.streamAuditLogCsv(from, to, res);
   }
 
   // ────────────────────────────────────────────────────────────────

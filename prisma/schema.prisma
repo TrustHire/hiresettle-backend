@@ -89,6 +89,7 @@ model User {
   webhookSecret  String?        // HMAC-SHA256 signing secret, generated when webhookUrl is first set
   rateLimitOverride Int?        // custom per-user request limit for UserJwtSubThrottlerGuard; falls back to default when unset
   avatarUrl      String?        // CDN URL for user avatar
+  verifiedAt     DateTime?      // Set by an admin after company verification
   deactivatedAt  DateTime?
   failedLoginAttempts Int       @default(0)
   lockedUntil    DateTime?

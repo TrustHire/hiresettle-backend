@@ -4,6 +4,7 @@ import { ListUsersDto } from './dto/list-users.dto';
 import { Prisma, UserRole, MilestoneStatus } from '@prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
 import { CacheService } from '../../common/cache/cache.service';
+import { cursorPage } from '../../common/pagination/cursor-pagination';
 
 const USER_SELECT = {
   id: true,
@@ -14,6 +15,7 @@ const USER_SELECT = {
   role: true,
   deactivatedAt: true,
   rateLimitOverride: true,
+  verifiedAt: true,
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.UserSelect;
@@ -45,6 +47,19 @@ export class AdminUsersService {
           }
         : {}),
     };
+
+      if (dto.cursor) {
+        const users = await this.prisma.user.findMany({
+          where,
+          select: USER_SELECT,
+          cursor: { id: dto.cursor },
+          skip: 1,
+          take: limit + 1,
+          orderBy: { createdAt: 'desc' },
+        });
+        const pageResult = cursorPage(users, limit);
+        return { data: pageResult.data, meta: { limit, nextCursor: pageResult.nextCursor } };
+      }
 
     const [users, total] = await this.prisma.$transaction([
       this.prisma.user.findMany({ where, select: USER_SELECT, skip, take: limit, orderBy: { createdAt: 'desc' } }),
@@ -79,6 +94,26 @@ export class AdminUsersService {
       data: { deactivatedAt: null },
       select: USER_SELECT,
     });
+  }
+
+  async setCompanyVerification(id: string, verified: boolean) {
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException('User not found');
+    if (user.role !== UserRole.COMPANY) {
+      throw new BadRequestException('Only company users can be verified');
+    }
+
+    const updated = await this.prisma.user.update({
+      where: { id },
+      data: { verifiedAt: verified ? new Date() : null },
+      select: USER_SELECT,
+    });
+
+    if (user.stellarAddress) {
+      await this.cache.del(`user:profile:${user.stellarAddress}`);
+    }
+
+    return updated;
   }
 
   async assignArbiter(engagementId: string, arbiterId: string) {
