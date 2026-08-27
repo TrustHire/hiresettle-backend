@@ -1,10 +1,15 @@
 import {
-  Controller, Get, Query, UseGuards, HttpCode, HttpStatus,
+  Controller, Get, Post, Query, Param, Body, UseGuards, HttpCode, HttpStatus,
+  UploadedFile, UseInterceptors, BadRequestException,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import {
-  ApiTags, ApiOperation, ApiBearerAuth, ApiQuery,
+  ApiTags, ApiOperation, ApiBearerAuth, ApiQuery, ApiConsumes, ApiParam, ApiResponse,
 } from '@nestjs/swagger';
 import { RecruitersService } from './recruiters.service';
+import { KycService } from './kyc.service';
+import { RecruiterReviewsService } from './recruiter-reviews.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -13,6 +18,7 @@ import { UserRole, User } from '@prisma/client';
 import { Throttle } from '@nestjs/throttler';
 import { UserJwtSubThrottlerGuard } from '../../common/guards/user-jwt-sub-throttler.guard';
 import { SearchRecruitersDto } from './dto/search-recruiters.dto';
+import { CreateRecruiterReviewDto } from './dto/create-recruiter-review.dto';
 
 @ApiTags('recruiters')
 @ApiBearerAuth()
@@ -21,7 +27,11 @@ import { SearchRecruitersDto } from './dto/search-recruiters.dto';
 @Throttle({ default: { limit: 100, ttl: 60 } })
 @Controller('recruiters')
 export class RecruitersController {
-  constructor(private readonly recruitersService: RecruitersService) {}
+  constructor(
+    private readonly recruitersService: RecruitersService,
+    private readonly kycService: KycService,
+    private readonly reviewsService: RecruiterReviewsService,
+  ) {}
 
   @Get()
   @HttpCode(HttpStatus.OK)
@@ -37,7 +47,7 @@ export class RecruitersController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.RECRUITER)
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Get recruiter performance stats' })
+  @ApiOperation({ summary: 'Get recruiter performance stats including average rating' })
   getStats(@CurrentUser() user: User) {
     return this.recruitersService.getStats(user);
   }
@@ -55,5 +65,66 @@ export class RecruitersController {
     @Query('limit') limit?: number,
   ) {
     return this.recruitersService.getEngagements(user, page, limit);
+  }
+
+  @Get('me/kyc')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.RECRUITER)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Get current recruiter KYC status and documents' })
+  getMyKyc(@CurrentUser('id') userId: string) {
+    return this.kycService.getMyKyc(userId);
+  }
+
+  @Post('me/kyc/documents')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.RECRUITER)
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
+  @ApiConsumes('multipart/form-data')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Submit a KYC verification document (JPEG/PNG/GIF/PDF ≤ 10 MB)' })
+  @ApiResponse({ status: 201, description: 'Document uploaded and KYC set to PENDING' })
+  async submitKycDocument(
+    @CurrentUser('id') userId: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file) {
+      throw new BadRequestException('No file provided');
+    }
+    return this.kycService.submitDocument(userId, file);
+  }
+
+  @Post('reviews/:engagementId')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.COMPANY)
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Submit a rating/review for a completed engagement (once per engagement)' })
+  @ApiParam({ name: 'engagementId', description: 'Completed engagement ID' })
+  @ApiResponse({ status: 201, description: 'Review created' })
+  @ApiResponse({ status: 409, description: 'Review already exists for this engagement' })
+  submitReview(
+    @Param('engagementId') engagementId: string,
+    @CurrentUser() user: User,
+    @Body() dto: CreateRecruiterReviewDto,
+  ) {
+    return this.reviewsService.submitReview(engagementId, user, dto);
+  }
+
+  @Get(':id/reviews')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'List reviews for a recruiter (includes average rating in meta)' })
+  @ApiParam({ name: 'id', description: 'Recruiter user ID' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  listReviews(
+    @Param('id') recruiterId: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.reviewsService.listReviews(
+      recruiterId,
+      page ? Number(page) : 1,
+      limit ? Number(limit) : 20,
+    );
   }
 }

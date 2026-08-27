@@ -6,7 +6,6 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
-  MinLength,
 } from 'class-validator';
 
 export class RegisterDto {
@@ -14,9 +13,11 @@ export class RegisterDto {
   @IsEmail()
   email: string;
 
-  @ApiProperty({ minLength: 8 })
+  @ApiProperty({
+    description: 'Password must meet configured complexity policy (see PASSWORD_* env vars)',
+  })
   @IsString()
-  @MinLength(8)
+  @IsNotEmpty()
   password: string;
 
   @ApiPropertyOptional({ example: 'GABC...XYZ' })

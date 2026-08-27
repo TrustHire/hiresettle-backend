@@ -17,8 +17,10 @@ import { TOTP } from 'otpauth';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
 import { SecurityEventsService } from '../../common/security-events/security-events.service';
+import { PasswordPolicyService } from '../../common/password/password-policy.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { Keypair } from '@stellar/stellar-sdk';
 
 const scrypt = promisify(scryptCallback);
 const PASSWORD_KEY_LENGTH = 64;
@@ -47,6 +49,7 @@ export class AuthService {
     private readonly config: ConfigService,
     private readonly stellar: StellarService,
     private readonly securityEvents: SecurityEventsService,
+    private readonly passwordPolicy: PasswordPolicyService,
   ) {}
 
   generateNonce(stellarAddress: string): string {
@@ -58,7 +61,21 @@ export class AuthService {
     return nonce;
   }
 
+  /** Consume and validate a challenge nonce for a Stellar address. */
+  consumeNonce(stellarAddress: string, nonce: string): boolean {
+    const entry = this.nonces.get(stellarAddress);
+    if (!entry) return false;
+    if (entry.expiresAt < Date.now()) {
+      this.nonces.delete(stellarAddress);
+      return false;
+    }
+    if (entry.nonce !== nonce) return false;
+    this.nonces.delete(stellarAddress);
+    return true;
+  }
+
   async register(dto: RegisterDto) {
+    this.passwordPolicy.validate(dto.password);
     const email = dto.email.toLowerCase();
     const passwordHash = await this.hashPassword(dto.password);
 
@@ -145,6 +162,58 @@ export class AuthService {
   // Backward-compatible alias kept for existing controller routes
   walletLogin(dto: LoginDto, meta: RequestMeta = {}) {
     return this.login(dto, meta);
+  }
+
+  /**
+   * Authenticated password reset / change. Enforces configured complexity policy.
+   */
+  async resetPassword(userId: string, currentPassword: string, newPassword: string) {
+    this.passwordPolicy.validate(newPassword);
+
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user?.passwordHash) {
+      throw new BadRequestException('Account does not support password authentication');
+    }
+
+    if (!(await this.verifyPassword(currentPassword, user.passwordHash))) {
+      throw new UnauthorizedException('Current password is incorrect');
+    }
+
+    const passwordHash = await this.hashPassword(newPassword);
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash },
+    });
+
+    await this.securityEvents.log({
+      userId,
+      action: SecurityEventAction.PASSWORD_RESET,
+    });
+
+    return { message: 'Password updated successfully' };
+  }
+
+  /** Public password verification for re-auth flows (e.g. account deletion). */
+  async checkPassword(password: string, passwordHash: string): Promise<boolean> {
+    return this.verifyPassword(password, passwordHash);
+  }
+
+  /**
+   * Verify a Stellar wallet signature over a challenge nonce.
+   * Nonce must match the one previously issued for this address.
+   */
+  verifyWalletSignature(stellarAddress: string, nonce: string, signatureBase64: string): boolean {
+    if (!this.consumeNonce(stellarAddress, nonce)) {
+      return false;
+    }
+    try {
+      const keypair = Keypair.fromPublicKey(stellarAddress);
+      const message = Buffer.from(nonce, 'utf8');
+      const signature = Buffer.from(signatureBase64, 'base64');
+      return keypair.verify(message, signature);
+    } catch {
+      return false;
+    }
   }
 
   async refresh(refreshToken: string) {

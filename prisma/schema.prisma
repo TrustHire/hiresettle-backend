@@ -62,6 +62,13 @@ enum UserRole {
   ADMIN
 }
 
+enum KycStatus {
+  NONE
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 enum SecurityEventAction {
   LOGIN_SUCCESS
   LOGIN_FAILURE
@@ -96,6 +103,10 @@ model User {
   totpEnabled    Boolean         @default(false)
   deletedAt      DateTime?      // GDPR anonymisation timestamp — set when erasure is requested
   anonymizedAt   DateTime?      // Set by PiiAnonymizationSchedulerService once all PII fields are wiped
+  kycStatus      KycStatus      @default(NONE)
+  kycReviewedAt  DateTime?
+  kycReviewedBy  String?        // admin userId who approved/rejected
+  kycRejectionReason String?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
@@ -116,9 +127,13 @@ model User {
   idempotencyKeys      IdempotencyKey[]
   webhookDeliveries    WebhookDelivery[]
   engagementNotes      EngagementNote[]
+  kycDocuments         KycDocument[]
+  reviewsReceived      RecruiterReview[]       @relation("RecruiterReviews")
+  reviewsWritten       RecruiterReview[]       @relation("ReviewerReviews")
 
   @@index([role, deactivatedAt])
   @@index([deletedAt, anonymizedAt]) // Used by PiiAnonymizationSchedulerService
+  @@index([kycStatus])
   @@map("users")
 }
 
@@ -178,6 +193,7 @@ model Engagement {
   events          ChainEvent[]
   auditLogs       EngagementAuditLog[]
   notes           EngagementNote[]
+  review          RecruiterReview?
 
   @@index([status])
   @@index([companyAddress])
@@ -185,6 +201,44 @@ model Engagement {
   @@index([status, createdAt])
   @@index([archivedAt])
   @@map("engagements")
+}
+
+// Company feedback on a recruiter after an engagement completes.
+// One review per engagement (enforced by @@unique on engagementId).
+model RecruiterReview {
+  id           String   @id @default(uuid())
+  engagementId String   @unique
+  recruiterId  String
+  reviewerId   String   // company user who left the review
+  rating       Int      // 1-5
+  comment      String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  engagement Engagement @relation(fields: [engagementId], references: [id])
+  recruiter  User       @relation("RecruiterReviews", fields: [recruiterId], references: [id])
+  reviewer   User       @relation("ReviewerReviews", fields: [reviewerId], references: [id])
+
+  @@index([recruiterId])
+  @@index([reviewerId])
+  @@map("recruiter_reviews")
+}
+
+// Identity verification documents uploaded by recruiters for KYC review.
+model KycDocument {
+  id         String   @id @default(uuid())
+  userId     String
+  fileName   String
+  fileSize   Int
+  mimeType   String
+  s3Path     String
+  s3Url      String?
+  uploadedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("kyc_documents")
 }
 
 // Internal notes left by either party on an engagement (visible to both).

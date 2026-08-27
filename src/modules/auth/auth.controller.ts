@@ -8,6 +8,7 @@ import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { RevokeSessionDto } from './dto/revoke-session.dto';
 import { EnableTotpDto, DisableTotpDto } from './dto/totp.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { RateLimit } from '../../common/decorators/throttle.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 
@@ -19,6 +20,30 @@ function requestMeta(req: ExpressRequest): RequestMeta {
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) { }
+
+  @Post('register')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Register a new account with email/password' })
+  @RateLimit(10, 60)
+  @ApiResponse({ status: 201, description: 'Registration successful, JWT pair returned' })
+  @ApiResponse({ status: 400, description: 'Password policy unmet or invalid Stellar address' })
+  @ApiResponse({ status: 409, description: 'Email or Stellar address already registered' })
+  @ApiResponse({ status: 429, description: 'Too many requests' })
+  register(@Body() dto: RegisterDto) {
+    return this.authService.register(dto);
+  }
+
+  @Post('password/reset')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Reset password (requires current password; enforces complexity policy)' })
+  @ApiResponse({ status: 200, description: 'Password updated' })
+  @ApiResponse({ status: 400, description: 'Password policy unmet' })
+  @ApiResponse({ status: 401, description: 'Unauthorized or incorrect current password' })
+  resetPassword(@Request() req: any, @Body() dto: ResetPasswordDto) {
+    return this.authService.resetPassword(req.user.id, dto.currentPassword, dto.newPassword);
+  }
 
   @Get('challenge')
   @ApiOperation({ summary: 'Get a challenge nonce for a Stellar address (5 min TTL)' })

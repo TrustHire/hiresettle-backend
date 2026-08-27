@@ -16,6 +16,7 @@ import { DataRetentionModule } from './common/retention/data-retention.module';
 
 import { PrismaModule } from './common/prisma/prisma.module';
 import { S3Module } from './common/s3/s3.module';
+import { PasswordPolicyModule } from './common/password/password-policy.module';
 import { StellarModule as CommonStellarModule } from './common/stellar/stellar.module';
 import { StellarModule } from './modules/stellar/stellar.module';
 
@@ -61,6 +62,7 @@ import stellarConfig from './config/stellar.config';
 
     PrismaModule,
     S3Module,
+    PasswordPolicyModule,
     CommonStellarModule,
     StellarModule,
     AuthModule,

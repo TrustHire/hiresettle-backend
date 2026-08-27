@@ -12,6 +12,7 @@ import { AuthService } from './auth.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
 import { SecurityEventsService } from '../../common/security-events/security-events.service';
+import { PasswordPolicyService } from '../../common/password/password-policy.service';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -85,6 +86,18 @@ const makeMockSecurityEvents = () => ({
   log: jest.fn().mockResolvedValue(undefined),
 });
 
+const makeMockPasswordPolicy = () => ({
+  validate: jest.fn(),
+  getUnmetRequirements: jest.fn().mockReturnValue([]),
+  getPolicy: jest.fn().mockReturnValue({
+    minLength: 8,
+    requireUppercase: true,
+    requireLowercase: true,
+    requireNumber: true,
+    requireSpecial: false,
+  }),
+});
+
 // ── Suite ─────────────────────────────────────────────────────────────────────
 
 describe('AuthService', () => {
@@ -112,6 +125,7 @@ describe('AuthService', () => {
         { provide: ConfigService, useValue: makeMockConfig() },
         { provide: StellarService, useValue: mockStellar },
         { provide: SecurityEventsService, useValue: makeMockSecurityEvents() },
+        { provide: PasswordPolicyService, useValue: makeMockPasswordPolicy() },
       ],
     }).compile();
 

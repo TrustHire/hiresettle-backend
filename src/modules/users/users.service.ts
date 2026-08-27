@@ -41,12 +41,24 @@ export class UsersService {
 
     const user = await this.prisma.user.findUnique({
       where: { stellarAddress },
-      select: { name: true, company: true, role: true },
+      select: { id: true, name: true, company: true, role: true },
     });
     if (!user) throw new NotFoundException('User not found');
 
-    await this.cache?.set(cacheKey, user, UsersService.PROFILE_TTL_S);
-    return user;
+    let averageRating: number | null | undefined;
+    if (user.role === 'RECRUITER') {
+      const avg = await this.prisma.recruiterReview.aggregate({
+        where: { recruiterId: user.id },
+        _avg: { rating: true },
+      });
+      averageRating =
+        avg._avg.rating != null ? Math.round(avg._avg.rating * 10) / 10 : null;
+    }
+
+    const { id: _id, ...profile } = user;
+    const result: PublicUserDto = { ...profile, ...(averageRating !== undefined ? { averageRating } : {}) };
+    await this.cache?.set(cacheKey, result, UsersService.PROFILE_TTL_S);
+    return result;
   }
 
   async updatePreferences(userId: string, dto: UpdatePreferencesDto) {

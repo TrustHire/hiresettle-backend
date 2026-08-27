@@ -42,6 +42,8 @@ import { SecurityEventsService } from '../../common/security-events/security-eve
 import { ListSecurityEventsDto } from '../../common/security-events/dto/list-security-events.dto';
 import { GdprService } from '../users/gdpr.service';
 import { AuthService, RequestMeta } from '../auth/auth.service';
+import { KycService } from '../recruiters/kyc.service';
+import { RejectKycDto } from './dto/reject-kyc.dto';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -60,6 +62,7 @@ export class AdminController {
     private readonly gdpr: GdprService,
     private readonly adminWebhooks: AdminWebhooksService,
     private readonly authService: AuthService,
+    private readonly kycService: KycService,
   ) {}
 
   @Get('users')
@@ -357,5 +360,42 @@ export class AdminController {
   @ApiResponse({ status: 404, description: 'User not found' })
   clearRateLimitOverride(@Param('id') id: string) {
     return this.adminUsers.clearRateLimitOverride(id);
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Issue #246 — Recruiter KYC admin review
+  // ────────────────────────────────────────────────────────────────
+
+  @Get('kyc/pending')
+  @ApiOperation({ summary: 'List recruiters with pending KYC submissions' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'Pending KYC queue retrieved' })
+  listPendingKyc(@Query('page') page?: number, @Query('limit') limit?: number) {
+    return this.kycService.listPending(Number(page) || 1, Number(limit) || 20);
+  }
+
+  @Post('kyc/:userId/approve')
+  @ApiOperation({ summary: 'Approve recruiter KYC (records reviewer + timestamp)' })
+  @ApiParam({ name: 'userId', description: 'Recruiter user ID' })
+  @ApiResponse({ status: 201, description: 'KYC approved' })
+  @ApiResponse({ status: 400, description: 'KYC not pending or no documents' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  approveKyc(@Param('userId') userId: string, @Req() req: Request) {
+    return this.kycService.approve(userId, (req.user as any)?.id);
+  }
+
+  @Post('kyc/:userId/reject')
+  @ApiOperation({ summary: 'Reject recruiter KYC (records reviewer + timestamp)' })
+  @ApiParam({ name: 'userId', description: 'Recruiter user ID' })
+  @ApiResponse({ status: 201, description: 'KYC rejected' })
+  @ApiResponse({ status: 400, description: 'KYC not pending or no documents' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  rejectKyc(
+    @Param('userId') userId: string,
+    @Body() dto: RejectKycDto,
+    @Req() req: Request,
+  ) {
+    return this.kycService.reject(userId, (req.user as any)?.id, dto.reason);
   }
 }

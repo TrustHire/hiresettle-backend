@@ -4,6 +4,7 @@ import { Cache } from 'cache-manager';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { EngagementStatus, MilestoneStatus, MilestoneKind, UserRole } from '@prisma/client';
 import { SearchRecruitersDto } from './dto/search-recruiters.dto';
+import { RecruiterReviewsService } from './recruiter-reviews.service';
 
 interface CurrentUser {
   id: string;
@@ -16,6 +17,7 @@ export class RecruitersService {
   constructor(
     private readonly prisma: PrismaService,
     @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
+    private readonly reviewsService: RecruiterReviewsService,
   ) {}
 
   async listRecruiters({ search, page = 1, limit = 20 }: SearchRecruitersDto = {}) {
@@ -35,6 +37,7 @@ export class RecruitersService {
           name: true,
           stellarAddress: true,
           avatarUrl: true,
+          kycStatus: true,
           createdAt: true,
         },
         orderBy: { name: 'asc' },
@@ -44,8 +47,14 @@ export class RecruitersService {
       this.prisma.user.count({ where }),
     ]);
 
+    const ratings = await this.reviewsService.getAverageRatings(data.map((r) => r.id));
+    const withRatings = data.map((r) => ({
+      ...r,
+      averageRating: ratings.get(r.id) ?? null,
+    }));
+
     return {
-      data,
+      data: withRatings,
       meta: {
         total,
         page,
@@ -82,7 +91,7 @@ export class RecruitersService {
     let completedWithRetention = 0;
     let retentionSuccessCount = 0;
 
-    const activeDisputesCount = engagements.filter(e => 
+    const activeDisputesCount = engagements.filter(e =>
       e.milestones.some(m => m.status === MilestoneStatus.DISPUTED)
     ).length;
 
@@ -103,13 +112,16 @@ export class RecruitersService {
       }
     }
 
-    const averageRetentionRate = completedWithRetention > 0 ? 
+    const averageRetentionRate = completedWithRetention > 0 ?
       Math.round((retentionSuccessCount / completedWithRetention) * 100) : 0;
+
+    const averageRating = await this.reviewsService.getAverageRating(user.id);
 
     const result = {
       totalEngagements,
       completedCount,
       averageRetentionRate,
+      averageRating,
       totalEarned: totalEarned.toString(),
       activeDisputes: activeDisputesCount,
     };
