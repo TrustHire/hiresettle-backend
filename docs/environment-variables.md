@@ -68,6 +68,8 @@ Complete reference for every environment variable consumed by the HireSettle bac
 | `HIRESETTLE_CONTRACT_ID` | No | — | No | Legacy / alternative contract address. Only used as a fallback when `SOROBAN_CONTRACT_ADDRESS` is not set. Prefer `SOROBAN_CONTRACT_ADDRESS`. |
 | `STELLAR_SECRET_KEY` | **Yes** | — | No | Read-only Stellar secret key used by `StellarService` to query chain events and call contract functions. This key holds no funds — the backend never signs fund-moving transactions. See [docs/secrets.md](./secrets.md) for rotation. |
 | `ALLOWED_TOKENS` | No | `[]` | No | JSON array of token configurations accepted by the platform. Example: `[{"code":"USDC","issuer":"G...","decimals":7}]`. Parsed in `StellarService` constructor. |
+| `STELLAR_BALANCE_ALERT_INTERVAL_MS` | No | `300000` | **Yes** | Interval in milliseconds between checks of the configured Stellar account's native XLM balance. Must be at least 60000. |
+| `STELLAR_BALANCE_ALERT_THRESHOLD_STROOPS` | No | `10000000` | **Yes** | Native XLM balance below which active administrators receive an alert. |
 
 ---
 

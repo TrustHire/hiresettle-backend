@@ -42,6 +42,10 @@ import { SecurityEventsService } from '../../common/security-events/security-eve
 import { ListSecurityEventsDto } from '../../common/security-events/dto/list-security-events.dto';
 import { GdprService } from '../users/gdpr.service';
 import { AuthService, RequestMeta } from '../auth/auth.service';
+import { MaintenanceModeService } from '../../common/maintenance/maintenance-mode.service';
+import { AllowDuringMaintenance } from '../../common/maintenance/maintenance-mode.decorator';
+import { SetMaintenanceModeDto } from './dto/set-maintenance-mode.dto';
+import { RevenueDashboardDto } from './dto/revenue-dashboard.dto';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -60,7 +64,23 @@ export class AdminController {
     private readonly gdpr: GdprService,
     private readonly adminWebhooks: AdminWebhooksService,
     private readonly authService: AuthService,
+    private readonly maintenanceMode: MaintenanceModeService,
   ) {}
+
+  @Get('maintenance-mode')
+  @ApiOperation({ summary: 'Get API maintenance mode status (admin only)' })
+  getMaintenanceMode() {
+    return this.maintenanceMode.isEnabled().then((enabled) => ({ enabled }));
+  }
+
+  @Put('maintenance-mode')
+  @AllowDuringMaintenance()
+  @ApiOperation({ summary: 'Enable or disable API maintenance mode (admin only)' })
+  @ApiResponse({ status: 200, description: 'Maintenance mode updated' })
+  @ApiResponse({ status: 503, description: 'API is in maintenance mode' })
+  setMaintenanceMode(@Body() dto: SetMaintenanceModeDto) {
+    return this.maintenanceMode.setEnabled(dto.enabled);
+  }
 
   @Get('users')
   @ApiOperation({ summary: 'List / search users (admin only)' })
@@ -182,6 +202,17 @@ export class AdminController {
   // ────────────────────────────────────────────────────────────────
   // Issue #62 — Admin reports / CSV export
   // ────────────────────────────────────────────────────────────────
+
+  @Get('dashboard/revenue')
+  @ApiOperation({ summary: 'Get platform revenue trends (admin only)' })
+  @ApiQuery({ name: 'from', required: true, description: 'ISO 8601 start date' })
+  @ApiQuery({ name: 'to', required: true, description: 'ISO 8601 end date' })
+  @ApiQuery({ name: 'granularity', required: false, enum: ['daily', 'monthly'], description: 'Revenue bucket size' })
+  @ApiResponse({ status: 200, description: 'Platform revenue trends retrieved' })
+  @ApiResponse({ status: 400, description: 'Invalid date range or granularity' })
+  getRevenueDashboard(@Query() dto: RevenueDashboardDto) {
+    return this.reports.getRevenueDashboard(dto.from, dto.to, dto.granularity);
+  }
 
   @Get('reports/engagements.csv')
   @ApiOperation({

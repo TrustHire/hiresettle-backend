@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -31,6 +31,25 @@ export class HorizonIndexerService {
     } finally {
       this.isRunning = false;
     }
+  }
+
+  async backfillEvents(fromLedger: number, toLedger: number): Promise<number> {
+    if (!Number.isInteger(fromLedger) || !Number.isInteger(toLedger) || fromLedger < 1 || toLedger < 1) {
+      throw new BadRequestException('Ledger values must be positive integers.');
+    }
+    if (fromLedger > toLedger) {
+      throw new BadRequestException('"fromLedger" must be before or equal to "toLedger".');
+    }
+    if (toLedger - fromLedger > 10000) {
+      throw new BadRequestException('Ledger range cannot exceed 10000 ledgers.');
+    }
+
+    const events = await this.stellar.fetchContractEventsRange(fromLedger, toLedger);
+    let backfilled = 0;
+    for (const event of events) {
+      if (await this.persistEvent(event)) backfilled++;
+    }
+    return backfilled;
   }
 
   private async runWithBackoff(attempt = 0): Promise<void> {
@@ -78,14 +97,14 @@ export class HorizonIndexerService {
     });
   }
 
-  private async persistEvent(event: any): Promise<void> {
+  private async persistEvent(event: any): Promise<boolean> {
     const txHash = event.txHash ?? '';
     const eventName = this.extractEventName(event);
     const payload = event.value ? JSON.parse(JSON.stringify(event.value)) : {};
 
     // Idempotency: skip if already stored
     const exists = await this.prisma.chainEvent.findFirst({ where: { txHash, eventName } });
-    if (exists) return;
+    if (exists) return false;
 
     const engagementId = this.extractEngagementId(payload);
 
@@ -99,6 +118,7 @@ export class HorizonIndexerService {
         engagementId: engagementId ?? undefined,
       },
     });
+    return true;
   }
 
   private extractEventName(event: any): string {

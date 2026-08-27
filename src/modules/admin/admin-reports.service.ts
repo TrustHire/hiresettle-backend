@@ -4,6 +4,8 @@ import { Response } from 'express';
 
 const MAX_RANGE_DAYS = 90;
 
+type RevenueGranularity = 'daily' | 'monthly';
+
 function escapeCsv(val: unknown): string {
   if (val === null || val === undefined) return '';
   const str = String(val);
@@ -45,6 +47,81 @@ function parseAndValidateDateRange(
 @Injectable()
 export class AdminReportsService {
   constructor(private readonly prisma: PrismaService) {}
+
+  async getRevenueDashboard(
+    from: string,
+    to: string,
+    granularity: RevenueGranularity = 'daily',
+  ) {
+    const fromDate = new Date(from);
+    const toDate = new Date(to);
+    if (isNaN(fromDate.getTime()) || isNaN(toDate.getTime())) {
+      throw new BadRequestException(
+        'Invalid date format. Use ISO 8601 (e.g. 2026-01-01).',
+      );
+    }
+    if (fromDate > toDate) {
+      throw new BadRequestException('"from" must be before "to".');
+    }
+    if (!['daily', 'monthly'].includes(granularity)) {
+      throw new BadRequestException('"granularity" must be daily or monthly.');
+    }
+
+    // Date-only end dates should include the complete UTC day.
+    if (/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      toDate.setUTCHours(23, 59, 59, 999);
+    }
+
+    const milestones = await this.prisma.milestone.findMany({
+      where: {
+        status: 'CONFIRMED',
+        confirmedAt: { gte: fromDate, lte: toDate },
+        paymentReleased: { not: null },
+      },
+      select: { confirmedAt: true, paymentReleased: true },
+      orderBy: { confirmedAt: 'asc' },
+    });
+
+    const buckets = new Map<string, bigint>();
+    const cursor = new Date(fromDate);
+    if (granularity === 'daily') cursor.setUTCHours(0, 0, 0, 0);
+    else cursor.setUTCDate(1), cursor.setUTCHours(0, 0, 0, 0);
+
+    while (cursor <= toDate) {
+      const period = this.revenuePeriod(cursor, granularity);
+      buckets.set(period, 0n);
+      if (granularity === 'daily') cursor.setUTCDate(cursor.getUTCDate() + 1);
+      else cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+    }
+
+    let total = 0n;
+    for (const milestone of milestones) {
+      if (!milestone.confirmedAt || milestone.paymentReleased === null) continue;
+      const period = this.revenuePeriod(milestone.confirmedAt, granularity);
+      const amount = milestone.paymentReleased;
+      buckets.set(period, (buckets.get(period) ?? 0n) + amount);
+      total += amount;
+    }
+
+    return {
+      from: fromDate.toISOString(),
+      to: toDate.toISOString(),
+      granularity,
+      total: total.toString(),
+      buckets: [...buckets].map(([period, amount]) => ({
+        period,
+        amount: amount.toString(),
+      })),
+    };
+  }
+
+  private revenuePeriod(date: Date, granularity: RevenueGranularity): string {
+    const year = date.getUTCFullYear();
+    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+    if (granularity === 'monthly') return `${year}-${month}`;
+    const day = String(date.getUTCDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
 
   async streamEngagementsCsv(
     from: string,
