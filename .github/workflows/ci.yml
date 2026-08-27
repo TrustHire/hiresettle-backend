@@ -76,7 +76,7 @@ jobs:
         run: ./node_modules/.bin/prisma migrate deploy
 
       - name: Unit tests
-        run: ./node_modules/.bin/jest --testPathPattern="\.spec\.ts$" --testPathIgnorePatterns="integration" --forceExit
+        run: npm run test:cov -- --testPathPattern="\.spec\.ts$" --testPathIgnorePatterns="integration" --forceExit
 
       - name: Integration tests
         run: ./node_modules/.bin/jest --testPathPattern="integration" --forceExit
