@@ -39,6 +39,7 @@ export class RecruitersController {
   @ApiQuery({ name: 'search', required: false, type: String, description: 'Case-insensitive partial match on recruiter name' })
   @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number (default: 1)' })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Results per page (default: 20, max: 100)' })
+  @ApiQuery({ name: 'cursor', required: false, type: String, description: 'ID of the last recruiter from the previous page' })
   listRecruiters(@Query() query: SearchRecruitersDto) {
     return this.recruitersService.listRecruiters(query);
   }
@@ -59,12 +60,14 @@ export class RecruitersController {
   @ApiOperation({ summary: 'Get paginated list of recruiter engagements' })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'cursor', required: false, type: String, description: 'ID of the last engagement from the previous page' })
   getEngagements(
     @CurrentUser() user: User,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
+    @Query('cursor') cursor?: string,
   ) {
-    return this.recruitersService.getEngagements(user, page, limit);
+    return this.recruitersService.getEngagements(user, page, limit, cursor);
   }
 
   @Get('me/kyc')

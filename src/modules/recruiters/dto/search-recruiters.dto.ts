@@ -40,4 +40,9 @@ export class SearchRecruitersDto {
   @Min(1)
   @Max(RECRUITERS_MAX_PAGE_SIZE)
   limit?: number = 20;
+
+  @ApiPropertyOptional({ description: 'ID of the last recruiter from the previous page' })
+  @IsOptional()
+  @IsString()
+  cursor?: string;
 }

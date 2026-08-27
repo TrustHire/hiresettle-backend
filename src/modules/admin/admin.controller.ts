@@ -37,13 +37,14 @@ import { ListUsersDto } from './dto/list-users.dto';
 import { AssignArbiterDto } from './dto/assign-arbiter.dto';
 import { AuditLogsQueryDto } from './dto/audit-logs.dto';
 import { SetRateLimitOverrideDto } from './dto/set-rate-limit-override.dto';
+import { SetCompanyVerificationDto } from './dto/set-company-verification.dto';
 import { CacheService } from '../../common/cache/cache.service';
 import { SecurityEventsService } from '../../common/security-events/security-events.service';
 import { ListSecurityEventsDto } from '../../common/security-events/dto/list-security-events.dto';
 import { GdprService } from '../users/gdpr.service';
 import { AuthService, RequestMeta } from '../auth/auth.service';
-import { KycService } from '../recruiters/kyc.service';
-import { RejectKycDto } from './dto/reject-kyc.dto';
+import { ApiKeysService } from '../auth/api-keys.service';
+import { CreateApiKeyDto } from '../auth/dto/create-api-key.dto';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -62,8 +63,23 @@ export class AdminController {
     private readonly gdpr: GdprService,
     private readonly adminWebhooks: AdminWebhooksService,
     private readonly authService: AuthService,
-    private readonly kycService: KycService,
+    private readonly apiKeys: ApiKeysService,
   ) {}
+
+  @Get('maintenance-mode')
+  @ApiOperation({ summary: 'Get API maintenance mode status (admin only)' })
+  getMaintenanceMode() {
+    return this.maintenanceMode.isEnabled().then((enabled) => ({ enabled }));
+  }
+
+  @Put('maintenance-mode')
+  @AllowDuringMaintenance()
+  @ApiOperation({ summary: 'Enable or disable API maintenance mode (admin only)' })
+  @ApiResponse({ status: 200, description: 'Maintenance mode updated' })
+  @ApiResponse({ status: 503, description: 'API is in maintenance mode' })
+  setMaintenanceMode(@Body() dto: SetMaintenanceModeDto) {
+    return this.maintenanceMode.setEnabled(dto.enabled);
+  }
 
   @Get('users')
   @ApiOperation({ summary: 'List / search users (admin only)' })
@@ -186,6 +202,17 @@ export class AdminController {
   // Issue #62 — Admin reports / CSV export
   // ────────────────────────────────────────────────────────────────
 
+  @Get('dashboard/revenue')
+  @ApiOperation({ summary: 'Get platform revenue trends (admin only)' })
+  @ApiQuery({ name: 'from', required: true, description: 'ISO 8601 start date' })
+  @ApiQuery({ name: 'to', required: true, description: 'ISO 8601 end date' })
+  @ApiQuery({ name: 'granularity', required: false, enum: ['daily', 'monthly'], description: 'Revenue bucket size' })
+  @ApiResponse({ status: 200, description: 'Platform revenue trends retrieved' })
+  @ApiResponse({ status: 400, description: 'Invalid date range or granularity' })
+  getRevenueDashboard(@Query() dto: RevenueDashboardDto) {
+    return this.reports.getRevenueDashboard(dto.from, dto.to, dto.granularity);
+  }
+
   @Get('reports/engagements.csv')
   @ApiOperation({
     summary: 'Export engagements as CSV for a date range (max 90 days)',
@@ -299,6 +326,22 @@ export class AdminController {
     return this.auditLogs.queryAuditLogs(dto);
   }
 
+  @Get('audit-log/export')
+  @ApiOperation({ summary: 'Export the full audit trail as CSV (ADMIN only)' })
+  @ApiQuery({ name: 'from', required: true, description: 'ISO 8601 start date' })
+  @ApiQuery({ name: 'to', required: true, description: 'ISO 8601 end date' })
+  @ApiResponse({ status: 200, description: 'Audit trail CSV stream' })
+  @ApiResponse({ status: 400, description: 'Invalid date range' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  streamAuditLogExport(
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Res() res: Response,
+  ) {
+    return this.auditLogs.streamAuditLogCsv(from, to, res);
+  }
+
   // ────────────────────────────────────────────────────────────────
   // Issue #97 — GDPR data deletion queue
   // ────────────────────────────────────────────────────────────────
@@ -363,39 +406,35 @@ export class AdminController {
   }
 
   // ────────────────────────────────────────────────────────────────
-  // Issue #246 — Recruiter KYC admin review
+  // Issue #238 — API keys for server-to-server integrations
   // ────────────────────────────────────────────────────────────────
 
-  @Get('kyc/pending')
-  @ApiOperation({ summary: 'List recruiters with pending KYC submissions' })
-  @ApiQuery({ name: 'page', required: false, type: Number })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
-  @ApiResponse({ status: 200, description: 'Pending KYC queue retrieved' })
-  listPendingKyc(@Query('page') page?: number, @Query('limit') limit?: number) {
-    return this.kycService.listPending(Number(page) || 1, Number(limit) || 20);
+  @Post('api-keys')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Create an API key for a user (ADMIN only). Raw key is returned once and never again.',
+  })
+  @ApiResponse({ status: 201, description: 'API key created; raw key included in response once' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  createApiKey(@Body() dto: CreateApiKeyDto) {
+    return this.apiKeys.create(dto);
   }
 
-  @Post('kyc/:userId/approve')
-  @ApiOperation({ summary: 'Approve recruiter KYC (records reviewer + timestamp)' })
-  @ApiParam({ name: 'userId', description: 'Recruiter user ID' })
-  @ApiResponse({ status: 201, description: 'KYC approved' })
-  @ApiResponse({ status: 400, description: 'KYC not pending or no documents' })
-  @ApiResponse({ status: 404, description: 'User not found' })
-  approveKyc(@Param('userId') userId: string, @Req() req: Request) {
-    return this.kycService.approve(userId, (req.user as any)?.id);
+  @Get('api-keys')
+  @ApiOperation({ summary: 'List API keys (optionally filtered by userId). Hashes are never returned.' })
+  @ApiQuery({ name: 'userId', required: false, description: 'Filter by owning user ID' })
+  @ApiResponse({ status: 200, description: 'API key metadata list' })
+  listApiKeys(@Query('userId') userId?: string) {
+    return this.apiKeys.list(userId);
   }
 
-  @Post('kyc/:userId/reject')
-  @ApiOperation({ summary: 'Reject recruiter KYC (records reviewer + timestamp)' })
-  @ApiParam({ name: 'userId', description: 'Recruiter user ID' })
-  @ApiResponse({ status: 201, description: 'KYC rejected' })
-  @ApiResponse({ status: 400, description: 'KYC not pending or no documents' })
-  @ApiResponse({ status: 404, description: 'User not found' })
-  rejectKyc(
-    @Param('userId') userId: string,
-    @Body() dto: RejectKycDto,
-    @Req() req: Request,
-  ) {
-    return this.kycService.reject(userId, (req.user as any)?.id, dto.reason);
+  @Delete('api-keys/:id')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Revoke an API key (ADMIN only)' })
+  @ApiParam({ name: 'id', description: 'API key ID' })
+  @ApiResponse({ status: 200, description: 'API key revoked' })
+  @ApiResponse({ status: 404, description: 'API key not found' })
+  revokeApiKey(@Param('id') id: string) {
+    return this.apiKeys.revoke(id);
   }
 }

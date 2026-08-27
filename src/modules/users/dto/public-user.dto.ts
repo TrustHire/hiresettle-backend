@@ -11,11 +11,6 @@ export class PublicUserDto {
   @ApiProperty({ enum: UserRole })
   role: UserRole;
 
-  @ApiProperty({
-    example: 4.5,
-    required: false,
-    nullable: true,
-    description: 'Average recruiter rating (recruiters only)',
-  })
-  averageRating?: number | null;
+  @ApiProperty({ nullable: true, description: 'When the company was verified by an admin' })
+  verifiedAt: Date | null;
 }

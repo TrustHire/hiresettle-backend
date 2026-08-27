@@ -31,7 +31,9 @@ import { UsersModule } from './modules/users/users.module';
 import { HealthModule } from './modules/health/health.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { BillingModule } from './modules/billing/billing.module';
+import { GraphqlModule } from './graphql/graphql.module';
 import stellarConfig from './config/stellar.config';
+import { MaintenanceModeModule } from './common/maintenance/maintenance-mode.module';
 
 @Module({
   imports: [
@@ -76,6 +78,7 @@ import stellarConfig from './config/stellar.config';
     HealthModule,
     AdminModule,
     BillingModule,
+    GraphqlModule,
   ],
 })
 export class AppModule implements NestModule {

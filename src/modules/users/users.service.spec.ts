@@ -47,6 +47,7 @@ describe('UsersService', () => {
         name: 'Ada',
         company: 'HireSettle',
         role: UserRole.RECRUITER,
+        verifiedAt: null,
       };
       mockPrisma.user.findUnique.mockResolvedValue(mockUser);
 
@@ -55,7 +56,7 @@ describe('UsersService', () => {
       expect(result).toEqual(mockUser);
       expect(mockPrisma.user.findUnique).toHaveBeenCalledWith({
         where: { stellarAddress: address },
-        select: { name: true, company: true, role: true },
+        select: { name: true, company: true, role: true, verifiedAt: true },
       });
     });
 

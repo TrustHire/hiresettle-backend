@@ -33,6 +33,10 @@ export const envValidationSchema = Joi.object({
   RETENTION_IDEMPOTENCY_KEYS_DAYS: Joi.number().integer().min(-1).default(0),
   RETENTION_REFRESH_TOKENS_DAYS: Joi.number().integer().min(-1).default(30),
   RETENTION_DATA_DELETION_REQS_DAYS: Joi.number().integer().min(-1).default(365),
+
+  // Stellar backend account balance alert
+  STELLAR_BALANCE_ALERT_INTERVAL_MS: Joi.number().integer().min(60000).default(300000),
+  STELLAR_BALANCE_ALERT_THRESHOLD_STROOPS: Joi.number().integer().min(0).default(10000000),
   
   // Database connection pooling
   DATABASE_POOL_MIN: Joi.number().integer().min(1).max(20).default(2),
@@ -48,4 +52,10 @@ export const envValidationSchema = Joi.object({
   STELLAR_BREAKER_RESET_TIMEOUT: Joi.number().integer().min(1000).max(300000).default(30000),
   STELLAR_BREAKER_ROLLING_COUNT_TIMEOUT: Joi.number().integer().min(1000).max(60000).default(10000),
   STELLAR_BREAKER_ROLLING_COUNT_BUCKETS: Joi.number().integer().min(1).max(20).default(10),
+
+  // Google OAuth2 (optional)
+  GOOGLE_CLIENT_ID: Joi.string().allow('').optional(),
+  GOOGLE_CLIENT_SECRET: Joi.string().allow('').optional(),
+  GOOGLE_CALLBACK_URL: Joi.string().uri().allow('').optional(),
+  GOOGLE_OAUTH_SUCCESS_REDIRECT: Joi.string().uri().allow('').optional(),
 }).unknown(true);

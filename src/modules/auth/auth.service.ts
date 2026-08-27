@@ -10,7 +10,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { Prisma, SecurityEventAction, User } from '@prisma/client';
+import { Prisma, SecurityEventAction, User, UserRole } from '@prisma/client';
 import { randomBytes, scrypt as scryptCallback, timingSafeEqual, createHash } from 'crypto';
 import { promisify } from 'util';
 import { TOTP } from 'otpauth';
@@ -165,55 +165,136 @@ export class AuthService {
   }
 
   /**
-   * Authenticated password reset / change. Enforces configured complexity policy.
+   * Google OAuth2 login: link to an existing user by email when possible,
+   * otherwise create a COMPANY user. Issues the same JWT pair as password login.
    */
-  async resetPassword(userId: string, currentPassword: string, newPassword: string) {
-    this.passwordPolicy.validate(newPassword);
-
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user?.passwordHash) {
-      throw new BadRequestException('Account does not support password authentication');
-    }
-
-    if (!(await this.verifyPassword(currentPassword, user.passwordHash))) {
-      throw new UnauthorizedException('Current password is incorrect');
-    }
-
-    const passwordHash = await this.hashPassword(newPassword);
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { passwordHash },
+  async loginWithGoogle(
+    profile: { googleId: string; email: string; name?: string | null },
+    meta: RequestMeta = {},
+  ) {
+    const email = profile.email.toLowerCase();
+    let user = await this.prisma.user.findFirst({
+      where: {
+        OR: [{ googleId: profile.googleId }, { email }],
+      },
     });
 
-    await this.securityEvents.log({
-      userId,
-      action: SecurityEventAction.PASSWORD_RESET,
+    if (user) {
+      if (user.deactivatedAt || user.deletedAt) {
+        await this.logSecurityEvent(SecurityEventAction.LOGIN_FAILURE, user.id, meta);
+        throw new ForbiddenException('Your account has been deactivated. Please contact an administrator.');
+      }
+
+      if (!user.googleId) {
+        user = await this.prisma.user.update({
+          where: { id: user.id },
+          data: { googleId: profile.googleId },
+        });
+      } else if (user.googleId !== profile.googleId && user.email === email) {
+        // Email match but different googleId — still allow login via email link
+        user = await this.prisma.user.update({
+          where: { id: user.id },
+          data: { googleId: profile.googleId },
+        });
+      }
+    } else {
+      user = await this.prisma.user.create({
+        data: {
+          email,
+          googleId: profile.googleId,
+          name: profile.name ?? undefined,
+          role: UserRole.COMPANY,
+        },
+      });
+      this.logger.log(`User registered via Google OAuth: ${email}`);
+    }
+
+    await this.resetFailedAttempts(user.id);
+    await this.logSecurityEvent(SecurityEventAction.LOGIN_SUCCESS, user.id, meta);
+    return this.issueTokenPair(user);
+  }
+
+  /** Build the Google OAuth2 authorization URL (authorization-code flow). */
+  getGoogleAuthUrl(state: string): string {
+    const clientId = this.config.get<string>('GOOGLE_CLIENT_ID');
+    const callbackUrl = this.config.get<string>('GOOGLE_CALLBACK_URL');
+    if (!clientId || !callbackUrl) {
+      throw new BadRequestException('Google OAuth is not configured');
+    }
+
+    const params = new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: callbackUrl,
+      response_type: 'code',
+      scope: 'openid email profile',
+      access_type: 'online',
+      include_granted_scopes: 'true',
+      state,
+      prompt: 'select_account',
     });
 
-    return { message: 'Password updated successfully' };
+    return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
   }
 
-  /** Public password verification for re-auth flows (e.g. account deletion). */
-  async checkPassword(password: string, passwordHash: string): Promise<boolean> {
-    return this.verifyPassword(password, passwordHash);
-  }
+  /** Exchange an authorization code for Google profile info. */
+  async exchangeGoogleCode(code: string): Promise<{ googleId: string; email: string; name?: string | null }> {
+    const clientId = this.config.get<string>('GOOGLE_CLIENT_ID');
+    const clientSecret = this.config.get<string>('GOOGLE_CLIENT_SECRET');
+    const callbackUrl = this.config.get<string>('GOOGLE_CALLBACK_URL');
+    if (!clientId || !clientSecret || !callbackUrl) {
+      throw new BadRequestException('Google OAuth is not configured');
+    }
 
-  /**
-   * Verify a Stellar wallet signature over a challenge nonce.
-   * Nonce must match the one previously issued for this address.
-   */
-  verifyWalletSignature(stellarAddress: string, nonce: string, signatureBase64: string): boolean {
-    if (!this.consumeNonce(stellarAddress, nonce)) {
-      return false;
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: callbackUrl,
+        grant_type: 'authorization_code',
+      }),
+    });
+
+    if (!tokenRes.ok) {
+      this.logger.warn(`Google token exchange failed: ${tokenRes.status}`);
+      throw new UnauthorizedException('Google OAuth token exchange failed');
     }
-    try {
-      const keypair = Keypair.fromPublicKey(stellarAddress);
-      const message = Buffer.from(nonce, 'utf8');
-      const signature = Buffer.from(signatureBase64, 'base64');
-      return keypair.verify(message, signature);
-    } catch {
-      return false;
+
+    const tokenJson = (await tokenRes.json()) as { access_token?: string };
+    if (!tokenJson.access_token) {
+      throw new UnauthorizedException('Google OAuth token exchange failed');
     }
+
+    const profileRes = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
+      headers: { Authorization: `Bearer ${tokenJson.access_token}` },
+    });
+
+    if (!profileRes.ok) {
+      throw new UnauthorizedException('Failed to fetch Google user profile');
+    }
+
+    const profile = (await profileRes.json()) as {
+      sub?: string;
+      email?: string;
+      email_verified?: boolean;
+      name?: string;
+    };
+
+    if (!profile.sub || !profile.email) {
+      throw new UnauthorizedException('Google account did not return a verified email');
+    }
+
+    if (profile.email_verified === false) {
+      throw new UnauthorizedException('Google email is not verified');
+    }
+
+    return {
+      googleId: profile.sub,
+      email: profile.email,
+      name: profile.name ?? null,
+    };
   }
 
   async refresh(refreshToken: string) {

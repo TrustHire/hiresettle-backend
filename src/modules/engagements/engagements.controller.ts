@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import {
   ApiTags, ApiOperation, ApiResponse,
-  ApiBearerAuth, ApiQuery, ApiParam,
+  ApiBearerAuth, ApiQuery, ApiParam, ApiSecurity,
 } from '@nestjs/swagger';
 import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
 import { Idempotent } from '../../common/decorators/idempotent.decorator';
@@ -16,7 +16,7 @@ import { CreateEngagementDto } from './dto/create-engagement.dto';
 import { UpdateEngagementStatusDto } from './dto/update-engagement-status.dto';
 import { AuditLogService } from './audit-log.service';
 import { AuditLogEntryDto } from './dto/audit-log-response.dto';
-import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { JwtOrApiKeyGuard } from '../../common/guards/jwt-or-api-key.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -28,8 +28,9 @@ import { CreateEngagementNoteDto } from './dto/create-engagement-note.dto';
 
 @ApiTags('engagements')
 @ApiBearerAuth()
+@ApiSecurity('api-key')
 @UseGuards(UserJwtSubThrottlerGuard)
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtOrApiKeyGuard)
 @Throttle({ default: { limit: 100, ttl: 60 } })
 @Controller('engagements')
 export class EngagementsController {
@@ -72,6 +73,7 @@ export class EngagementsController {
   @ApiQuery({ name: 'createdTo', required: false, description: 'ISO date string (e.g., 2026-12-31)' })
   @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number' })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page' })
+  @ApiQuery({ name: 'cursor', required: false, type: String, description: 'ID of the last engagement from the previous page' })
   @ApiQuery({ name: 'sortBy', required: false, enum: ['createdAt', 'amount', 'status'], description: 'Field to sort by (default: createdAt)' })
   @ApiQuery({ name: 'sortOrder', required: false, enum: ['asc', 'desc'], description: 'Sort direction (default: desc)' })
   @ApiQuery({ name: 'includeArchived', required: false, type: Boolean, description: 'Include archived engagements (default: false)' })
@@ -87,6 +89,7 @@ export class EngagementsController {
     @Query('createdTo') createdTo?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
+    @Query('cursor') cursor?: string,
     @Query('sortBy') sortBy?: string,
     @Query('sortOrder') sortOrder?: string,
     @Query('includeArchived') includeArchived?: boolean,
@@ -100,6 +103,7 @@ export class EngagementsController {
       createdTo,
       page,
       limit,
+      cursor,
       sortBy,
       sortOrder,
       includeArchived,

@@ -1,14 +1,17 @@
 import { BadRequestException, Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Put, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiTags, ApiResponse, ApiConsumes } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { RateLimit } from '../../common/decorators/throttle.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { UserJwtSubThrottlerGuard } from '../../common/guards/user-jwt-sub-throttler.guard';
 import { PublicUserDto } from './dto/public-user.dto';
 import { UpdatePreferencesDto } from './dto/update-preferences.dto';
 import { UserProfileDto } from './dto/user-profile.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { AvatarUploadDto } from './dto/avatar-upload.dto';
-import { DeleteAccountDto } from './dto/delete-account.dto';
+import { UserDataExportDto } from './dto/user-data-export.dto';
 import { UsersService } from './users.service';
 import { GdprService } from './gdpr.service';
 
@@ -23,6 +26,19 @@ export class UsersController {
     private readonly gdprService: GdprService,
   ) {}
 
+  @Get('me/export')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, UserJwtSubThrottlerGuard)
+  @RateLimit(5, 60)
+  @Throttle({ default: { limit: 5, ttl: 60 } })
+  @ApiOperation({ summary: 'GDPR right-to-access: download a JSON export of the current user\'s data' })
+  @ApiResponse({ status: 200, description: 'User data export bundle', type: UserDataExportDto })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 429, description: 'Too many requests' })
+  exportMe(@CurrentUser('id') userId: string): Promise<UserDataExportDto> {
+    return this.gdprService.exportUserData(userId);
+  }
+
   @Delete('me')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
@@ -36,19 +52,6 @@ export class UsersController {
     @Body() dto: DeleteAccountDto,
   ) {
     return this.gdprService.requestErasure(userId, dto);
-  }
-
-  @Get(':stellarAddress')
-  @ApiOperation({ summary: 'Look up public profile by Stellar address (no auth required)' })
-  @ApiParam({ name: 'stellarAddress', example: 'GABC...XYZ', description: 'Stellar public key (56 chars, starts with G)' })
-  @ApiResponse({ status: 200, description: 'Public profile retrieved' })
-  @ApiResponse({ status: 400, description: 'Invalid Stellar address format' })
-  @ApiResponse({ status: 404, description: 'User not found' })
-  getPublicProfile(@Param('stellarAddress') stellarAddress: string): Promise<PublicUserDto> {
-    if (!STELLAR_ADDRESS_RE.test(stellarAddress)) {
-      throw new BadRequestException('Invalid Stellar address format');
-    }
-    return this.usersService.findByStellarAddress(stellarAddress);
   }
 
   @Get('me/notification-preferences')
@@ -131,5 +134,18 @@ export class UsersController {
       throw new BadRequestException('No file provided');
     }
     return this.usersService.uploadAvatar(userId, file);
+  }
+
+  @Get(':stellarAddress')
+  @ApiOperation({ summary: 'Look up public profile by Stellar address (no auth required)' })
+  @ApiParam({ name: 'stellarAddress', example: 'GABC...XYZ', description: 'Stellar public key (56 chars, starts with G)' })
+  @ApiResponse({ status: 200, description: 'Public profile retrieved' })
+  @ApiResponse({ status: 400, description: 'Invalid Stellar address format' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  getPublicProfile(@Param('stellarAddress') stellarAddress: string): Promise<PublicUserDto> {
+    if (!STELLAR_ADDRESS_RE.test(stellarAddress)) {
+      throw new BadRequestException('Invalid Stellar address format');
+    }
+    return this.usersService.findByStellarAddress(stellarAddress);
   }
 }

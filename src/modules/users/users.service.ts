@@ -41,7 +41,7 @@ export class UsersService {
 
     const user = await this.prisma.user.findUnique({
       where: { stellarAddress },
-      select: { id: true, name: true, company: true, role: true },
+      select: { name: true, company: true, role: true, verifiedAt: true },
     });
     if (!user) throw new NotFoundException('User not found');
 

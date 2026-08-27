@@ -5,7 +5,10 @@ import { PassportModule } from '@nestjs/passport';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { ApiKeysService } from './api-keys.service';
 import { JwtStrategy } from './jwt.strategy';
+import { ApiKeyGuard } from '../../common/guards/api-key.guard';
+import { JwtOrApiKeyGuard } from '../../common/guards/jwt-or-api-key.guard';
 
 @Module({
   imports: [
@@ -20,7 +23,7 @@ import { JwtStrategy } from './jwt.strategy';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy],
-  exports: [AuthService],
+  providers: [AuthService, ApiKeysService, JwtStrategy, ApiKeyGuard, JwtOrApiKeyGuard],
+  exports: [AuthService, ApiKeysService, ApiKeyGuard, JwtOrApiKeyGuard],
 })
 export class AuthModule {}
