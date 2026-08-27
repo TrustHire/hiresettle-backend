@@ -32,6 +32,7 @@ and rotated across environments.
 | `STELLAR_SECRET_KEY` | Reads on-chain events from Horizon/RPC (read-only, holds no funds) | Backend on-call |
 | `DATABASE_URL` (credential portion) | Postgres auth | Backend on-call |
 | `S3_SECRET_ACCESS_KEY` | S3/object storage auth | Backend on-call |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth2 token exchange | Backend on-call |
 
 ## Rotation procedures
 

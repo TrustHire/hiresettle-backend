@@ -94,6 +94,7 @@ model User {
   lockedUntil    DateTime?
   totpSecret     String?        // TOTP secret for 2FA
   totpEnabled    Boolean         @default(false)
+  googleId       String?   @unique // Google OAuth subject; linked by email when an account already exists
   deletedAt      DateTime?      // GDPR anonymisation timestamp — set when erasure is requested
   anonymizedAt   DateTime?      // Set by PiiAnonymizationSchedulerService once all PII fields are wiped
   createdAt      DateTime       @default(now())
@@ -116,10 +117,32 @@ model User {
   idempotencyKeys      IdempotencyKey[]
   webhookDeliveries    WebhookDelivery[]
   engagementNotes      EngagementNote[]
+  apiKeys              ApiKey[]
 
   @@index([role, deactivatedAt])
   @@index([deletedAt, anonymizedAt]) // Used by PiiAnonymizationSchedulerService
   @@map("users")
+}
+
+// Server-to-server credentials. Raw key is shown once at creation; only keyHash is stored.
+model ApiKey {
+  id         String    @id @default(uuid())
+  name       String
+  keyPrefix  String    // first 8 chars of the raw key for display/lookup hints
+  keyHash    String    @unique
+  userId     String    // owning user (usually a COMPANY account)
+  companyId  String?   // optional company scope (defaults to userId for COMPANY users)
+  expiresAt  DateTime?
+  revokedAt  DateTime?
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([companyId])
+  @@index([keyHash])
+  @@map("api_keys")
 }
 
 model RefreshToken {
