@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import {
   ApiTags, ApiOperation, ApiResponse,
-  ApiBearerAuth, ApiQuery, ApiParam,
+  ApiBearerAuth, ApiQuery, ApiParam, ApiSecurity,
 } from '@nestjs/swagger';
 import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
 import { Idempotent } from '../../common/decorators/idempotent.decorator';
@@ -16,7 +16,7 @@ import { CreateEngagementDto } from './dto/create-engagement.dto';
 import { UpdateEngagementStatusDto } from './dto/update-engagement-status.dto';
 import { AuditLogService } from './audit-log.service';
 import { AuditLogEntryDto } from './dto/audit-log-response.dto';
-import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { JwtOrApiKeyGuard } from '../../common/guards/jwt-or-api-key.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -28,8 +28,9 @@ import { CreateEngagementNoteDto } from './dto/create-engagement-note.dto';
 
 @ApiTags('engagements')
 @ApiBearerAuth()
+@ApiSecurity('api-key')
 @UseGuards(UserJwtSubThrottlerGuard)
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtOrApiKeyGuard)
 @Throttle({ default: { limit: 100, ttl: 60 } })
 @Controller('engagements')
 export class EngagementsController {

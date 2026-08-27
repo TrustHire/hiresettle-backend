@@ -128,11 +128,15 @@ async function bootstrap() {
       )
       .setVersion('1.0')
       .addBearerAuth()
+      .addApiKey(
+        { type: 'apiKey', name: 'X-Api-Key', in: 'header', description: 'Server-to-server API key' },
+        'api-key',
+      )
       .addTag('engagements', 'Recruitment engagement lifecycle')
       .addTag('milestones', 'Milestone proof, unlock, and confirmation')
       .addTag('events', 'On-chain Stellar event feed')
       .addTag('notifications', 'User notifications')
-      .addTag('auth', 'Email/password authentication')
+      .addTag('auth', 'Email/password, Google OAuth, and session management')
       .addTag('health', 'Health check endpoints')
       .setBasePath(apiPrefix)
       .build();
