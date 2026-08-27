@@ -37,6 +37,7 @@ import { ListUsersDto } from './dto/list-users.dto';
 import { AssignArbiterDto } from './dto/assign-arbiter.dto';
 import { AuditLogsQueryDto } from './dto/audit-logs.dto';
 import { SetRateLimitOverrideDto } from './dto/set-rate-limit-override.dto';
+import { SetCompanyVerificationDto } from './dto/set-company-verification.dto';
 import { CacheService } from '../../common/cache/cache.service';
 import { SecurityEventsService } from '../../common/security-events/security-events.service';
 import { ListSecurityEventsDto } from '../../common/security-events/dto/list-security-events.dto';
@@ -280,6 +281,22 @@ export class AdminController {
     return this.auditLogs.queryAuditLogs(dto);
   }
 
+  @Get('audit-log/export')
+  @ApiOperation({ summary: 'Export the full audit trail as CSV (ADMIN only)' })
+  @ApiQuery({ name: 'from', required: true, description: 'ISO 8601 start date' })
+  @ApiQuery({ name: 'to', required: true, description: 'ISO 8601 end date' })
+  @ApiResponse({ status: 200, description: 'Audit trail CSV stream' })
+  @ApiResponse({ status: 400, description: 'Invalid date range' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  streamAuditLogExport(
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Res() res: Response,
+  ) {
+    return this.auditLogs.streamAuditLogCsv(from, to, res);
+  }
+
   // ────────────────────────────────────────────────────────────────
   // Issue #97 — GDPR data deletion queue
   // ────────────────────────────────────────────────────────────────
@@ -341,5 +358,17 @@ export class AdminController {
   @ApiResponse({ status: 404, description: 'User not found' })
   clearRateLimitOverride(@Param('id') id: string) {
     return this.adminUsers.clearRateLimitOverride(id);
+  }
+
+  @Patch('users/:id/verification')
+  @ApiOperation({ summary: 'Set or clear company verification (ADMIN only)' })
+  @ApiParam({ name: 'id', description: 'Company user ID' })
+  @ApiResponse({ status: 200, description: 'Company verification updated' })
+  @ApiResponse({ status: 400, description: 'User is not a company' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  setCompanyVerification(@Param('id') id: string, @Body() dto: SetCompanyVerificationDto) {
+    return this.adminUsers.setCompanyVerification(id, dto.verified);
   }
 }

@@ -8,6 +8,7 @@ import { CreateEngagementDto } from './dto/create-engagement.dto';
 import { EngagementSummaryDto } from './dto/engagement-summary.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AuditLogService } from './audit-log.service';
+import { cursorPage } from '../../common/pagination/cursor-pagination';
 
 const ENGAGEMENT_SORTABLE_FIELDS: Record<string, string> = {
   createdAt: 'createdAt',
@@ -196,12 +197,13 @@ export class EngagementsService {
     createdTo?: string;    // ISO date string
     page?: number;
     limit?: number;
+    cursor?: string;
     sortBy?: string;       // one of ENGAGEMENT_SORTABLE_FIELDS
     sortOrder?: string;    // 'asc' | 'desc'
   }) {
     const {
       companyAddress, recruiterAddress, status, search, createdFrom, createdTo,
-      page = 1, limit = 20, sortBy, sortOrder,
+      page = 1, limit = 20, sortBy, sortOrder, cursor,
     } = filters;
 
     const where: any = {};
@@ -235,6 +237,22 @@ export class EngagementsService {
         throw new BadRequestException(`Invalid sortOrder value '${sortOrder}'. Allowed values: asc, desc`);
       }
       orderBy = { [field]: sortOrder === 'asc' ? 'asc' : 'desc' };
+    }
+
+    if (cursor) {
+      const engagements = await this.prisma.engagement.findMany({
+        where,
+        include: { milestones: { orderBy: { milestoneIndex: 'asc' } } },
+        orderBy,
+        cursor: { id: cursor },
+        skip: 1,
+        take: limit + 1,
+      });
+      const pageResult = cursorPage(engagements, limit);
+      return {
+        data: pageResult.data.map(this.serialize),
+        meta: { limit, nextCursor: pageResult.nextCursor },
+      };
     }
 
     const [engagements, total] = await this.prisma.$transaction([

@@ -10,4 +10,7 @@ export class PublicUserDto {
 
   @ApiProperty({ enum: UserRole })
   role: UserRole;
+
+  @ApiProperty({ nullable: true, description: 'When the company was verified by an admin' })
+  verifiedAt: Date | null;
 }

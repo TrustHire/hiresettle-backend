@@ -22,6 +22,7 @@ export class NotificationsController {
   @ApiQuery({ name: 'unreadOnly', required: false, type: Boolean, description: 'Show only unread notifications' })
   @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number' })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page' })
+  @ApiQuery({ name: 'cursor', required: false, type: String, description: 'ID of the last notification from the previous page' })
   @ApiResponse({ status: 200, description: 'Notifications list retrieved' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   findAll(
@@ -29,8 +30,9 @@ export class NotificationsController {
     @Query('unreadOnly') unreadOnly?: boolean,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
+    @Query('cursor') cursor?: string,
   ) {
-    return this.notificationsService.findForUser(userId, unreadOnly, page, limit);
+    return this.notificationsService.findForUser(userId, unreadOnly, page, limit, cursor);
   }
 
   @Get('preferences')

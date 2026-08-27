@@ -4,6 +4,7 @@ import { Cache } from 'cache-manager';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { EngagementStatus, MilestoneStatus, MilestoneKind, UserRole } from '@prisma/client';
 import { SearchRecruitersDto } from './dto/search-recruiters.dto';
+import { cursorPage } from '../../common/pagination/cursor-pagination';
 
 interface CurrentUser {
   id: string;
@@ -18,7 +19,7 @@ export class RecruitersService {
     @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
   ) {}
 
-  async listRecruiters({ search, page = 1, limit = 20 }: SearchRecruitersDto = {}) {
+  async listRecruiters({ search, page = 1, limit = 20, cursor }: SearchRecruitersDto = {}) {
     const where: Parameters<typeof this.prisma.user.findMany>[0]['where'] = {
       role: UserRole.RECRUITER,
       deactivatedAt: null,
@@ -26,6 +27,25 @@ export class RecruitersService {
         ? { name: { contains: search.trim(), mode: 'insensitive' } }
         : {}),
     };
+
+    if (cursor) {
+      const data = await this.prisma.user.findMany({
+        where,
+        select: {
+          id: true,
+          name: true,
+          stellarAddress: true,
+          avatarUrl: true,
+          createdAt: true,
+        },
+        cursor: { id: cursor },
+        skip: 1,
+        take: limit + 1,
+        orderBy: { name: 'asc' },
+      });
+      const pageResult = cursorPage(data, limit);
+      return { data: pageResult.data, meta: { limit, nextCursor: pageResult.nextCursor } };
+    }
 
     const [data, total] = await this.prisma.$transaction([
       this.prisma.user.findMany({
@@ -119,7 +139,7 @@ export class RecruitersService {
     return result;
   }
 
-  async getEngagements(user: CurrentUser, page = 1, limit = 20) {
+  async getEngagements(user: CurrentUser, page = 1, limit = 20, cursor?: string) {
     if (!user.stellarAddress) {
       throw new NotFoundException('Recruiter not found');
     }
@@ -127,6 +147,22 @@ export class RecruitersService {
     const recruiterAddress = user.stellarAddress;
 
     const where = { recruiterAddress };
+    if (cursor) {
+      const engagements = await this.prisma.engagement.findMany({
+        where,
+        include: { milestones: { orderBy: { milestoneIndex: 'asc' } } },
+        orderBy: { createdAt: 'desc' },
+        cursor: { id: cursor },
+        skip: 1,
+        take: limit + 1,
+      });
+      const pageResult = cursorPage(engagements, limit);
+      return {
+        data: pageResult.data.map(this.serializeEngagement),
+        meta: { limit, nextCursor: pageResult.nextCursor },
+      };
+    }
+
     const [engagements, total] = await this.prisma.$transaction([
       this.prisma.engagement.findMany({
         where,

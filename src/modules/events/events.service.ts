@@ -7,6 +7,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { EngagementsService } from '../engagements/engagements.service';
 import { WebhooksService } from '../webhooks/webhooks.service';
 import { NotificationType } from '@prisma/client';
+import { cursorPage } from '../../common/pagination/cursor-pagination';
 
 /**
  * EventsService
@@ -473,11 +474,24 @@ export class EventsService implements OnModuleInit {
     processed?: boolean,
     page = 1,
     limit = 20,
+    cursor?: string,
   ) {
     const where: any = {};
     if (engagementId) where.engagementId = engagementId;
     if (eventName) where.eventName = eventName;
     if (processed !== undefined) where.processed = processed;
+
+    if (cursor) {
+      const events = await this.prisma.chainEvent.findMany({
+        where,
+        cursor: { id: cursor },
+        skip: 1,
+        take: limit + 1,
+        orderBy: { ledger: 'desc' },
+      });
+      const pageResult = cursorPage(events, limit);
+      return { data: pageResult.data, meta: { limit, nextCursor: pageResult.nextCursor } };
+    }
 
     const [events, total] = await this.prisma.$transaction([
       this.prisma.chainEvent.findMany({
