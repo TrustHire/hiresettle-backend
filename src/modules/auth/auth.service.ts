@@ -25,6 +25,7 @@ const PASSWORD_KEY_LENGTH = 64;
 const REFRESH_TOKEN_DAYS = 7;
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MINUTES = 15;
+const IMPERSONATION_TOKEN_TTL_SECONDS = 5 * 60;
 
 type AuthUser = Omit<User, 'passwordHash' | 'webhookSecret'>;
 
@@ -200,6 +201,48 @@ export class AuthService {
       accessToken: this.signAccessToken(stored.user),
       refreshToken: nextRefreshToken,
       user: this.sanitizeUser(stored.user),
+    };
+  }
+
+  async issueImpersonationToken(
+    adminId: string,
+    targetUserId: string,
+    meta: RequestMeta = {},
+  ) {
+    const target = await this.prisma.user.findUnique({
+      where: { id: targetUserId },
+    });
+
+    if (!target || target.deletedAt || target.deactivatedAt) {
+      throw new ForbiddenException('User is not available for impersonation');
+    }
+
+    const accessToken = this.jwt.sign(
+      {
+        sub: target.id,
+        email: target.email,
+        stellarAddress: target.stellarAddress,
+        role: target.role,
+        type: 'access',
+        impersonated: true,
+        impersonatorId: adminId,
+      },
+      { expiresIn: IMPERSONATION_TOKEN_TTL_SECONDS },
+    );
+
+    await this.securityEvents.log({
+      userId: target.id,
+      actorId: adminId,
+      targetUserId: target.id,
+      action: SecurityEventAction.IMPERSONATION_ISSUED,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+    });
+
+    return {
+      accessToken,
+      expiresIn: IMPERSONATION_TOKEN_TTL_SECONDS,
+      user: this.sanitizeUser(target),
     };
   }
 

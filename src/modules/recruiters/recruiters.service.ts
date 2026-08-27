@@ -90,7 +90,7 @@ export class RecruitersService {
 
     // Get all engagements for recruiter
     const engagements = await this.prisma.engagement.findMany({
-      where: { recruiterAddress },
+      where: { recruiterAddress, archivedAt: null },
       include: { milestones: true },
     });
 
@@ -146,23 +146,7 @@ export class RecruitersService {
 
     const recruiterAddress = user.stellarAddress;
 
-    const where = { recruiterAddress };
-    if (cursor) {
-      const engagements = await this.prisma.engagement.findMany({
-        where,
-        include: { milestones: { orderBy: { milestoneIndex: 'asc' } } },
-        orderBy: { createdAt: 'desc' },
-        cursor: { id: cursor },
-        skip: 1,
-        take: limit + 1,
-      });
-      const pageResult = cursorPage(engagements, limit);
-      return {
-        data: pageResult.data.map(this.serializeEngagement),
-        meta: { limit, nextCursor: pageResult.nextCursor },
-      };
-    }
-
+    const where = { recruiterAddress, archivedAt: null };
     const [engagements, total] = await this.prisma.$transaction([
       this.prisma.engagement.findMany({
         where,

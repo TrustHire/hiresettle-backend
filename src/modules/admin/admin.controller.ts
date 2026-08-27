@@ -42,6 +42,7 @@ import { CacheService } from '../../common/cache/cache.service';
 import { SecurityEventsService } from '../../common/security-events/security-events.service';
 import { ListSecurityEventsDto } from '../../common/security-events/dto/list-security-events.dto';
 import { GdprService } from '../users/gdpr.service';
+import { AuthService, RequestMeta } from '../auth/auth.service';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -59,6 +60,7 @@ export class AdminController {
     private readonly auditLogs: AdminAuditLogsService,
     private readonly gdpr: GdprService,
     private readonly adminWebhooks: AdminWebhooksService,
+    private readonly authService: AuthService,
   ) {}
 
   @Get('users')
@@ -68,6 +70,20 @@ export class AdminController {
   @ApiResponse({ status: 403, description: 'Forbidden' })
   listUsers(@Query() dto: ListUsersDto) {
     return this.adminUsers.listUsers(dto);
+  }
+
+  @Post('users/:id/impersonate')
+  @ApiOperation({ summary: 'Issue a short-lived token to view the app as a user' })
+  @ApiParam({ name: 'id', description: 'Target user ID' })
+  @ApiResponse({ status: 200, description: 'Impersonation token issued' })
+  @ApiResponse({ status: 403, description: 'User is not available for impersonation' })
+  issueImpersonationToken(@Param('id') id: string, @Req() req: Request) {
+    const adminId = (req.user as any)?.id;
+    const meta: RequestMeta = {
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    };
+    return this.authService.issueImpersonationToken(adminId, id, meta);
   }
 
   @Delete('users/:id')

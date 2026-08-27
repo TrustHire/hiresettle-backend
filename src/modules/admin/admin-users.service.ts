@@ -196,6 +196,7 @@ export class AdminUsersService {
       this.prisma.engagement.groupBy({
         by: ['status'],
         _count: true,
+        where: { archivedAt: null },
       }),
       
       // Total milestone volume (sum of totalAmount across all engagements)
@@ -203,6 +204,7 @@ export class AdminUsersService {
         _sum: {
           totalAmount: true,
         },
+        where: { archivedAt: null },
       }),
       
       // Total released amount across all engagements
@@ -210,6 +212,7 @@ export class AdminUsersService {
         _sum: {
           releasedAmount: true,
         },
+        where: { archivedAt: null },
       }),
       
       // Active disputes count (milestones with DISPUTED status)
@@ -227,7 +230,9 @@ export class AdminUsersService {
       }),
       
       // Total engagements (for backward compatibility)
-      this.prisma.engagement.count(),
+      this.prisma.engagement.count({
+        where: { archivedAt: null },
+      }),
       
       // Total disputed milestones (for backward compatibility)
       this.prisma.milestone.count({
@@ -239,6 +244,7 @@ export class AdminUsersService {
         where: { role: UserRole.ARBITER },
         include: {
           arbiterEngagements: {
+            where: { archivedAt: null },
             include: {
               milestones: {
                 where: { status: MilestoneStatus.DISPUTED },

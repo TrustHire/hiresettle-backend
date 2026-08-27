@@ -24,6 +24,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       email: payload.email,
       stellarAddress: payload.stellarAddress,
       role: payload.role,
+      impersonated: payload.impersonated === true,
+      impersonatorId: payload.impersonatorId,
     };
 
     Sentry.setUser({ id: user.id, email: user.email, username: user.role });

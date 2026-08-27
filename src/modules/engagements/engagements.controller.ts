@@ -75,6 +75,7 @@ export class EngagementsController {
   @ApiQuery({ name: 'cursor', required: false, type: String, description: 'ID of the last engagement from the previous page' })
   @ApiQuery({ name: 'sortBy', required: false, enum: ['createdAt', 'amount', 'status'], description: 'Field to sort by (default: createdAt)' })
   @ApiQuery({ name: 'sortOrder', required: false, enum: ['asc', 'desc'], description: 'Sort direction (default: desc)' })
+  @ApiQuery({ name: 'includeArchived', required: false, type: Boolean, description: 'Include archived engagements (default: false)' })
   @ApiResponse({ status: 200, description: 'Engagements list retrieved' })
   @ApiResponse({ status: 400, description: 'Invalid sortBy or sortOrder value' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
@@ -90,6 +91,7 @@ export class EngagementsController {
     @Query('cursor') cursor?: string,
     @Query('sortBy') sortBy?: string,
     @Query('sortOrder') sortOrder?: string,
+    @Query('includeArchived') includeArchived?: boolean,
   ) {
     return this.engagementsService.findAll({
       companyAddress,
@@ -103,6 +105,7 @@ export class EngagementsController {
       cursor,
       sortBy,
       sortOrder,
+      includeArchived,
     });
   }
 
@@ -210,6 +213,30 @@ export class EngagementsController {
     @CurrentUser() user: any,
   ) {
     return this.engagementsService.recuseArbiter(id, user.id, user.role);
+  }
+
+  @Post(':id/archive')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Archive an engagement so it is excluded from default list views' })
+  @ApiParam({ name: 'id', description: 'Engagement ID' })
+  @ApiResponse({ status: 200, description: 'Engagement archived' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 404, description: 'Engagement not found' })
+  @ApiResponse({ status: 409, description: 'Engagement is already archived' })
+  archive(@Param('id') id: string) {
+    return this.engagementsService.archive(id);
+  }
+
+  @Post(':id/restore')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Restore an archived engagement back into default list views' })
+  @ApiParam({ name: 'id', description: 'Engagement ID' })
+  @ApiResponse({ status: 200, description: 'Engagement restored' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 404, description: 'Engagement not found' })
+  @ApiResponse({ status: 409, description: 'Engagement is not archived' })
+  restore(@Param('id') id: string) {
+    return this.engagementsService.restore(id);
   }
 
   @Get('arbiters')
