@@ -48,6 +48,9 @@ interface StellarRuntimeConfig {
   contractAddress?: string;
 }
 
+const DEFAULT_EXPECTED_CONTRACT_VERSION = '1';
+const CONTRACT_VERSION_METHOD = 'version';
+
 @Injectable()
 export class StellarService implements OnModuleInit {
   private readonly logger = new Logger(StellarService.name);
@@ -96,6 +99,46 @@ export class StellarService implements OnModuleInit {
     this.logger.log(`Stellar Horizon: ${this.horizonUrl}`);
     this.logger.log(`Contract: ${this.contractId}`);
     this.logger.log(`Allowed tokens: ${this.allowedTokens.map(t => `${t.symbol} (${t.address})`).join(', ')}`);
+
+    await this.checkContractCompatibility();
+  }
+
+  private async checkContractCompatibility(): Promise<void> {
+    const skip = this.config.get<boolean | string>('SKIP_CONTRACT_COMPATIBILITY_CHECK', false);
+    if (skip === true || ['true', '1', 'yes'].includes(String(skip).toLowerCase())) {
+      this.logger.warn(
+        'Skipping Soroban contract compatibility check; use only with a local mock contract',
+      );
+      return;
+    }
+
+    const expectedVersion = this.config.get<string>(
+      'HIRESETTLE_CONTRACT_VERSION',
+      DEFAULT_EXPECTED_CONTRACT_VERSION,
+    );
+
+    try {
+      const version = await this.simulateContractCall(CONTRACT_VERSION_METHOD, []);
+      const actualVersion =
+        typeof version === 'object' && version !== null
+          ? version.version ?? version.contract_version
+          : version;
+
+      if (String(actualVersion) !== expectedVersion) {
+        throw new Error(
+          `Soroban contract ${this.contractId} is incompatible: expected version ` +
+            `${expectedVersion}, received ${String(actualVersion)}`,
+        );
+      }
+
+      this.logger.log(`Soroban contract compatibility verified (version ${expectedVersion})`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Soroban contract compatibility check failed for ${this.contractId}: ${message}. ` +
+          'Set SKIP_CONTRACT_COMPATIBILITY_CHECK=true only for local mock development.',
+      );
+    }
   }
 
   // ----------------------------------------------------------

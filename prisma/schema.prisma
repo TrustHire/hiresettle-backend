@@ -52,6 +52,7 @@ enum NotificationType {
   ARBITER_REASSIGNED
   ARBITER_RECUSAL_REQUESTED
   ACCOUNT_MERGE_DETECTED
+  FUNDING_SHORTFALL_DETECTED
 }
 
 enum UserRole {
@@ -69,6 +70,7 @@ enum SecurityEventAction {
   EMAIL_VERIFICATION
   ROLE_CHANGE
   ADMIN_OVERRIDE
+  IMPERSONATION_ISSUED
 }
 
 // ============================================================
@@ -108,6 +110,8 @@ model User {
   disputeEvidences     DisputeEvidence[]
   auditLogs            EngagementAuditLog[]
   securityEvents       SecurityEvent[]
+  securityEventsAsActor SecurityEvent[] @relation("SecurityEventActor")
+  securityEventsAsTarget SecurityEvent[] @relation("SecurityEventTarget")
   engagementTemplates  EngagementTemplate[]
   idempotencyKeys      IdempotencyKey[]
   webhookDeliveries    WebhookDelivery[]
@@ -150,6 +154,8 @@ model Engagement {
   tokenAddress     String
   totalAmount      BigInt            // total fee in stroops
   releasedAmount   BigInt            @default(0)
+  fundingShortfall Boolean           @default(false)
+  escrowBalance    BigInt?
   jobTitle         String
   jobDescription   String?           // off-chain — not stored on-chain
   salaryRange      String?           // off-chain metadata
@@ -495,16 +501,22 @@ model DataDeletionRequest {
 // Append-only log of security-relevant events for incident response and
 // compliance. No update or delete endpoints are exposed for this table.
 model SecurityEvent {
-  id        String              @id @default(uuid())
-  userId    String?
-  action    SecurityEventAction
-  ip        String?
-  userAgent String?
-  createdAt DateTime            @default(now())
+  id         String              @id @default(uuid())
+  userId     String?
+  actorId    String?
+  targetUserId String?
+  action     SecurityEventAction
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime            @default(now())
 
-  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  user       User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  actor      User? @relation("SecurityEventActor", fields: [actorId], references: [id], onDelete: SetNull)
+  targetUser User? @relation("SecurityEventTarget", fields: [targetUserId], references: [id], onDelete: SetNull)
 
   @@index([userId])
+  @@index([actorId])
+  @@index([targetUserId])
   @@index([action])
   @@index([createdAt])
   @@map("security_events")

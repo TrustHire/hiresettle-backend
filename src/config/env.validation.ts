@@ -5,6 +5,8 @@ export const envValidationSchema = Joi.object({
   JWT_SECRET: Joi.string().min(32).required(),
   STELLAR_NETWORK: Joi.string().valid('testnet', 'mainnet', 'futurenet').required(),
   SOROBAN_CONTRACT_ADDRESS: Joi.string().required(),
+  HIRESETTLE_CONTRACT_VERSION: Joi.string().default('1'),
+  SKIP_CONTRACT_COMPATIBILITY_CHECK: Joi.boolean().truthy('true', '1', 'yes').falsy('false', '0', 'no').default(false),
   SMTP_HOST: Joi.string().required(),
   SMTP_USER: Joi.string().required(),
   SMTP_PASS: Joi.string().required(),

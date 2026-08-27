@@ -10,9 +10,10 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { PrismaModule } from '../../common/prisma/prisma.module';
 import { UsersModule } from '../users/users.module';
 import { WebhooksModule } from '../webhooks/webhooks.module';
+import { AuthModule } from '../auth/auth.module';
 
 @Module({
-  imports: [NotificationsModule, PrismaModule, UsersModule, WebhooksModule],
+  imports: [NotificationsModule, PrismaModule, UsersModule, WebhooksModule, AuthModule],
   controllers: [AdminController],
   providers: [
     AdminUsersService,
