@@ -1,12 +1,15 @@
 import {
   Controller, Get, Post, Body, Param,
   Query, UseGuards, HttpCode, HttpStatus,
-  Patch, UseInterceptors,
+  Patch, Put, UseInterceptors,
+  UploadedFile,
 } from '@nestjs/common';
 import {
   ApiTags, ApiOperation, ApiResponse,
   ApiBearerAuth, ApiQuery, ApiParam, ApiSecurity,
+  ApiConsumes, ApiBody,
 } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
 import { Idempotent } from '../../common/decorators/idempotent.decorator';
 import { User, UserRole } from '@prisma/client';
@@ -14,6 +17,7 @@ import { Throttle } from '@nestjs/throttler';
 import { EngagementsService } from './engagements.service';
 import { CreateEngagementDto } from './dto/create-engagement.dto';
 import { UpdateEngagementStatusDto } from './dto/update-engagement-status.dto';
+import { UpdateEngagementTagsDto } from './dto/update-engagement-tags.dto';
 import { AuditLogService } from './audit-log.service';
 import { AuditLogEntryDto } from './dto/audit-log-response.dto';
 import { JwtOrApiKeyGuard } from '../../common/guards/jwt-or-api-key.guard';
@@ -25,6 +29,8 @@ import { AdminUsersService } from '../admin/admin-users.service';
 import { CancelEngagementDto } from './dto/cancel-engagement.dto';
 import { RequestReplacementDto } from './dto/request-replacement.dto';
 import { CreateEngagementNoteDto } from './dto/create-engagement-note.dto';
+import { SavedFiltersService } from './saved-filters.service';
+import { CreateSavedFilterDto } from './dto/create-saved-filter.dto';
 
 @ApiTags('engagements')
 @ApiBearerAuth()
@@ -38,6 +44,7 @@ export class EngagementsController {
     private readonly engagementsService: EngagementsService,
     private readonly adminUsersService: AdminUsersService,
     private readonly auditLogService: AuditLogService,
+    private readonly savedFiltersService: SavedFiltersService,
   ) {}
 
   @Post()
@@ -71,6 +78,7 @@ export class EngagementsController {
   @ApiQuery({ name: 'search', required: false, description: 'Case-insensitive partial match on jobTitle' })
   @ApiQuery({ name: 'createdFrom', required: false, description: 'ISO date string (e.g., 2026-01-01)' })
   @ApiQuery({ name: 'createdTo', required: false, description: 'ISO date string (e.g., 2026-12-31)' })
+  @ApiQuery({ name: 'tags', required: false, description: 'Comma-separated tags; returns engagements that have ALL listed tags' })
   @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number' })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page' })
   @ApiQuery({ name: 'cursor', required: false, type: String, description: 'ID of the last engagement from the previous page' })
@@ -87,6 +95,7 @@ export class EngagementsController {
     @Query('search') search?: string,
     @Query('createdFrom') createdFrom?: string,
     @Query('createdTo') createdTo?: string,
+    @Query('tags') tags?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
     @Query('cursor') cursor?: string,
@@ -101,6 +110,7 @@ export class EngagementsController {
       search,
       createdFrom,
       createdTo,
+      tags,
       page,
       limit,
       cursor,
@@ -258,5 +268,129 @@ export class EngagementsController {
     @CurrentUser('id') adminId: string,
   ) {
     return this.engagementsService.updateEngagementStatusByAdmin(id, dto.status, dto.reason, adminId);
+  }
+
+  // ----------------------------------------------------------
+  // TAGS (#252)
+  // ----------------------------------------------------------
+
+  /**
+   * PUT /api/v1/engagements/:id/tags
+   * Replace the full tag set on an engagement.
+   */
+  @Put(':id/tags')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Replace tags on an engagement (#252)' })
+  @ApiParam({ name: 'id', description: 'Engagement ID' })
+  @ApiResponse({ status: 200, description: 'Tags updated' })
+  @ApiResponse({ status: 400, description: 'Validation failed' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 404, description: 'Engagement not found' })
+  updateTags(
+    @Param('id') id: string,
+    @Body() dto: UpdateEngagementTagsDto,
+  ) {
+    return this.engagementsService.updateTags(id, dto.tags);
+  }
+
+  // ----------------------------------------------------------
+  // CSV BULK IMPORT (#254)
+  // ----------------------------------------------------------
+
+  /**
+   * POST /api/v1/engagements/import
+   * Accept a multipart CSV file and create engagements in bulk.
+   * Returns a per-row result report; invalid rows are skipped without failing the whole batch.
+   */
+  @Post('import')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.COMPANY)
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    description: 'CSV file — one engagement per row. Required columns: engagementId, companyAddress, recruiterAddress, arbiterAddress, tokenAddress, totalAmount, jobTitle. Optional: jobDescription, salaryRange, location, tags (pipe-separated).',
+    schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } },
+  })
+  @ApiOperation({ summary: 'Bulk-import engagements from a CSV file (COMPANY only) (#254)' })
+  @ApiResponse({ status: 200, description: 'Import complete — returns success/failure counts and per-row errors' })
+  @ApiResponse({ status: 400, description: 'No file provided or file is empty' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden' })
+  importCsv(
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentUser() user: User,
+  ) {
+    return this.engagementsService.importFromCsv(user, file);
+  }
+
+  // ----------------------------------------------------------
+  // SAVED FILTERS (#253)
+  // ----------------------------------------------------------
+
+  /**
+   * GET /api/v1/engagements/filters
+   * List saved filter presets for the authenticated user.
+   */
+  @Get('filters')
+  @ApiOperation({ summary: 'List saved filter presets (#253)' })
+  @ApiResponse({ status: 200, description: 'Saved filters retrieved' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  listSavedFilters(@CurrentUser() user: User) {
+    return this.savedFiltersService.findAll(user.id);
+  }
+
+  /**
+   * POST /api/v1/engagements/filters
+   * Save a named filter preset.
+   */
+  @Post('filters')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Save a named filter preset (#253)' })
+  @ApiResponse({ status: 201, description: 'Saved filter created' })
+  @ApiResponse({ status: 400, description: 'Validation failed' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 409, description: 'A preset with that name already exists' })
+  createSavedFilter(
+    @CurrentUser() user: User,
+    @Body() dto: CreateSavedFilterDto,
+  ) {
+    return this.savedFiltersService.create(user.id, dto);
+  }
+
+  /**
+   * DELETE /api/v1/engagements/filters/:filterId
+   * Delete a saved filter preset.
+   */
+  @Post('filters/:filterId/delete')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Delete a saved filter preset (#253)' })
+  @ApiParam({ name: 'filterId', description: 'Saved filter ID' })
+  @ApiResponse({ status: 200, description: 'Saved filter deleted' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 404, description: 'Filter not found' })
+  deleteSavedFilter(
+    @Param('filterId') filterId: string,
+    @CurrentUser() user: User,
+  ) {
+    return this.savedFiltersService.remove(user.id, filterId);
+  }
+
+  /**
+   * GET /api/v1/engagements/filters/:filterId/apply
+   * Apply a saved filter preset — returns the engagement list as if those filters were entered manually.
+   */
+  @Get('filters/:filterId/apply')
+  @ApiOperation({ summary: 'Apply a saved filter preset and return matching engagements (#253)' })
+  @ApiParam({ name: 'filterId', description: 'Saved filter ID' })
+  @ApiResponse({ status: 200, description: 'Engagements matching the preset' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 404, description: 'Filter not found' })
+  async applySavedFilter(
+    @Param('filterId') filterId: string,
+    @CurrentUser() user: User,
+  ) {
+    const preset = await this.savedFiltersService.findOne(user.id, filterId);
+    return this.engagementsService.findAll(preset.filters as any);
   }
 }

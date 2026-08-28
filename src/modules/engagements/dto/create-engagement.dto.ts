@@ -1,6 +1,7 @@
 import {
   IsString, IsNotEmpty, IsArray, ValidateNested,
   IsInt, Min, Max, IsOptional, IsIn, registerDecorator, ValidationOptions, ValidationArguments,
+  ArrayMaxSize, IsDateString,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
@@ -38,6 +39,15 @@ export class MilestoneInputDto {
   @ApiProperty({ example: 'PLACEMENT', enum: ['PLACEMENT', 'RETENTION'] })
   @IsIn(['PLACEMENT', 'RETENTION'])
   kind: 'PLACEMENT' | 'RETENTION';
+
+  @ApiProperty({
+    required: false,
+    example: '2026-10-01',
+    description: 'ISO date — expected proof-submission date for PLACEMENT milestones. Used by the placement reminder scheduler (#260).',
+  })
+  @IsOptional()
+  @IsDateString()
+  placementDueAt?: string;
 }
 
 export class CreateEngagementDto {
@@ -100,4 +110,16 @@ export class CreateEngagementDto {
   @IsOptional()
   @IsArray()
   retentionDays?: number[];
+
+  @ApiProperty({
+    required: false,
+    type: [String],
+    example: ['engineering', 'urgent'],
+    description: 'Free-form labels for dashboard filtering (max 20 tags, each max 50 chars)',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(20)
+  tags?: string[];
 }

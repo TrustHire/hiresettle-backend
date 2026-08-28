@@ -13,6 +13,7 @@ import { MilestonesService } from './milestones.service';
 import { ResolveDisputeDto } from './dto/resolve-dispute.dto';
 import { UpdateMilestoneStatusDto } from './dto/update-milestone-status.dto';
 import { BulkCreateMilestonesDto } from './dto/bulk-create-milestones.dto';
+import { SetPlacementDueDateDto } from './dto/set-placement-due-date.dto';
 import { Idempotent } from '../../common/decorators/idempotent.decorator';
 import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
 
@@ -159,5 +160,29 @@ export class MilestonesController {
       throw new BadRequestException('File size exceeds 10 MB limit');
     }
     return this.milestonesService.uploadEvidence(engagementId, index, file, user);
+  }
+
+  /**
+   * PATCH /api/v1/engagements/:engagementId/milestones/:index/due-date
+   * Set or clear the expected proof-submission date on a PLACEMENT milestone (#260).
+   * Resets the reminderSent flag when the date changes.
+   */
+  @Patch(':index/due-date')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Set or clear the placementDueAt date on a PLACEMENT milestone (#260)' })
+  @ApiParam({ name: 'engagementId', description: 'Engagement ID' })
+  @ApiParam({ name: 'index', type: Number, description: 'Milestone index' })
+  @ApiResponse({ status: 200, description: 'Due date updated' })
+  @ApiResponse({ status: 400, description: 'Validation failed' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Not a party to this engagement' })
+  @ApiResponse({ status: 404, description: 'Milestone not found' })
+  setDueDate(
+    @Param('engagementId') engagementId: string,
+    @Param('index', ParseIntPipe) index: number,
+    @Body() dto: SetPlacementDueDateDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.milestonesService.setPlacementDueDate(engagementId, index, dto.placementDueAt, user);
   }
 }

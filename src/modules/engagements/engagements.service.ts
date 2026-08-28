@@ -135,6 +135,7 @@ export class EngagementsService {
         retentionDays,
         validAfterLedger: validAfterLedger ?? null,
         unlockEstimatedAt,
+        placementDueAt: m.kind === 'PLACEMENT' && m.placementDueAt ? new Date(m.placementDueAt) : null,
         status: isRetention ? MilestoneStatus.LOCKED : MilestoneStatus.PENDING,
       };
     });
@@ -156,6 +157,7 @@ export class EngagementsService {
           txHash,
           createdLedger,
           templateVersionId: templateVersion?.id,
+          tags: mergedData.tags ?? [],
           milestones: { create: milestoneData },
         },
         include: { milestones: { orderBy: { milestoneIndex: 'asc' } } },
@@ -195,6 +197,7 @@ export class EngagementsService {
     search?: string;       // partial case-insensitive match on jobTitle
     createdFrom?: string;  // ISO date string
     createdTo?: string;    // ISO date string
+    tags?: string;         // comma-separated tag values — matches any engagement that has ALL listed tags
     page?: number;
     limit?: number;
     cursor?: string;
@@ -203,8 +206,8 @@ export class EngagementsService {
     includeArchived?: boolean;
   }) {
     const {
-      companyAddress, recruiterAddress, status, search, createdFrom, createdTo,
-      page = 1, limit = 20, sortBy, sortOrder, includeArchived,
+      companyAddress, recruiterAddress, status, search, createdFrom, createdTo, tags,
+      page = 1, limit = 20, cursor, sortBy, sortOrder, includeArchived,
     } = filters;
 
     const where: any = {};
@@ -228,6 +231,14 @@ export class EngagementsService {
       where.createdAt = {};
       if (createdFrom) where.createdAt.gte = new Date(createdFrom);
       if (createdTo) where.createdAt.lte = new Date(createdTo);
+    }
+
+    // tags filter: matches any engagement that contains ALL of the requested tags
+    if (tags) {
+      const tagList = tags.split(',').map((t) => t.trim()).filter(Boolean);
+      if (tagList.length > 0) {
+        where.tags = { hasEvery: tagList };
+      }
     }
 
     let orderBy: Record<string, 'asc' | 'desc'> = { createdAt: 'desc' };
@@ -711,6 +722,148 @@ export class EngagementsService {
 
     this.logger.log(`Engagement ${engagementId} restored`);
     return this.serialize(updated);
+  }
+
+  // ----------------------------------------------------------
+  // TAGS (#252)
+  // ----------------------------------------------------------
+
+  async updateTags(engagementId: string, tags: string[]): Promise<any> {
+    const engagement = await this.prisma.engagement.findUnique({
+      where: { id: engagementId },
+    });
+    if (!engagement) {
+      throw new NotFoundException(`Engagement ${engagementId} not found`);
+    }
+
+    const updated = await this.prisma.engagement.update({
+      where: { id: engagementId },
+      data: { tags },
+      include: { milestones: { orderBy: { milestoneIndex: 'asc' } } },
+    });
+
+    this.logger.log(`Tags updated on engagement ${engagementId}: [${tags.join(', ')}]`);
+    return this.serialize(updated);
+  }
+
+  // ----------------------------------------------------------
+  // CSV BULK IMPORT (#254)
+  // ----------------------------------------------------------
+
+  /**
+   * Parses a multipart CSV upload and attempts to create each row as an engagement.
+   * Invalid rows are collected in the errors report without stopping the rest of the batch.
+   *
+   * Expected CSV columns:
+   *   engagementId, companyAddress, recruiterAddress, arbiterAddress, tokenAddress,
+   *   totalAmount, jobTitle, jobDescription (opt), salaryRange (opt), location (opt),
+   *   tags (opt, pipe-separated e.g. "engineering|urgent")
+   *
+   * The CSV must include a header row.
+   */
+  async importFromCsv(user: User, file: Express.Multer.File) {
+    if (!file?.buffer) {
+      throw new BadRequestException('No file provided or file is empty');
+    }
+
+    const csv = file.buffer.toString('utf-8');
+    const lines = csv.split(/\r?\n/).filter((l) => l.trim().length > 0);
+
+    if (lines.length < 2) {
+      throw new BadRequestException('CSV file must contain a header row and at least one data row');
+    }
+
+    const REQUIRED_COLUMNS = [
+      'engagementId', 'companyAddress', 'recruiterAddress', 'arbiterAddress',
+      'tokenAddress', 'totalAmount', 'jobTitle',
+    ];
+
+    const headers = lines[0].split(',').map((h) => h.trim());
+    const missingRequired = REQUIRED_COLUMNS.filter((c) => !headers.includes(c));
+    if (missingRequired.length > 0) {
+      throw new BadRequestException(
+        `CSV is missing required column(s): ${missingRequired.join(', ')}`,
+      );
+    }
+
+    const results: Array<{ row: number; engagementId?: string; success: boolean; error?: string }> = [];
+    let successCount = 0;
+    let failureCount = 0;
+
+    for (let i = 1; i < lines.length; i++) {
+      const rowNum = i + 1; // 1-based, accounting for header at row 1
+      try {
+        const values = this.parseCsvLine(lines[i]);
+        const row: Record<string, string> = {};
+        headers.forEach((h, idx) => {
+          row[h] = values[idx]?.trim() ?? '';
+        });
+
+        // Per-row required-field validation
+        const rowMissing = REQUIRED_COLUMNS.filter((c) => !row[c]);
+        if (rowMissing.length > 0) {
+          throw new Error(`Missing required field(s): ${rowMissing.join(', ')}`);
+        }
+
+        const dto: CreateEngagementDto = {
+          engagementId: row['engagementId'],
+          companyAddress: row['companyAddress'],
+          recruiterAddress: row['recruiterAddress'],
+          arbiterAddress: row['arbiterAddress'],
+          tokenAddress: row['tokenAddress'],
+          totalAmount: row['totalAmount'],
+          jobTitle: row['jobTitle'],
+          jobDescription: row['jobDescription'] || undefined,
+          salaryRange: row['salaryRange'] || undefined,
+          location: row['location'] || undefined,
+          tags: row['tags'] ? row['tags'].split('|').map((t) => t.trim()).filter(Boolean) : [],
+          // CSV import does not support milestone configuration inline — use templates for that
+          milestones: [],
+        };
+
+        await this.create(user, dto);
+        successCount++;
+        results.push({ row: rowNum, engagementId: dto.engagementId, success: true });
+      } catch (error) {
+        failureCount++;
+        results.push({ row: rowNum, success: false, error: error.message ?? String(error) });
+        this.logger.warn(`CSV import row ${rowNum} failed: ${error.message}`);
+      }
+    }
+
+    this.logger.log(`CSV import complete: ${successCount} created, ${failureCount} failed`);
+    return {
+      totalRows: lines.length - 1,
+      successCount,
+      failureCount,
+      results,
+    };
+  }
+
+  /** Splits a single CSV line, handling double-quoted fields. */
+  private parseCsvLine(line: string): string[] {
+    const result: string[] = [];
+    let current = '';
+    let inQuotes = false;
+
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (ch === ',' && !inQuotes) {
+        result.push(current);
+        current = '';
+      } else {
+        current += ch;
+      }
+    }
+    result.push(current);
+    return result;
   }
 
   private serialize(engagement: any) {
