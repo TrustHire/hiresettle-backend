@@ -75,6 +75,7 @@ model User {
   recruiterEngagements Engagement[]   @relation("RecruiterEngagements")
   arbiterEngagements   Engagement[]   @relation("ArbiterEngagements")
   notifications        Notification[]
+  credentials          Credential[]
 
   @@map("users")
 }
@@ -187,4 +188,21 @@ model RetentionSchedule {
   @@index([notifyAt])
   @@index([unlocked])
   @@map("retention_schedules")
+}
+
+// WebAuthn credentials (passkeys) linked to users. A user may have multiple credentials.
+model Credential {
+  id            String   @id @default(uuid())
+  userId        String
+  credentialId  String   @unique // base64url encoded
+  publicKey     String   // base64 or PEM form returned/required by verification library
+  counter       Int      @default(0)
+  transports    String?  // comma-separated transports from authenticator
+  createdAt     DateTime @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("credentials")
 }
