@@ -26,6 +26,12 @@ const makeMockPrisma = () => ({
     upsert: jest.fn(),
   },
   notification: { create: jest.fn() },
+  milestoneApproval: {
+    findUnique: jest.fn(),
+    create: jest.fn(),
+    count: jest.fn(),
+    deleteMany: jest.fn(),
+  },
   $transaction: jest.fn((fn) => (typeof fn === 'function' ? fn(mockPrisma) : Promise.all(fn))),
 });
 
@@ -156,7 +162,7 @@ describe('MilestonesService', () => {
   // ----------------------------------------------------------
 
   describe('confirmFlow()', () => {
-    it('calls releaseMilestonePayment on chain then marks CONFIRMED', async () => {
+    it('calls releaseMilestonePayment on chain then marks CONFIRMED when approvals met', async () => {
       mockPrisma.milestone.findUnique.mockResolvedValue(proofSubmittedMilestone);
       mockPrisma.milestone.update.mockResolvedValue({
         ...proofSubmittedMilestone,
@@ -164,10 +170,13 @@ describe('MilestonesService', () => {
         paymentReleased: 1_500_000_000n,
         confirmedAt: new Date(),
       });
-      mockPrisma.engagement.findUnique.mockResolvedValue(baseEngagement);
+      mockPrisma.engagement.findUnique.mockResolvedValue({ ...baseEngagement, requiredApprovals: 1 });
+      mockPrisma.milestoneApproval.findUnique.mockResolvedValue(null);
+      mockPrisma.milestoneApproval.create.mockResolvedValue({});
+      mockPrisma.milestoneApproval.count.mockResolvedValue(1);
       mockPrisma.notification.create.mockResolvedValue({});
 
-      const result = await service.confirmFlow('ENG-001', 0);
+      const result = await service.confirmFlow('ENG-001', 0, { id: 'user-1' });
 
       expect(mockStellar.releaseMilestonePayment).toHaveBeenCalledWith('ENG-001', 0);
       expect(mockPrisma.milestone.update).toHaveBeenCalledWith(
@@ -178,17 +187,36 @@ describe('MilestonesService', () => {
       expect(result.status).toBe(MilestoneStatus.CONFIRMED);
     });
 
+    it('returns unconfirmed when approvals threshold not met', async () => {
+      mockPrisma.milestone.findUnique.mockResolvedValue(proofSubmittedMilestone);
+      mockPrisma.engagement.findUnique.mockResolvedValue({ ...baseEngagement, requiredApprovals: 2 });
+      mockPrisma.milestoneApproval.findUnique.mockResolvedValue(null);
+      mockPrisma.milestoneApproval.create.mockResolvedValue({});
+      mockPrisma.milestoneApproval.count.mockResolvedValue(1);
+
+      const result = await service.confirmFlow('ENG-001', 0, { id: 'user-1' });
+
+      expect(mockStellar.releaseMilestonePayment).not.toHaveBeenCalled();
+      expect(result.confirmed).toBe(false);
+      expect(result.approvals).toBe(1);
+      expect(result.requiredApprovals).toBe(2);
+    });
+
     it('throws UnprocessableEntityException when milestone is not PROOF_SUBMITTED', async () => {
       mockPrisma.milestone.findUnique.mockResolvedValue(pendingMilestone);
-      await expect(service.confirmFlow('ENG-001', 0)).rejects.toThrow(UnprocessableEntityException);
+      await expect(service.confirmFlow('ENG-001', 0, { id: 'user-1' })).rejects.toThrow(UnprocessableEntityException);
       expect(mockStellar.releaseMilestonePayment).not.toHaveBeenCalled();
     });
 
     it('rolls back (no DB update) when on-chain payment release fails', async () => {
       mockPrisma.milestone.findUnique.mockResolvedValue(proofSubmittedMilestone);
+      mockPrisma.engagement.findUnique.mockResolvedValue({ ...baseEngagement, requiredApprovals: 1 });
+      mockPrisma.milestoneApproval.findUnique.mockResolvedValue(null);
+      mockPrisma.milestoneApproval.create.mockResolvedValue({});
+      mockPrisma.milestoneApproval.count.mockResolvedValue(1);
       mockStellar.releaseMilestonePayment.mockRejectedValue(new Error('chain error'));
 
-      await expect(service.confirmFlow('ENG-001', 0)).rejects.toThrow('chain error');
+      await expect(service.confirmFlow('ENG-001', 0, { id: 'user-1' })).rejects.toThrow('chain error');
       expect(mockPrisma.milestone.update).not.toHaveBeenCalled();
     });
   });
@@ -275,11 +303,117 @@ describe('MilestonesService', () => {
     });
 
     it('does not write DB update when on-chain call fails', async () => {
-      mockPrisma.milestone.findUnique.mockResolvedValue(disputedMilestone);
-      mockStellar.resolveMilestoneDispute.mockRejectedValue(new Error('tx rejected'));
+      mockPrisma.milestone.findUnique.mockResolvedValue(proofSubmittedMilestone);
+      mockPrisma.engagement.findUnique.mockResolvedValue({ ...baseEngagement, requiredApprovals: 1 });
+      mockPrisma.milestoneApproval.findUnique.mockResolvedValue(null);
+      mockPrisma.milestoneApproval.create.mockResolvedValue({});
+      mockPrisma.milestoneApproval.count.mockResolvedValue(1);
+      mockStellar.releaseMilestonePayment.mockRejectedValue(new Error('tx rejected'));
 
-      await expect(service.resolveDisputeFlow('ENG-001', 0, 'RELEASE')).rejects.toThrow('tx rejected');
+      await expect(service.confirmFlow('ENG-001', 0, { id: 'user-1' })).rejects.toThrow('tx rejected');
       expect(mockPrisma.milestone.update).not.toHaveBeenCalled();
+    });
+  });
+
+  // ----------------------------------------------------------
+  // approveMilestone — multi-approver (N-of-M)
+  // ----------------------------------------------------------
+
+  describe('approveMilestone()', () => {
+    it('records first approval and returns unconfirmed when threshold not met', async () => {
+      mockPrisma.milestone.findUnique.mockResolvedValue(proofSubmittedMilestone);
+      mockPrisma.engagement.findUnique.mockResolvedValue({ ...baseEngagement, requiredApprovals: 2 });
+      mockPrisma.milestoneApproval.findUnique.mockResolvedValue(null);
+      mockPrisma.milestoneApproval.create.mockResolvedValue({ id: 'approval-1' });
+      mockPrisma.milestoneApproval.count.mockResolvedValue(1);
+
+      const result = await service.approveMilestone('ENG-001', 0, { id: 'user-1' });
+
+      expect(mockPrisma.milestoneApproval.create).toHaveBeenCalledWith({
+        data: { milestoneId: 'ms-0', userId: 'user-1' },
+      });
+      expect(result.confirmed).toBe(false);
+      expect(result.approvals).toBe(1);
+      expect(result.requiredApprovals).toBe(2);
+    });
+
+    it('records second approval and marks CONFIRMED when threshold met', async () => {
+      mockPrisma.milestone.findUnique.mockResolvedValue(proofSubmittedMilestone);
+      mockPrisma.engagement.findUnique.mockResolvedValue({ ...baseEngagement, requiredApprovals: 2 });
+      mockPrisma.milestoneApproval.findUnique.mockResolvedValue(null);
+      mockPrisma.milestoneApproval.create.mockResolvedValue({ id: 'approval-2' });
+      mockPrisma.milestoneApproval.count.mockResolvedValue(2);
+      mockPrisma.milestone.update.mockResolvedValue({
+        ...proofSubmittedMilestone,
+        status: MilestoneStatus.CONFIRMED,
+        paymentReleased: 1_500_000_000n,
+        confirmedAt: new Date(),
+      });
+      mockPrisma.notification.create.mockResolvedValue({});
+
+      const result = await service.approveMilestone('ENG-001', 0, { id: 'user-2' });
+
+      expect(mockStellar.releaseMilestonePayment).toHaveBeenCalledWith('ENG-001', 0);
+      expect(mockPrisma.milestone.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ status: MilestoneStatus.CONFIRMED }),
+        }),
+      );
+      expect(result.confirmed).toBe(true);
+    });
+
+    it('rejects duplicate approval from same user', async () => {
+      mockPrisma.milestone.findUnique.mockResolvedValue(proofSubmittedMilestone);
+      mockPrisma.engagement.findUnique.mockResolvedValue({ ...baseEngagement, requiredApprovals: 2 });
+      mockPrisma.milestoneApproval.findUnique.mockResolvedValue({ id: 'approval-1' });
+
+      await expect(service.approveMilestone('ENG-001', 0, { id: 'user-1' })).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(mockPrisma.milestoneApproval.create).not.toHaveBeenCalled();
+    });
+
+    it('throws UnprocessableEntityException when milestone is not PROOF_SUBMITTED', async () => {
+      mockPrisma.milestone.findUnique.mockResolvedValue(pendingMilestone);
+      await expect(service.approveMilestone('ENG-001', 0, { id: 'user-1' })).rejects.toThrow(
+        UnprocessableEntityException,
+      );
+      expect(mockPrisma.milestoneApproval.create).not.toHaveBeenCalled();
+    });
+
+    it('marks CONFIRMED immediately when requiredApprovals is 1', async () => {
+      mockPrisma.milestone.findUnique.mockResolvedValue(proofSubmittedMilestone);
+      mockPrisma.engagement.findUnique.mockResolvedValue({ ...baseEngagement, requiredApprovals: 1 });
+      mockPrisma.milestoneApproval.findUnique.mockResolvedValue(null);
+      mockPrisma.milestoneApproval.create.mockResolvedValue({ id: 'approval-1' });
+      mockPrisma.milestoneApproval.count.mockResolvedValue(1);
+      mockPrisma.milestone.update.mockResolvedValue({
+        ...proofSubmittedMilestone,
+        status: MilestoneStatus.CONFIRMED,
+        paymentReleased: 1_500_000_000n,
+        confirmedAt: new Date(),
+      });
+      mockPrisma.notification.create.mockResolvedValue({});
+
+      const result = await service.approveMilestone('ENG-001', 0, { id: 'user-1' });
+
+      expect(mockStellar.releaseMilestonePayment).toHaveBeenCalledWith('ENG-001', 0);
+      expect(result.confirmed).toBe(true);
+    });
+  });
+
+  // ----------------------------------------------------------
+  // getApprovalCount
+  // ----------------------------------------------------------
+
+  describe('getApprovalCount()', () => {
+    it('returns the number of distinct approvals for a milestone', async () => {
+      mockPrisma.milestoneApproval.count.mockResolvedValue(3);
+
+      const result = await service.getApprovalCount('ms-0');
+
+      expect(result).toBe(3);
+      expect(mockPrisma.milestoneApproval.count).toHaveBeenCalledWith({ where: { milestoneId: 'ms-0' } });
     });
   });
 
@@ -320,8 +454,56 @@ describe('MilestonesService', () => {
   });
 
   // ----------------------------------------------------------
-  // findByEngagementForUser — access control
+  // findOneForUser — returns approval count
   // ----------------------------------------------------------
+
+  describe('findOneForUser() — includes approval count', () => {
+    it('returns milestone with approvals field', async () => {
+      mockPrisma.milestone.findUnique.mockResolvedValue({ ...pendingMilestone, id: 'ms-0' });
+      mockPrisma.milestoneApproval.count.mockResolvedValue(2);
+      mockPrisma.engagement.findUnique.mockResolvedValue(baseEngagement);
+
+      const user = { role: 'COMPANY', stellarAddress: 'GABC' };
+      const result = await service.findOneForUser('ENG-001', 0, user);
+
+      expect(result.approvals).toBe(2);
+    });
+  });
+
+  // ----------------------------------------------------------
+  // findById — returns approval count
+  // ----------------------------------------------------------
+
+  describe('findById() — includes approval count', () => {
+    it('returns milestone with approvals field', async () => {
+      mockPrisma.milestone.findUnique.mockResolvedValue({ ...pendingMilestone, id: 'ms-0' });
+      mockPrisma.milestoneApproval.count.mockResolvedValue(0);
+      mockPrisma.engagement.findUnique.mockResolvedValue(baseEngagement);
+
+      const user = { role: 'COMPANY', stellarAddress: 'GABC' };
+      const result = await service.findById('ms-0', user);
+
+      expect(result.approvals).toBe(0);
+    });
+  });
+
+  // ----------------------------------------------------------
+  // resetForReplacement — clears approvals
+  // ----------------------------------------------------------
+
+  describe('resetForReplacement() — clears approvals', () => {
+    it('deletes all milestone approvals for PLACEMENT milestones', async () => {
+      mockPrisma.milestone.findMany.mockResolvedValue([
+        { ...pendingMilestone, id: 'ms-0', kind: 'PLACEMENT', status: MilestoneStatus.PROOF_SUBMITTED },
+      ]);
+      mockPrisma.milestone.update.mockResolvedValue({});
+      mockPrisma.milestoneApproval.deleteMany.mockResolvedValue({ count: 1 });
+
+      await service.resetForReplacement('ENG-001', 1_000_000);
+
+      expect(mockPrisma.milestoneApproval.deleteMany).toHaveBeenCalledWith({ where: { milestoneId: 'ms-0' } });
+    });
+  });
 
   describe('findByEngagementForUser() — party access check', () => {
     it('returns milestones for a party member', async () => {

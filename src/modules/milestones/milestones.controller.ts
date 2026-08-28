@@ -95,6 +95,21 @@ export class MilestonesController {
     return this.milestonesService.getRetentionTimer(engagementId, index);
   }
 
+  @Post(':index/approve')
+  @ApiOperation({ summary: 'Approve a milestone for confirmation (party only)' })
+  @ApiResponse({ status: 200, description: 'Milestone approved successfully' })
+  @ApiResponse({ status: 400, description: 'Milestone not in PROOF_SUBMITTED state or duplicate approval' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Not a party to this engagement' })
+  @ApiResponse({ status: 404, description: 'Engagement or milestone not found' })
+  approve(
+    @Param('engagementId') engagementId: string,
+    @Param('index', ParseIntPipe) index: number,
+    @CurrentUser() user: any,
+  ) {
+    return this.milestonesService.approveMilestone(engagementId, index, user);
+  }
+
   @Post(':index/resolve')
   @UseGuards(RolesGuard)
   @Roles(UserRole.ARBITER)

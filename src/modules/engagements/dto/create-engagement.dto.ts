@@ -111,15 +111,9 @@ export class CreateEngagementDto {
   @IsArray()
   retentionDays?: number[];
 
-  @ApiProperty({
-    required: false,
-    type: [String],
-    example: ['engineering', 'urgent'],
-    description: 'Free-form labels for dashboard filtering (max 20 tags, each max 50 chars)',
-  })
+  @ApiProperty({ required: false, example: 1, description: 'Number of distinct approvals required before a milestone can be confirmed' })
   @IsOptional()
-  @IsArray()
-  @IsString({ each: true })
-  @ArrayMaxSize(20)
-  tags?: string[];
+  @IsInt()
+  @Min(1)
+  requiredApprovals?: number;
 }

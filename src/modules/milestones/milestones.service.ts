@@ -54,7 +54,8 @@ export class MilestonesService {
     );
     this.checkPartyAccess((m as any).engagement, user);
     const { engagement: _, ...milestone } = m as any;
-    return milestone;
+    const approvals = await this.getApprovalCount(milestone.id);
+    return { ...milestone, approvals };
   }
 
   async findById(id: string, user: any) {
@@ -65,7 +66,8 @@ export class MilestonesService {
     if (!m) throw new NotFoundException(`Milestone ${id} not found`);
     this.checkPartyAccess((m as any).engagement, user);
     const { engagement: _, ...milestone } = m as any;
-    return milestone;
+    const approvals = await this.getApprovalCount(milestone.id);
+    return { ...milestone, approvals };
   }
 
   private checkPartyAccess(engagement: any, user: any): void {
@@ -242,6 +244,59 @@ export class MilestonesService {
     return this.markConfirmed(engagementId, milestoneIndex, paymentReleased);
   }
 
+  async approveMilestone(engagementId: string, milestoneIndex: number, user: any) {
+    const milestone = await this.findOne(engagementId, milestoneIndex);
+    if (milestone.status !== MilestoneStatus.PROOF_SUBMITTED) {
+      throw new UnprocessableEntityException('Milestone must have proof submitted before approval.');
+    }
+
+    const engagement = await this.prisma.engagement.findUnique({ where: { id: engagementId } });
+    if (!engagement) throw new NotFoundException('Engagement not found');
+
+    const requiredApprovals = engagement.requiredApprovals || 1;
+
+    const existingApproval = await this.prisma.milestoneApproval.findUnique({
+      where: { milestoneId_userId: { milestoneId: milestone.id, userId: user.id } },
+    });
+    if (existingApproval) {
+      throw new BadRequestException('You have already approved this milestone.');
+    }
+
+    await this.prisma.milestoneApproval.create({
+      data: { milestoneId: milestone.id, userId: user.id },
+    });
+
+    const approvalCount = await this.prisma.milestoneApproval.count({
+      where: { milestoneId: milestone.id },
+    });
+
+    if (approvalCount >= requiredApprovals) {
+      await this.stellar.releaseMilestonePayment(engagementId, milestoneIndex);
+      const paymentReleased = BigInt(milestone.amount || 0);
+      const updated = await this.markConfirmed(engagementId, milestoneIndex, paymentReleased);
+
+      const recruiterId = engagement.recruiterId || '';
+      if (recruiterId) {
+        await this.prisma.notification.create({
+          data: {
+            userId: recruiterId,
+            type: 'PAYMENT_RELEASED',
+            title: 'Payment Released',
+            message: `Payment released for milestone ${milestoneIndex} on engagement ${engagementId}.`,
+          } as any,
+        });
+      }
+
+      return { ...updated, approvals: approvalCount, requiredApprovals, confirmed: true };
+    }
+
+    return { approvals: approvalCount, requiredApprovals, confirmed: false };
+  }
+
+  async getApprovalCount(milestoneId: string): Promise<number> {
+    return this.prisma.milestoneApproval.count({ where: { milestoneId } });
+  }
+
   // ----------------------------------------------------------
   // MILESTONE STATE MACHINE TRANSITIONS (Issue #44)
   // ----------------------------------------------------------
@@ -269,10 +324,34 @@ export class MilestonesService {
     return updated;
   }
 
-  async confirmFlow(engagementId: string, milestoneIndex: number) {
+  async confirmFlow(engagementId: string, milestoneIndex: number, user?: any) {
     const milestone = await this.findOne(engagementId, milestoneIndex);
     if (milestone.status !== MilestoneStatus.PROOF_SUBMITTED) {
       throw new UnprocessableEntityException('Milestone proof must be submitted before confirmation.');
+    }
+
+    const engagement = await this.prisma.engagement.findUnique({ where: { id: engagementId } });
+    if (!engagement) throw new NotFoundException('Engagement not found');
+
+    const requiredApprovals = engagement.requiredApprovals || 1;
+
+    if (user && user.id) {
+      const existingApproval = await this.prisma.milestoneApproval.findUnique({
+        where: { milestoneId_userId: { milestoneId: milestone.id, userId: user.id } },
+      });
+      if (!existingApproval) {
+        await this.prisma.milestoneApproval.create({
+          data: { milestoneId: milestone.id, userId: user.id },
+        });
+      }
+    }
+
+    const approvalCount = await this.prisma.milestoneApproval.count({
+      where: { milestoneId: milestone.id },
+    });
+
+    if (approvalCount < requiredApprovals) {
+      return { approvals: approvalCount, requiredApprovals, confirmed: false };
     }
 
     await this.stellar.releaseMilestonePayment(engagementId, milestoneIndex);
@@ -280,7 +359,6 @@ export class MilestonesService {
     const paymentReleased = BigInt(milestone.amount || 0);
     const updated = await this.markConfirmed(engagementId, milestoneIndex, paymentReleased);
 
-    const engagement = await this.prisma.engagement.findUnique({ where: { id: engagementId } });
     if (engagement) {
       await this.prisma.notification.create({
         data: {
@@ -288,7 +366,7 @@ export class MilestonesService {
           type: 'PAYMENT_RELEASED',
           title: 'Payment Released',
           message: `Payment released for milestone ${milestoneIndex} on engagement ${engagementId}.`,
-        } as any
+        } as any,
       });
     }
 
@@ -467,6 +545,10 @@ export class MilestonesService {
             paymentReleased: null,
           },
         });
+
+        await this.prisma.milestoneApproval.deleteMany({
+          where: { milestoneId: m.id },
+        });
       } else if (
         m.kind === 'RETENTION' &&
         m.status !== MilestoneStatus.CONFIRMED &&
@@ -488,6 +570,10 @@ export class MilestonesService {
             validAfterLedger: newValidAfterLedger,
             unlockEstimatedAt: newUnlockAt,
           },
+        });
+
+        await this.prisma.milestoneApproval.deleteMany({
+          where: { milestoneId: m.id },
         });
 
         await this.prisma.retentionSchedule.upsert({
