@@ -159,6 +159,20 @@ async findByStellarAddress(stellarAddress: string): Promise<PublicUserDto> {
 
 ## Cache Invalidation Strategies
 
+### Cached keys per module
+
+The table below lists every key pattern that is currently written to the cache,
+which module owns it, the default TTL, and what triggers explicit invalidation.
+
+| Cache key pattern | Module | Default TTL | Invalidation trigger |
+|---|---|---|---|
+| `stellar:fee_estimate` | `StellarService` (`common/stellar`) | **10 s** | TTL expiry only — no explicit `del()` call; fee data is short-lived by design |
+| `admin:metrics` | `AdminUsersService` (`modules/admin`) | **60 s** | Explicit `cache.del('admin:metrics')` via `invalidateMetricsCache()`, called after any admin action that mutates engagement, milestone, dispute, or user data |
+| `user:profile:<stellarAddress>` | `UsersService` (`modules/users`) | **60 s** | TTL expiry only — profile data (name, company, role, verifiedAt) changes infrequently; a 60-second window is acceptable |
+
+> **TTL default:** 10–60 seconds, chosen to absorb burst reads without serving
+> data that is meaningfully stale. No key is cached without a finite TTL.
+
 ### Explicit deletion by key
 
 Use `cache.del(key)` when a specific cached entity is mutated downstream. Currently implemented in `AdminUsersService.invalidateMetricsCache()` — intended to be called whenever an admin action changes metrics data.
