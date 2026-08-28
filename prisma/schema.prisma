@@ -131,6 +131,7 @@ model User {
   webhookDeliveries    WebhookDelivery[]
   engagementNotes      EngagementNote[]
   apiKeys              ApiKey[]
+  milestoneApprovals   MilestoneApproval[]
 
   @@index([role, deactivatedAt])
   @@index([deletedAt, anonymizedAt]) // Used by PiiAnonymizationSchedulerService
@@ -203,6 +204,7 @@ model Engagement {
   createdLedger    Int?              // ledger sequence at creation
   templateVersionId String?          // specific EngagementTemplateVersion used to create this engagement, if any
   archivedAt       DateTime?         // soft-archive timestamp — excluded from default list views
+  requiredApprovals Int              @default(1) // number of distinct approvals required before a milestone can be confirmed
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
@@ -319,6 +321,7 @@ model Milestone {
   engagement         Engagement          @relation(fields: [engagementId], references: [id])
   milestoneAuditLogs MilestoneAuditLog[]
   disputeEvidences   DisputeEvidence[]
+  approvals          MilestoneApproval[]
 
   @@unique([engagementId, milestoneIndex])
   @@index([status])
@@ -542,6 +545,21 @@ model MilestoneAuditLog {
   @@index([milestoneId])
   @@index([changedBy])
   @@map("milestone_audit_logs")
+}
+
+model MilestoneApproval {
+  id          String   @id @default(uuid())
+  milestoneId String
+  userId      String
+  createdAt   DateTime @default(now())
+
+  milestone Milestone @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([milestoneId, userId])
+  @@index([milestoneId])
+  @@index([userId])
+  @@map("milestone_approvals")
 }
 
 model DisputeEvidence {
