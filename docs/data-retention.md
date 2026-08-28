@@ -115,6 +115,15 @@ The following records are **never touched** by any retention job because they fo
 
 ---
 
+## Requesting erasure (user procedure)
+
+1. Authenticate and call `DELETE /users/me` — Phase 1 fires immediately (see [Account deletion lifecycle](#account-deletion-lifecycle)).
+2. A `204 No Content` response confirms the request was accepted; your account is inaccessible for login at this point.
+3. Full PII scrub completes automatically within `PII_ANONYMIZATION_WINDOW_DAYS` days (default 30) via the 04:00 UTC scheduled job.
+4. To confirm scrub completion, contact support — admins can verify the `anonymizedAt` timestamp via `GET /admin/users/:id`.
+
+---
+
 ## Admin workflow
 
 1. A user submits `DELETE /users/me` → Phase 1 fires immediately; a `DataDeletionRequest` is queued.
