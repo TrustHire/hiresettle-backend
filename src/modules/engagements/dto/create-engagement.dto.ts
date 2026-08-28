@@ -100,4 +100,10 @@ export class CreateEngagementDto {
   @IsOptional()
   @IsArray()
   retentionDays?: number[];
+
+  @ApiProperty({ required: false, example: 1, description: 'Number of distinct approvals required before a milestone can be confirmed' })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  requiredApprovals?: number;
 }

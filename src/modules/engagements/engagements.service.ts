@@ -156,6 +156,7 @@ export class EngagementsService {
           txHash,
           createdLedger,
           templateVersionId: templateVersion?.id,
+          requiredApprovals: mergedData.requiredApprovals ? parseInt(mergedData.requiredApprovals as any) : 1,
           milestones: { create: milestoneData },
         },
         include: { milestones: { orderBy: { milestoneIndex: 'asc' } } },
