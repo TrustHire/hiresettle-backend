@@ -1,7 +1,7 @@
 import {
   Controller, Get, Post, Body, Param,
   Query, UseGuards, HttpCode, HttpStatus,
-  Patch, UseInterceptors,
+  Patch, UseInterceptors, Delete,
 } from '@nestjs/common';
 import {
   ApiTags, ApiOperation, ApiResponse,
@@ -258,5 +258,68 @@ export class EngagementsController {
     @CurrentUser('id') adminId: string,
   ) {
     return this.engagementsService.updateEngagementStatusByAdmin(id, dto.status, dto.reason, adminId);
+  }
+
+  /**
+   * GET /api/v1/engagements/invites
+   * List pending engagement invites for the authenticated recruiter.
+   */
+  @Get('invites')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.RECRUITER)
+  @ApiOperation({ summary: 'List pending engagement invites for the authenticated recruiter (RECRUITER only)' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'cursor', required: false, type: String })
+  @ApiResponse({ status: 200, description: 'Pending invites list' })
+  listInvites(
+    @CurrentUser() user: User,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+    @Query('cursor') cursor?: string,
+  ) {
+    if (!user.stellarAddress) {
+      return { data: [], meta: { total: 0, page: 1, limit: 20, totalPages: 0 } };
+    }
+    return this.engagementsService.listPendingInvites(
+      user.stellarAddress,
+      page ? Number(page) : 1,
+      limit ? Number(limit) : 20,
+      cursor,
+    );
+  }
+
+  /**
+   * POST /api/v1/engagements/:id/accept
+   * Recruiter accepts an engagement invite — triggers on-chain funding.
+   */
+  @Post(':id/accept')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.RECRUITER)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Accept a pending engagement invite and trigger on-chain funding (RECRUITER only)' })
+  @ApiParam({ name: 'id', description: 'Engagement ID' })
+  @ApiResponse({ status: 200, description: 'Engagement accepted and activated' })
+  @ApiResponse({ status: 403, description: 'Not the invited recruiter' })
+  @ApiResponse({ status: 409, description: 'Engagement is not pending acceptance' })
+  acceptInvite(@Param('id') id: string, @CurrentUser() user: User) {
+    return this.engagementsService.acceptInvite(id, user);
+  }
+
+  /**
+   * POST /api/v1/engagements/:id/decline
+   * Recruiter declines an engagement invite — engagement is cancelled without going on-chain.
+   */
+  @Post(':id/decline')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.RECRUITER)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Decline a pending engagement invite (RECRUITER only)' })
+  @ApiParam({ name: 'id', description: 'Engagement ID' })
+  @ApiResponse({ status: 200, description: 'Engagement invite declined' })
+  @ApiResponse({ status: 403, description: 'Not the invited recruiter' })
+  @ApiResponse({ status: 409, description: 'Engagement is not pending acceptance' })
+  declineInvite(@Param('id') id: string, @CurrentUser() user: User) {
+    return this.engagementsService.declineInvite(id, user);
   }
 }

@@ -1,6 +1,6 @@
 import {
   IsString, IsNotEmpty, IsArray, ValidateNested,
-  IsInt, Min, Max, IsOptional, IsIn, registerDecorator, ValidationOptions, ValidationArguments,
+  IsInt, Min, Max, IsOptional, IsIn, IsObject, registerDecorator, ValidationOptions, ValidationArguments,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
@@ -100,4 +100,13 @@ export class CreateEngagementDto {
   @IsOptional()
   @IsArray()
   retentionDays?: number[];
+
+  @ApiProperty({
+    required: false,
+    example: { internalReqId: 'REQ-123', department: 'Engineering' },
+    description: 'Custom key-value metadata; keys must be in the company\'s allowedCustomFields list',
+  })
+  @IsOptional()
+  @IsObject()
+  customFields?: Record<string, unknown>;
 }

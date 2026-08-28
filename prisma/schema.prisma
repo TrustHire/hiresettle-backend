@@ -16,11 +16,18 @@ datasource db {
 // ============================================================
 
 enum EngagementStatus {
+  PENDING_ACCEPTANCE
   ACTIVE
   COMPLETED
   CANCELLED
   REPLACEMENT_REQUESTED
   ACCOUNT_MERGED
+}
+
+enum CompanyRole {
+  OWNER
+  MEMBER
+  BILLING
 }
 
 enum MilestoneStatus {
@@ -110,6 +117,7 @@ model User {
   kycReviewedAt  DateTime?
   kycReviewedBy  String?        // admin userId who approved/rejected
   kycRejectionReason String?
+  allowedCustomFields String[]  @default([]) // COMPANY only: permitted keys for engagement customFields
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
@@ -131,6 +139,12 @@ model User {
   webhookDeliveries    WebhookDelivery[]
   engagementNotes      EngagementNote[]
   apiKeys              ApiKey[]
+  recruiterReviews     RecruiterReview[]       @relation("RecruiterReviews")
+  reviewsGiven         RecruiterReview[]       @relation("ReviewerReviews")
+  companyMembers       CompanyMember[]         @relation("CompanyOwner")
+  memberOf             CompanyMember[]         @relation("MemberUser")
+  favoritedRecruiters  FavoriteRecruiter[]     @relation("CompanyFavorites")
+  favoritedBy          FavoriteRecruiter[]     @relation("RecruiterFavorites")
 
   @@index([role, deactivatedAt])
   @@index([deletedAt, anonymizedAt]) // Used by PiiAnonymizationSchedulerService
@@ -202,6 +216,7 @@ model Engagement {
   txHash           String?           // on-chain creation tx hash
   createdLedger    Int?              // ledger sequence at creation
   templateVersionId String?          // specific EngagementTemplateVersion used to create this engagement, if any
+  customFields     Json?             // off-chain metadata; keys validated against company's allowedCustomFields
   archivedAt       DateTime?         // soft-archive timestamp — excluded from default list views
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
@@ -616,4 +631,39 @@ model IdempotencyKey {
   @@unique([key, userId])
   @@index([expiresAt])
   @@map("idempotency_keys")
+}
+
+// Company users bookmarking recruiters they frequently work with.
+model FavoriteRecruiter {
+  id          String   @id @default(uuid())
+  companyId   String
+  recruiterId String
+  createdAt   DateTime @default(now())
+
+  company   User @relation("CompanyFavorites",   fields: [companyId],   references: [id], onDelete: Cascade)
+  recruiter User @relation("RecruiterFavorites", fields: [recruiterId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, recruiterId])
+  @@index([companyId])
+  @@map("favorite_recruiters")
+}
+
+// Tracks which users belong to a company account and their permission level within it.
+// Existing single-user company accounts are implicitly OWNER; a CompanyMember row is
+// only required when additional team members are added.
+model CompanyMember {
+  id          String      @id @default(uuid())
+  companyId   String
+  memberId    String
+  companyRole CompanyRole @default(MEMBER)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  company User @relation("CompanyOwner", fields: [companyId], references: [id], onDelete: Cascade)
+  member  User @relation("MemberUser",   fields: [memberId],  references: [id], onDelete: Cascade)
+
+  @@unique([companyId, memberId])
+  @@index([companyId])
+  @@index([memberId])
+  @@map("company_members")
 }
