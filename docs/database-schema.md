@@ -18,6 +18,7 @@ erDiagram
         UserRole role
         string webhookUrl
         string webhookSecret
+        boolean digestEnabled
         datetime deactivatedAt
         datetime deletedAt
         datetime createdAt
@@ -165,6 +166,7 @@ Represents every authenticated platform user, including companies, recruiters, a
 | webhookUrl | Optional webhook endpoint |
 | avatarUrl | User avatar |
 | deactivatedAt | Soft delete timestamp |
+| digestEnabled | Weekly digest email opt-in (#276) |
 
 ## Relationships
 

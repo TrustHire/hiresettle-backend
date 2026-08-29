@@ -119,6 +119,7 @@ model User {
   kycReviewedAt  DateTime?
   kycReviewedBy  String?        // admin userId who approved/rejected
   kycRejectionReason String?
+  digestEnabled  Boolean        @default(false) // weekly digest email opt-in (#276)
   allowedCustomFields String[]  @default([]) // COMPANY only: permitted keys for engagement customFields
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
@@ -142,6 +143,15 @@ model User {
   engagementNotes      EngagementNote[]
   apiKeys              ApiKey[]
   milestoneApprovals   MilestoneApproval[]
+  recruiterReviews     RecruiterReview[]        @relation("RecruiterReviews")
+  reviewerReviews      RecruiterReview[]        @relation("ReviewerReviews")
+  kycDocuments         KycDocument[]
+  teamInvites          TeamInvite[]             @relation("TeamInvites")
+  savedFilters         SavedFilter[]
+  companyFavorites     FavoriteRecruiter[]      @relation("CompanyFavorites")
+  recruiterFavorites   FavoriteRecruiter[]      @relation("RecruiterFavorites")
+  companyMembers       CompanyMember[]          @relation("CompanyOwner")
+  memberOfCompanies    CompanyMember[]          @relation("MemberUser")
 
   @@index([role, deactivatedAt])
   @@index([deletedAt, anonymizedAt]) // Used by PiiAnonymizationSchedulerService
