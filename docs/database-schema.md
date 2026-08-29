@@ -6,28 +6,143 @@ This document describes the purpose of each database model in HireSettle, its pr
 
 # Entity Relationships
 
-```text
-User
-├── RefreshToken
-├── Notification
-├── NotificationPreference
-├── SecurityEvent
-├── Engagement (Company)
-├── Engagement (Recruiter)
-├── Engagement (Arbiter)
-├── EngagementAuditLog
-├── MilestoneAuditLog
-└── DisputeEvidence
+```mermaid
+erDiagram
+    User {
+        string id PK
+        string stellarAddress
+        string email
+        string passwordHash
+        string name
+        string company
+        UserRole role
+        string webhookUrl
+        string webhookSecret
+        datetime deactivatedAt
+        datetime deletedAt
+        datetime createdAt
+    }
 
-Engagement
-├── Milestone
-│   ├── MilestoneAuditLog
-│   └── DisputeEvidence
-├── ChainEvent
-└── EngagementAuditLog
+    Engagement {
+        string id PK
+        string companyAddress FK
+        string recruiterAddress FK
+        string arbiterAddress FK
+        string tokenAddress
+        bigint totalAmount
+        bigint releasedAmount
+        string jobTitle
+        EngagementStatus status
+        string txHash
+        int createdLedger
+        datetime createdAt
+    }
 
-RetentionSchedule
-└── Tracks unlock timing for Engagement milestones
+    Milestone {
+        string id PK
+        string engagementId FK
+        int milestoneIndex
+        string name
+        MilestoneKind kind
+        int paymentPercent
+        bigint amount
+        int retentionDays
+        int validAfterLedger
+        datetime unlockEstimatedAt
+        MilestoneStatus status
+        datetime confirmedAt
+    }
+
+    RetentionSchedule {
+        string id PK
+        string engagementId FK
+        int milestoneIndex
+        int validAfterLedger
+        datetime unlockAt
+        datetime notifyAt
+        boolean unlocked
+        boolean notified
+    }
+
+    WebhookSubscription {
+        string id PK
+        string companyId FK
+        string url
+        datetime createdAt
+    }
+
+    ChainEvent {
+        string id PK
+        string engagementId FK
+        string eventName
+        int ledger
+        string txHash
+        json payload
+        boolean processed
+    }
+
+    MilestoneAuditLog {
+        string id PK
+        string milestoneId FK
+        string changedBy FK
+        MilestoneStatus fromStatus
+        MilestoneStatus toStatus
+        datetime createdAt
+    }
+
+    EngagementAuditLog {
+        string id PK
+        string engagementId FK
+        string changedBy FK
+        string fromStatus
+        string toStatus
+        string reason
+    }
+
+    DisputeEvidence {
+        string id PK
+        string milestoneId FK
+        string uploadedBy FK
+        string fileName
+        string s3Path
+        datetime uploadedAt
+    }
+
+    Notification {
+        string id PK
+        string userId FK
+        NotificationType type
+        string title
+        string message
+        boolean read
+        boolean emailSent
+        datetime createdAt
+    }
+
+    RefreshToken {
+        string id PK
+        string userId FK
+        string tokenHash
+        string familyId
+        datetime expiresAt
+        datetime consumedAt
+    }
+
+    User ||--o{ Engagement : "companyAddress (company)"
+    User ||--o{ Engagement : "recruiterAddress (recruiter)"
+    User ||--o{ Engagement : "arbiterAddress (arbiter)"
+    Engagement ||--o{ Milestone : "engagementId"
+    Engagement ||--o{ RetentionSchedule : "engagementId"
+    Engagement ||--o{ WebhookSubscription : "companyId (via companyAddress)"
+    Engagement ||--o{ ChainEvent : "engagementId"
+    Engagement ||--o{ EngagementAuditLog : "engagementId"
+    Milestone ||--o{ MilestoneAuditLog : "milestoneId"
+    Milestone ||--o{ DisputeEvidence : "milestoneId"
+    User ||--o{ Notification : "userId"
+    User ||--o{ RefreshToken : "userId"
+    User ||--o{ MilestoneAuditLog : "changedBy"
+    User ||--o{ DisputeEvidence : "uploadedBy"
+    User ||--o{ EngagementAuditLog : "changedBy"
 ```
 
 ---
