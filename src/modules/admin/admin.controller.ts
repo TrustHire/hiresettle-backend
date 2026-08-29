@@ -46,6 +46,8 @@ import { AuthService, RequestMeta } from '../auth/auth.service';
 import { ApiKeysService } from '../auth/api-keys.service';
 import { CreateApiKeyDto } from '../auth/dto/create-api-key.dto';
 
+import { SetCompanyPlanDto } from './dto/set-company-plan.dto';
+
 @ApiTags('admin')
 @ApiBearerAuth()
 @UseGuards(JwtOrApiKeyGuard, RolesGuard)
@@ -436,5 +438,26 @@ export class AdminController {
   @ApiResponse({ status: 404, description: 'API key not found' })
   revokeApiKey(@Param('id') id: string) {
     return this.apiKeys.revoke(id);
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Issue #267 — Tiered subscription billing plans
+  // ────────────────────────────────────────────────────────────────
+
+  @Get('plans')
+  @ApiOperation({ summary: 'List all available subscription plans (ADMIN only)' })
+  @ApiResponse({ status: 200, description: 'Plans list' })
+  listPlans() {
+    return this.adminUsers.listPlans();
+  }
+
+  @Put('users/:id/plan')
+  @ApiOperation({ summary: "Set or clear a company's subscription plan (ADMIN only)" })
+  @ApiParam({ name: 'id', description: 'Company user ID' })
+  @ApiResponse({ status: 200, description: 'Plan updated' })
+  @ApiResponse({ status: 400, description: 'User is not a company' })
+  @ApiResponse({ status: 404, description: 'User or plan not found' })
+  setCompanyPlan(@Param('id') id: string, @Body() dto: SetCompanyPlanDto) {
+    return this.adminUsers.setCompanyPlan(id, dto.planId ?? null);
   }
 }

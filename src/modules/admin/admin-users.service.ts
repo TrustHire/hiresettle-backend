@@ -340,4 +340,23 @@ export class AdminUsersService {
       select: USER_SELECT,
     });
   }
+
+  async setCompanyPlan(companyId: string, planId: string | null) {
+    const user = await this.prisma.user.findUnique({ where: { id: companyId } });
+    if (!user) throw new NotFoundException('User not found');
+    if (user.role !== UserRole.COMPANY) throw new BadRequestException('Only company users have plans');
+    if (planId) {
+      const plan = await this.prisma.plan.findUnique({ where: { id: planId } });
+      if (!plan) throw new NotFoundException(`Plan ${planId} not found`);
+    }
+    return this.prisma.user.update({
+      where: { id: companyId },
+      data: { planId },
+      select: { ...USER_SELECT, planId: true },
+    });
+  }
+
+  async listPlans() {
+    return this.prisma.plan.findMany({ orderBy: { maxActiveEngagements: 'asc' } });
+  }
 }

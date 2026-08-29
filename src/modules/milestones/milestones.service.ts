@@ -601,6 +601,53 @@ export class MilestonesService {
   // ADMIN OVERRIDES
   // ----------------------------------------------------------
 
+  async adjustMilestonePercents(
+    engagementId: string,
+    adjustments: { milestoneIndex: number; paymentPercent: number }[],
+    reason: string,
+    userId: string,
+  ) {
+    const milestones = await this.prisma.milestone.findMany({ where: { engagementId } });
+    if (!milestones.length) throw new NotFoundException(`No milestones found for engagement ${engagementId}`);
+
+    // Validate none are confirmed
+    for (const adj of adjustments) {
+      const m = milestones.find((m) => m.milestoneIndex === adj.milestoneIndex);
+      if (!m) throw new NotFoundException(`Milestone index ${adj.milestoneIndex} not found`);
+      if (m.status === MilestoneStatus.CONFIRMED || m.status === MilestoneStatus.RESOLVED) {
+        throw new BadRequestException(`Milestone ${adj.milestoneIndex} is already confirmed and cannot be adjusted`);
+      }
+    }
+
+    // Build the full new percent map (unchanged milestones keep their current value)
+    const percentMap = new Map(milestones.map((m) => [m.milestoneIndex, m.paymentPercent]));
+    for (const adj of adjustments) percentMap.set(adj.milestoneIndex, adj.paymentPercent);
+    const total = Array.from(percentMap.values()).reduce((s, v) => s + v, 0);
+    if (total !== 100) throw new BadRequestException(`Adjusted percentages sum to ${total}, must equal 100`);
+
+    return this.prisma.$transaction(async (tx) => {
+      for (const adj of adjustments) {
+        const m = milestones.find((m) => m.milestoneIndex === adj.milestoneIndex)!;
+        await tx.milestone.update({
+          where: { id: m.id },
+          data: { paymentPercent: adj.paymentPercent },
+        });
+        await tx.auditLog.create({
+          data: {
+            entityType: 'Milestone',
+            entityId: m.id,
+            action: 'PERCENT_ADJUSTMENT',
+            oldValue: String(m.paymentPercent),
+            newValue: String(adj.paymentPercent),
+            reason,
+            changedBy: userId,
+          },
+        });
+      }
+      return tx.milestone.findMany({ where: { engagementId }, orderBy: { milestoneIndex: 'asc' } });
+    });
+  }
+
   async setPlacementDueDate(
     engagementId: string,
     milestoneIndex: number,

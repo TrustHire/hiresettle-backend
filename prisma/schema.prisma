@@ -93,6 +93,17 @@ enum SecurityEventAction {
 // MODELS
 // ============================================================
 
+model Plan {
+  id                   String   @id
+  name                 String
+  maxActiveEngagements Int
+  createdAt            DateTime @default(now())
+
+  users User[]
+
+  @@map("plans")
+}
+
 model User {
   id             String    @id @default(uuid())
   stellarAddress String?   @unique
@@ -102,6 +113,7 @@ model User {
   company        String?        // company name (for COMPANY role users)
   companyOwnerId String?        // set on sub-users created via team invite; references the inviting COMPANY user's id
   role           UserRole       @default(COMPANY)
+  planId         String?        // subscription plan; null = no plan limit enforced
   webhookUrl     String?
   webhookSecret  String?        // HMAC-SHA256 signing secret, generated when webhookUrl is first set
   rateLimitOverride Int?        // custom per-user request limit for UserJwtSubThrottlerGuard; falls back to default when unset
@@ -124,6 +136,7 @@ model User {
   updatedAt      DateTime       @updatedAt
 
   // Relations
+  plan                 Plan?                   @relation(fields: [planId], references: [id])
   companyEngagements   Engagement[]            @relation("CompanyEngagements")
   recruiterEngagements Engagement[]            @relation("RecruiterEngagements")
   arbiterEngagements   Engagement[]            @relation("ArbiterEngagements")
@@ -475,6 +488,8 @@ model EngagementTemplate {
   milestoneConfig Json
   currentVersion  Int      @default(1)
   archived        Boolean  @default(false)
+  usageCount      Int      @default(0)
+  lastUsedAt      DateTime?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
