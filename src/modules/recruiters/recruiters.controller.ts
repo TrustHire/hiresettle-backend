@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Query, Param, Body, UseGuards, HttpCode, HttpStatus,
+  Controller, Get, Post, Delete, Query, Param, Body, UseGuards, HttpCode, HttpStatus,
   UploadedFile, UseInterceptors, BadRequestException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -10,6 +10,7 @@ import {
 import { RecruitersService } from './recruiters.service';
 import { KycService } from './kyc.service';
 import { RecruiterReviewsService } from './recruiter-reviews.service';
+import { FavoritesService } from './favorites.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -31,6 +32,7 @@ export class RecruitersController {
     private readonly recruitersService: RecruitersService,
     private readonly kycService: KycService,
     private readonly reviewsService: RecruiterReviewsService,
+    private readonly favoritesService: FavoritesService,
   ) {}
 
   @Get()
@@ -129,5 +131,56 @@ export class RecruitersController {
       page ? Number(page) : 1,
       limit ? Number(limit) : 20,
     );
+  }
+
+  /**
+   * GET /api/v1/recruiters/favorites
+   * List the current company's favorited recruiters.
+   */
+  @Get('favorites')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.COMPANY)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'List favorited recruiters for the current company (COMPANY only)' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  listFavorites(
+    @CurrentUser('id') companyId: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.favoritesService.listFavorites(companyId, page ? Number(page) : 1, limit ? Number(limit) : 20);
+  }
+
+  /**
+   * POST /api/v1/recruiters/:id/favorite
+   * Add a recruiter to the current company's favorites.
+   */
+  @Post(':id/favorite')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.COMPANY)
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Add a recruiter to favorites (COMPANY only)' })
+  @ApiParam({ name: 'id', description: 'Recruiter user ID' })
+  @ApiResponse({ status: 201, description: 'Recruiter added to favorites' })
+  @ApiResponse({ status: 409, description: 'Recruiter is already in favorites' })
+  addFavorite(@CurrentUser('id') companyId: string, @Param('id') recruiterId: string) {
+    return this.favoritesService.addFavorite(companyId, recruiterId);
+  }
+
+  /**
+   * DELETE /api/v1/recruiters/:id/favorite
+   * Remove a recruiter from the current company's favorites.
+   */
+  @Delete(':id/favorite')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.COMPANY)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Remove a recruiter from favorites (COMPANY only)' })
+  @ApiParam({ name: 'id', description: 'Recruiter user ID' })
+  @ApiResponse({ status: 200, description: 'Recruiter removed from favorites' })
+  @ApiResponse({ status: 404, description: 'Recruiter is not in favorites' })
+  removeFavorite(@CurrentUser('id') companyId: string, @Param('id') recruiterId: string) {
+    return this.favoritesService.removeFavorite(companyId, recruiterId);
   }
 }

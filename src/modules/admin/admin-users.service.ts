@@ -41,6 +41,7 @@ export class AdminUsersService {
       ...(dto.search
         ? {
             OR: [
+              { id: { contains: dto.search, mode: 'insensitive' } },
               { name: { contains: dto.search, mode: 'insensitive' } },
               { email: { contains: dto.search, mode: 'insensitive' } },
             ],

@@ -47,6 +47,21 @@ export class EngagementsService {
       throw new BadRequestException(`Token ${dto.tokenAddress} is not allowed`);
     }
 
+    // Validate customFields keys against the company's allow-list
+    if (dto.customFields && Object.keys(dto.customFields).length > 0) {
+      const companyUser = await this.prisma.user.findUnique({
+        where: { id: user.id },
+        select: { allowedCustomFields: true },
+      });
+      const allowed = companyUser?.allowedCustomFields ?? [];
+      const unknown = Object.keys(dto.customFields).filter((k) => !allowed.includes(k));
+      if (unknown.length > 0) {
+        throw new BadRequestException(
+          `Unknown custom field key(s): ${unknown.join(', ')}. Configure allowed keys via PUT /users/me/custom-fields-config`,
+        );
+      }
+    }
+
     // Load template if provided — pin to the specific version that is current as of
     // now, so this engagement keeps referencing that exact snapshot even if the
     // template is edited (and gains new versions) afterwards.
@@ -82,33 +97,146 @@ export class EngagementsService {
     const sum = mergedData.milestones.reduce((acc: number, m: any) => acc + (m.paymentPercent || 0), 0);
     if (sum !== 100) throw new BadRequestException('Milestone paymentPercent values must sum to exactly 100');
 
-    // 1. Check company has sufficient token balance
+    // Build milestone data (no on-chain data yet — deferred until recruiter accepts)
+    let retentionIdx = 0;
+    const milestoneData = mergedData.milestones.map((m: any, index: number) => {
+      const isRetention = m.kind === 'RETENTION';
+      const retentionDays = isRetention ? (mergedData.retentionDays?.[retentionIdx++] ?? null) : null;
+
+      return {
+        milestoneIndex: index,
+        name: m.name,
+        kind: m.kind as MilestoneKind,
+        paymentPercent: m.paymentPercent,
+        retentionDays,
+        status: isRetention ? MilestoneStatus.LOCKED : MilestoneStatus.PENDING,
+      };
+    });
+
+    // Persist engagement as PENDING_ACCEPTANCE — on-chain submission happens on recruiter accept
+    const engagement = await this.prisma.engagement.create({
+      data: {
+        id: mergedData.engagementId,
+        companyAddress: mergedData.companyAddress,
+        recruiterAddress: mergedData.recruiterAddress,
+        arbiterAddress: mergedData.arbiterAddress,
+        tokenAddress: mergedData.tokenAddress,
+        totalAmount: BigInt(mergedData.totalAmount),
+        jobTitle: mergedData.jobTitle,
+        jobDescription: mergedData.jobDescription,
+        salaryRange: mergedData.salaryRange,
+        location: mergedData.location,
+        customFields: mergedData.customFields ?? undefined,
+        status: EngagementStatus.PENDING_ACCEPTANCE,
+        templateVersionId: templateVersion?.id,
+        milestones: { create: milestoneData },
+      },
+      include: { milestones: { orderBy: { milestoneIndex: 'asc' } } },
+    });
+
+    this.logger.log(`Engagement invite created (PENDING_ACCEPTANCE): ${engagement.id}`);
+
+    await this.notifications.notifyUser(
+      mergedData.recruiterAddress,
+      NotificationType.ENGAGEMENT_CREATED,
+      `New engagement invite: ${mergedData.jobTitle}`,
+      `You have a new engagement invite for "${mergedData.jobTitle}". Please accept or decline.`,
+      { engagementId: engagement.id },
+    );
+
+    return this.serialize(engagement);
+  }
+
+  // ----------------------------------------------------------
+  // RECRUITER INVITE ACCEPT / DECLINE (#250)
+  // ----------------------------------------------------------
+
+  async listPendingInvites(
+    recruiterStellarAddress: string,
+    page = 1,
+    limit = 20,
+    cursor?: string,
+  ) {
+    const where = {
+      recruiterAddress: recruiterStellarAddress,
+      status: EngagementStatus.PENDING_ACCEPTANCE,
+    };
+
+    if (cursor) {
+      const engagements = await this.prisma.engagement.findMany({
+        where,
+        include: { milestones: { orderBy: { milestoneIndex: 'asc' } } },
+        orderBy: { createdAt: 'desc' },
+        cursor: { id: cursor },
+        skip: 1,
+        take: limit + 1,
+      });
+      const pageResult = cursorPage(engagements, limit);
+      return {
+        data: pageResult.data.map(this.serialize),
+        meta: { limit, nextCursor: pageResult.nextCursor },
+      };
+    }
+
+    const [engagements, total] = await this.prisma.$transaction([
+      this.prisma.engagement.findMany({
+        where,
+        include: { milestones: { orderBy: { milestoneIndex: 'asc' } } },
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.engagement.count({ where }),
+    ]);
+
+    return {
+      data: engagements.map(this.serialize),
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
+  }
+
+  async acceptInvite(engagementId: string, user: User) {
+    const engagement = await this.prisma.engagement.findUnique({
+      where: { id: engagementId },
+      include: { milestones: { orderBy: { milestoneIndex: 'asc' } } },
+    });
+
+    if (!engagement) throw new NotFoundException(`Engagement ${engagementId} not found`);
+    if (engagement.recruiterAddress !== user.stellarAddress) {
+      throw new ForbiddenException('You are not the invited recruiter for this engagement');
+    }
+    if (engagement.status !== EngagementStatus.PENDING_ACCEPTANCE) {
+      throw new ConflictException(`Engagement is not pending acceptance (current status: ${engagement.status})`);
+    }
+
+    // Check company balance and submit on-chain now that recruiter has accepted
     const { sufficient, balance } = await this.stellar.checkTokenBalance(
-      mergedData.companyAddress,
-      mergedData.tokenAddress,
-      BigInt(mergedData.totalAmount),
+      engagement.companyAddress,
+      engagement.tokenAddress,
+      engagement.totalAmount,
     );
     if (!sufficient) {
       throw new BadRequestException(
-        `Insufficient token balance. Required: ${mergedData.totalAmount} stroops, available: ${balance.toString()}`,
+        `Insufficient company token balance. Required: ${engagement.totalAmount.toString()} stroops, available: ${balance.toString()}`,
       );
     }
 
-    // 2. Submit on-chain create_engagement transaction
-    const retentionMilestones = mergedData.milestones.filter((m: any) => m.kind === 'RETENTION');
+    const retentionMilestones = engagement.milestones.filter((m) => m.kind === MilestoneKind.RETENTION);
     const { txHash, ledger: createdLedger } = await this.stellar.submitCreateEngagement({
-      engagementId: mergedData.engagementId,
-      companyAddress: mergedData.companyAddress,
-      recruiterAddress: mergedData.recruiterAddress,
-      arbiterAddress: mergedData.arbiterAddress,
-      tokenAddress: mergedData.tokenAddress,
-      totalAmount: mergedData.totalAmount,
-      milestones: mergedData.milestones.map((m: any, index: number) => ({
+      engagementId: engagement.id,
+      companyAddress: engagement.companyAddress,
+      recruiterAddress: engagement.recruiterAddress,
+      arbiterAddress: engagement.arbiterAddress,
+      tokenAddress: engagement.tokenAddress,
+      totalAmount: engagement.totalAmount.toString(),
+      milestones: engagement.milestones.map((m) => ({
         name: m.name,
         paymentPercent: m.paymentPercent,
         kind: m.kind,
-        retentionDays: m.kind === 'RETENTION'
-          ? mergedData.retentionDays?.[retentionMilestones.indexOf(m)] ?? undefined
+        retentionDays: m.kind === MilestoneKind.RETENTION
+          ? retentionMilestones.indexOf(m) >= 0 && m.retentionDays != null
+            ? m.retentionDays
+            : undefined
           : undefined,
       })),
     });
@@ -135,6 +263,7 @@ export class EngagementsService {
         retentionDays,
         validAfterLedger: validAfterLedger ?? null,
         unlockEstimatedAt,
+        placementDueAt: m.kind === 'PLACEMENT' && m.placementDueAt ? new Date(m.placementDueAt) : null,
         status: isRetention ? MilestoneStatus.LOCKED : MilestoneStatus.PENDING,
       };
     });
@@ -156,32 +285,83 @@ export class EngagementsService {
           txHash,
           createdLedger,
           templateVersionId: templateVersion?.id,
+          requiredApprovals: mergedData.requiredApprovals ? parseInt(mergedData.requiredApprovals as any) : 1,
           milestones: { create: milestoneData },
         },
         include: { milestones: { orderBy: { milestoneIndex: 'asc' } } },
       });
 
-      for (const m of created.milestones) {
-        if (m.kind === MilestoneKind.RETENTION && m.unlockEstimatedAt && m.validAfterLedger) {
+      for (const m of engagement.milestones) {
+        if (m.kind === MilestoneKind.RETENTION && m.retentionDays) {
+          const validAfterLedger = createdLedger + m.retentionDays * 17_280;
+          const unlockEstimatedAt = this.stellar.ledgerToDateTime(validAfterLedger, currentLedger);
+          await tx.milestone.update({
+            where: { id: m.id },
+            data: { validAfterLedger, unlockEstimatedAt },
+          });
           await tx.retentionSchedule.create({
             data: {
-              engagementId: created.id,
+              engagementId,
               milestoneIndex: m.milestoneIndex,
-              validAfterLedger: m.validAfterLedger,
-              unlockAt: m.unlockEstimatedAt,
-              notifyAt: new Date(m.unlockEstimatedAt.getTime() - 3 * 24 * 60 * 60 * 1000),
+              validAfterLedger,
+              unlockAt: unlockEstimatedAt,
+              notifyAt: new Date(unlockEstimatedAt.getTime() - 3 * 24 * 60 * 60 * 1000),
             },
           });
         }
       }
 
-      return created;
+      return tx.engagement.findUnique({
+        where: { id: engagementId },
+        include: { milestones: { orderBy: { milestoneIndex: 'asc' } } },
+      });
     });
 
-    this.logger.log(`Engagement created on-chain and persisted: ${engagement.id} (tx: ${txHash})`);
-    const result = this.serialize(engagement);
+    this.logger.log(`Engagement ${engagementId} accepted by recruiter, on-chain tx: ${txHash}`);
 
-    return result;
+    await Promise.allSettled([
+      this.notifications.notifyUser(
+        engagement.companyAddress,
+        NotificationType.ENGAGEMENT_CREATED,
+        `Engagement accepted: ${engagement.jobTitle}`,
+        `The recruiter has accepted the engagement "${engagement.jobTitle}" (${engagementId}). On-chain funding is in progress.`,
+        { engagementId, txHash },
+      ),
+    ]);
+
+    return this.serialize(updated);
+  }
+
+  async declineInvite(engagementId: string, user: User) {
+    const engagement = await this.prisma.engagement.findUnique({
+      where: { id: engagementId },
+    });
+
+    if (!engagement) throw new NotFoundException(`Engagement ${engagementId} not found`);
+    if (engagement.recruiterAddress !== user.stellarAddress) {
+      throw new ForbiddenException('You are not the invited recruiter for this engagement');
+    }
+    if (engagement.status !== EngagementStatus.PENDING_ACCEPTANCE) {
+      throw new ConflictException(`Engagement is not pending acceptance (current status: ${engagement.status})`);
+    }
+
+    const updated = await this.prisma.engagement.update({
+      where: { id: engagementId },
+      data: { status: EngagementStatus.CANCELLED },
+      include: { milestones: { orderBy: { milestoneIndex: 'asc' } } },
+    });
+
+    this.logger.log(`Engagement ${engagementId} declined by recruiter — cancelled without on-chain submission`);
+
+    await this.notifications.notifyUser(
+      engagement.companyAddress,
+      NotificationType.ENGAGEMENT_CANCELLED,
+      `Engagement declined: ${engagement.jobTitle}`,
+      `The recruiter has declined the engagement invite for "${engagement.jobTitle}" (${engagementId}).`,
+      { engagementId },
+    );
+
+    return this.serialize(updated);
   }
 
   // ----------------------------------------------------------
@@ -195,6 +375,7 @@ export class EngagementsService {
     search?: string;       // partial case-insensitive match on jobTitle
     createdFrom?: string;  // ISO date string
     createdTo?: string;    // ISO date string
+    tags?: string;         // comma-separated tag values — matches any engagement that has ALL listed tags
     page?: number;
     limit?: number;
     cursor?: string;
@@ -203,8 +384,8 @@ export class EngagementsService {
     includeArchived?: boolean;
   }) {
     const {
-      companyAddress, recruiterAddress, status, search, createdFrom, createdTo,
-      page = 1, limit = 20, sortBy, sortOrder, includeArchived,
+      companyAddress, recruiterAddress, status, search, createdFrom, createdTo, tags,
+      page = 1, limit = 20, cursor, sortBy, sortOrder, includeArchived,
     } = filters;
 
     const where: any = {};
@@ -228,6 +409,14 @@ export class EngagementsService {
       where.createdAt = {};
       if (createdFrom) where.createdAt.gte = new Date(createdFrom);
       if (createdTo) where.createdAt.lte = new Date(createdTo);
+    }
+
+    // tags filter: matches any engagement that contains ALL of the requested tags
+    if (tags) {
+      const tagList = tags.split(',').map((t) => t.trim()).filter(Boolean);
+      if (tagList.length > 0) {
+        where.tags = { hasEvery: tagList };
+      }
     }
 
     let orderBy: Record<string, 'asc' | 'desc'> = { createdAt: 'desc' };
@@ -711,6 +900,148 @@ export class EngagementsService {
 
     this.logger.log(`Engagement ${engagementId} restored`);
     return this.serialize(updated);
+  }
+
+  // ----------------------------------------------------------
+  // TAGS (#252)
+  // ----------------------------------------------------------
+
+  async updateTags(engagementId: string, tags: string[]): Promise<any> {
+    const engagement = await this.prisma.engagement.findUnique({
+      where: { id: engagementId },
+    });
+    if (!engagement) {
+      throw new NotFoundException(`Engagement ${engagementId} not found`);
+    }
+
+    const updated = await this.prisma.engagement.update({
+      where: { id: engagementId },
+      data: { tags },
+      include: { milestones: { orderBy: { milestoneIndex: 'asc' } } },
+    });
+
+    this.logger.log(`Tags updated on engagement ${engagementId}: [${tags.join(', ')}]`);
+    return this.serialize(updated);
+  }
+
+  // ----------------------------------------------------------
+  // CSV BULK IMPORT (#254)
+  // ----------------------------------------------------------
+
+  /**
+   * Parses a multipart CSV upload and attempts to create each row as an engagement.
+   * Invalid rows are collected in the errors report without stopping the rest of the batch.
+   *
+   * Expected CSV columns:
+   *   engagementId, companyAddress, recruiterAddress, arbiterAddress, tokenAddress,
+   *   totalAmount, jobTitle, jobDescription (opt), salaryRange (opt), location (opt),
+   *   tags (opt, pipe-separated e.g. "engineering|urgent")
+   *
+   * The CSV must include a header row.
+   */
+  async importFromCsv(user: User, file: Express.Multer.File) {
+    if (!file?.buffer) {
+      throw new BadRequestException('No file provided or file is empty');
+    }
+
+    const csv = file.buffer.toString('utf-8');
+    const lines = csv.split(/\r?\n/).filter((l) => l.trim().length > 0);
+
+    if (lines.length < 2) {
+      throw new BadRequestException('CSV file must contain a header row and at least one data row');
+    }
+
+    const REQUIRED_COLUMNS = [
+      'engagementId', 'companyAddress', 'recruiterAddress', 'arbiterAddress',
+      'tokenAddress', 'totalAmount', 'jobTitle',
+    ];
+
+    const headers = lines[0].split(',').map((h) => h.trim());
+    const missingRequired = REQUIRED_COLUMNS.filter((c) => !headers.includes(c));
+    if (missingRequired.length > 0) {
+      throw new BadRequestException(
+        `CSV is missing required column(s): ${missingRequired.join(', ')}`,
+      );
+    }
+
+    const results: Array<{ row: number; engagementId?: string; success: boolean; error?: string }> = [];
+    let successCount = 0;
+    let failureCount = 0;
+
+    for (let i = 1; i < lines.length; i++) {
+      const rowNum = i + 1; // 1-based, accounting for header at row 1
+      try {
+        const values = this.parseCsvLine(lines[i]);
+        const row: Record<string, string> = {};
+        headers.forEach((h, idx) => {
+          row[h] = values[idx]?.trim() ?? '';
+        });
+
+        // Per-row required-field validation
+        const rowMissing = REQUIRED_COLUMNS.filter((c) => !row[c]);
+        if (rowMissing.length > 0) {
+          throw new Error(`Missing required field(s): ${rowMissing.join(', ')}`);
+        }
+
+        const dto: CreateEngagementDto = {
+          engagementId: row['engagementId'],
+          companyAddress: row['companyAddress'],
+          recruiterAddress: row['recruiterAddress'],
+          arbiterAddress: row['arbiterAddress'],
+          tokenAddress: row['tokenAddress'],
+          totalAmount: row['totalAmount'],
+          jobTitle: row['jobTitle'],
+          jobDescription: row['jobDescription'] || undefined,
+          salaryRange: row['salaryRange'] || undefined,
+          location: row['location'] || undefined,
+          tags: row['tags'] ? row['tags'].split('|').map((t) => t.trim()).filter(Boolean) : [],
+          // CSV import does not support milestone configuration inline — use templates for that
+          milestones: [],
+        };
+
+        await this.create(user, dto);
+        successCount++;
+        results.push({ row: rowNum, engagementId: dto.engagementId, success: true });
+      } catch (error) {
+        failureCount++;
+        results.push({ row: rowNum, success: false, error: error.message ?? String(error) });
+        this.logger.warn(`CSV import row ${rowNum} failed: ${error.message}`);
+      }
+    }
+
+    this.logger.log(`CSV import complete: ${successCount} created, ${failureCount} failed`);
+    return {
+      totalRows: lines.length - 1,
+      successCount,
+      failureCount,
+      results,
+    };
+  }
+
+  /** Splits a single CSV line, handling double-quoted fields. */
+  private parseCsvLine(line: string): string[] {
+    const result: string[] = [];
+    let current = '';
+    let inQuotes = false;
+
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (ch === ',' && !inQuotes) {
+        result.push(current);
+        current = '';
+      } else {
+        current += ch;
+      }
+    }
+    result.push(current);
+    return result;
   }
 
   private serialize(engagement: any) {

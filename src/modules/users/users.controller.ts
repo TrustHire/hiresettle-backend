@@ -1,10 +1,14 @@
 import { BadRequestException, Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Put, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiBearerAuth, ApiOperation, ApiParam, ApiTags, ApiResponse, ApiConsumes } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiParam, ApiTags, ApiResponse, ApiConsumes, ApiBody } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
+import { IsArray, IsString, ArrayMaxSize } from 'class-validator';
+import { ApiProperty } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RateLimit } from '../../common/decorators/throttle.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
+import { Roles } from '../../common/decorators/roles.decorator';
 import { UserJwtSubThrottlerGuard } from '../../common/guards/user-jwt-sub-throttler.guard';
 import { PublicUserDto } from './dto/public-user.dto';
 import { UpdatePreferencesDto } from './dto/update-preferences.dto';
@@ -14,6 +18,15 @@ import { AvatarUploadDto } from './dto/avatar-upload.dto';
 import { UserDataExportDto } from './dto/user-data-export.dto';
 import { UsersService } from './users.service';
 import { GdprService } from './gdpr.service';
+import { UserRole } from '@prisma/client';
+
+class UpdateCustomFieldsConfigDto {
+  @ApiProperty({ type: [String], example: ['internalReqId', 'department'], maxItems: 50 })
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(50)
+  allowedCustomFields: string[];
+}
 
 // Stellar public key: G + 55 base32 uppercase chars = 56 chars total
 const STELLAR_ADDRESS_RE = /^G[A-Z2-7]{55}$/;
@@ -134,6 +147,30 @@ export class UsersController {
       throw new BadRequestException('No file provided');
     }
     return this.usersService.uploadAvatar(userId, file);
+  }
+
+  @Get('me/custom-fields-config')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.COMPANY)
+  @ApiOperation({ summary: 'Get allowed custom field keys for engagement creation (COMPANY only)' })
+  @ApiResponse({ status: 200, description: 'Allowed custom fields list' })
+  getCustomFieldsConfig(@CurrentUser('id') userId: string) {
+    return this.usersService.getCustomFieldsConfig(userId);
+  }
+
+  @Put('me/custom-fields-config')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.COMPANY)
+  @ApiOperation({ summary: 'Set allowed custom field keys for engagement creation (COMPANY only, max 50 keys)' })
+  @ApiBody({ type: UpdateCustomFieldsConfigDto })
+  @ApiResponse({ status: 200, description: 'Allowed custom fields updated' })
+  updateCustomFieldsConfig(
+    @CurrentUser('id') userId: string,
+    @Body() dto: UpdateCustomFieldsConfigDto,
+  ) {
+    return this.usersService.updateCustomFieldsConfig(userId, dto.allowedCustomFields);
   }
 
   @Get(':stellarAddress')

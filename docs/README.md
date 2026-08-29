@@ -31,8 +31,6 @@ This directory contains the technical documentation for the HireSettle backend.
 | [Secrets](./secrets.md) | Secret management, credential rotation procedures, and production injection. |
 | [Security](./security.md) | Dependency vulnerability scanning and triage process. |
 | [Stellar Integration](./stellar-integration.md) | Integration details with the Stellar blockchain, event polling, and contract interaction. |
+| [Data Retention](./data-retention.md) | Retention windows, account deletion lifecycle, scheduled PII anonymization job, and env vars. |
+| [API Versioning](./api-versioning.md) | Current URL versioning convention and deprecation/sunset policy. |
 | [Testing](./testing.md) | Testing layers, test layout, mocking conventions, commands, and coverage requirements. |
-| [Tracing](./tracing.md) | OpenTelemetry distributed tracing setup, instrumented libraries, and compatible backends. |
-| [Troubleshooting](./troubleshooting.md) | Common local development issues and fixes for Prisma, Docker, and environment setup. |
-| [Upgrade Guide](./upgrade-guide.md) | Breaking change announcements, versioning policy, and consumer migration steps. |
-| [Webhooks](./webhooks.md) | Outgoing webhook events, HMAC-SHA256 signature verification, and retry policy. |

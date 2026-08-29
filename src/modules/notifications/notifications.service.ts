@@ -259,6 +259,7 @@ export class NotificationsService {
       DISPUTE_RESOLVED: '⚖️',
       REPLACEMENT_REQUESTED: '🔄',
       RETENTION_WINDOW_APPROACHING: '⏰',
+      PLACEMENT_MILESTONE_DUE_SOON: '📅',
       ENGAGEMENT_CANCELLED: '❌',
       ENGAGEMENT_CREATED: '🎉', // Added for completeness
       STELLAR_BALANCE_LOW: '⚠️',
