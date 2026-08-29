@@ -42,6 +42,22 @@ export class EngagementsService {
       throw new ConflictException(`Engagement ${dto.engagementId} already exists`);
     }
 
+    // Plan limit: check active engagement count against company's plan
+    const companyWithPlan = await this.prisma.user.findUnique({
+      where: { id: user.id },
+      select: { plan: { select: { maxActiveEngagements: true } } },
+    });
+    if (companyWithPlan?.plan) {
+      const activeCount = await this.prisma.engagement.count({
+        where: { companyId: user.id, status: { in: ['ACTIVE', 'PENDING_ACCEPTANCE'] } },
+      });
+      if (activeCount >= companyWithPlan.plan.maxActiveEngagements) {
+        throw new BadRequestException(
+          `Plan limit reached: your plan allows at most ${companyWithPlan.plan.maxActiveEngagements} active engagements`,
+        );
+      }
+    }
+
     // Validate token is allowed
     if (!this.stellar.isTokenAllowed(dto.tokenAddress)) {
       throw new BadRequestException(`Token ${dto.tokenAddress} is not allowed`);
@@ -75,6 +91,12 @@ export class EngagementsService {
 
       templateVersion = await this.prisma.engagementTemplateVersion.findUnique({
         where: { templateId_version: { templateId: template.id, version: template.currentVersion } },
+      });
+
+      // Increment template usage stats (#265)
+      await this.prisma.engagementTemplate.update({
+        where: { id: template.id },
+        data: { usageCount: { increment: 1 }, lastUsedAt: new Date() },
       });
     }
 

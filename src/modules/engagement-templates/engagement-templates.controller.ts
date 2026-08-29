@@ -114,4 +114,47 @@ export class EngagementTemplatesController {
   ) {
     return this.templatesService.remove(id, user.id);
   }
+
+  // Issue #265 — Template usage analytics
+  @Get(':id/stats')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.COMPANY)
+  @ApiOperation({ summary: 'Get usage stats for a template (usageCount, lastUsedAt) (#265)' })
+  @ApiResponse({ status: 200, description: 'Stats retrieved' })
+  @ApiResponse({ status: 404, description: 'Template not found' })
+  getStats(
+    @CurrentUser() user: User,
+    @Param('id') id: string,
+  ) {
+    return this.templatesService.getStats(id, user.id);
+  }
+
+  // Issue #264 — Template export
+  @Get(':id/export')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.COMPANY)
+  @ApiOperation({ summary: 'Export a template as portable JSON (#264)' })
+  @ApiResponse({ status: 200, description: 'Template JSON' })
+  @ApiResponse({ status: 404, description: 'Template not found' })
+  exportTemplate(
+    @CurrentUser() user: User,
+    @Param('id') id: string,
+  ) {
+    return this.templatesService.exportTemplate(id, user.id);
+  }
+
+  // Issue #264 — Template import
+  @Post('import')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.COMPANY)
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Import a template from portable JSON (#264)' })
+  @ApiResponse({ status: 201, description: 'Template created from import' })
+  @ApiResponse({ status: 400, description: 'Invalid import payload' })
+  importTemplate(
+    @CurrentUser() user: User,
+    @Body() payload: Record<string, unknown>,
+  ) {
+    return this.templatesService.importTemplate(user.id, payload);
+  }
 }

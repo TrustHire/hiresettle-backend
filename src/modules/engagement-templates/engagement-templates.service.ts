@@ -1,5 +1,5 @@
 import {
-  Injectable, NotFoundException, ForbiddenException,
+  Injectable, NotFoundException, ForbiddenException, BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { CreateEngagementTemplateDto } from './dto/create-engagement-template.dto';
@@ -111,6 +111,41 @@ export class EngagementTemplatesService {
       salaryRange: source.salaryRange ?? undefined,
       location: source.location ?? undefined,
       milestoneConfig: source.milestoneConfig,
+    });
+  }
+
+  // Issue #265 — Template usage analytics
+  async getStats(id: string, companyId: string) {
+    const template = await this.findOne(id, companyId);
+    return { usageCount: template.usageCount, lastUsedAt: template.lastUsedAt };
+  }
+
+  // Issue #264 — Template export
+  async exportTemplate(id: string, companyId: string) {
+    const t = await this.findOne(id, companyId);
+    return {
+      name: t.name,
+      jobTitle: t.jobTitle,
+      jobDescription: t.jobDescription,
+      salaryRange: t.salaryRange,
+      location: t.location,
+      milestoneConfig: t.milestoneConfig,
+    };
+  }
+
+  // Issue #264 — Template import
+  async importTemplate(companyId: string, payload: unknown) {
+    const p = payload as any;
+    if (!p?.name || !p?.jobTitle || !p?.milestoneConfig) {
+      throw new BadRequestException('Import payload must include name, jobTitle, and milestoneConfig');
+    }
+    return this.create(companyId, {
+      name: p.name,
+      jobTitle: p.jobTitle,
+      jobDescription: p.jobDescription,
+      salaryRange: p.salaryRange,
+      location: p.location,
+      milestoneConfig: p.milestoneConfig,
     });
   }
 }

@@ -1,0 +1,2 @@
+-- No schema changes required.
+-- Milestone percent adjustments are recorded in the existing audit_logs table.

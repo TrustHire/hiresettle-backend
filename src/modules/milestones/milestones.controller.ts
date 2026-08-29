@@ -14,6 +14,7 @@ import { ResolveDisputeDto } from './dto/resolve-dispute.dto';
 import { UpdateMilestoneStatusDto } from './dto/update-milestone-status.dto';
 import { BulkCreateMilestonesDto } from './dto/bulk-create-milestones.dto';
 import { SetPlacementDueDateDto } from './dto/set-placement-due-date.dto';
+import { AdjustMilestonePercentsDto } from './dto/adjust-milestone-percents.dto';
 import { Idempotent } from '../../common/decorators/idempotent.decorator';
 import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
 
@@ -199,5 +200,26 @@ export class MilestonesController {
     @CurrentUser() user: any,
   ) {
     return this.milestonesService.setPlacementDueDate(engagementId, index, dto.placementDueAt, user);
+  }
+
+  /**
+   * PATCH /api/v1/engagements/:engagementId/milestones/adjust-percents
+   * Adjust paymentPercent values pre-confirmation; total must still sum to 100.
+   * Records each change in the audit log (#261).
+   */
+  @Patch('adjust-percents')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Adjust milestone percentages pre-confirmation; total must sum to 100 (#261)' })
+  @ApiParam({ name: 'engagementId', description: 'Engagement ID' })
+  @ApiResponse({ status: 200, description: 'Percentages adjusted' })
+  @ApiResponse({ status: 400, description: 'Total does not sum to 100 or milestone already confirmed' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 404, description: 'Engagement or milestone not found' })
+  adjustPercents(
+    @Param('engagementId') engagementId: string,
+    @Body() dto: AdjustMilestonePercentsDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.milestonesService.adjustMilestonePercents(engagementId, dto.adjustments, dto.reason, user.id);
   }
 }
