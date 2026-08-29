@@ -412,7 +412,24 @@ export class MilestonesService {
     }
 
     const approved = resolution === 'RELEASE';
-    
+
+    if (!approved) {
+      await this.prisma.refund.upsert({
+        where: { milestoneId: milestone.id },
+        update: {
+          amount: BigInt(milestone.amount ?? 0),
+          status: 'PENDING',
+          reason: 'Resolved dispute in favor of the company',
+        },
+        create: {
+          milestoneId: milestone.id,
+          amount: BigInt(milestone.amount ?? 0),
+          status: 'PENDING',
+          reason: 'Resolved dispute in favor of the company',
+        },
+      });
+    }
+
     await this.stellar.resolveMilestoneDispute(engagementId, milestoneIndex, approved);
 
     const updated = await this.markResolved(

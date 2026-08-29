@@ -45,6 +45,7 @@ import { GdprService } from '../users/gdpr.service';
 import { AuthService, RequestMeta } from '../auth/auth.service';
 import { ApiKeysService } from '../auth/api-keys.service';
 import { CreateApiKeyDto } from '../auth/dto/create-api-key.dto';
+import { PrismaService } from '../../common/prisma/prisma.service';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -64,6 +65,7 @@ export class AdminController {
     private readonly adminWebhooks: AdminWebhooksService,
     private readonly authService: AuthService,
     private readonly apiKeys: ApiKeysService,
+    private readonly prisma: PrismaService,
   ) {}
 
   @Get('maintenance-mode')
@@ -377,6 +379,56 @@ export class AdminController {
   @ApiResponse({ status: 404, description: 'Webhook delivery not found' })
   resendWebhookDelivery(@Param('id') id: string, @Req() req: Request) {
     return this.adminWebhooks.resendDelivery(id, (req.user as any)?.id);
+  }
+
+  @Get('refunds')
+  @ApiOperation({ summary: 'List refund records for resolved company-favoring disputes' })
+  @ApiResponse({ status: 200, description: 'Refund records retrieved' })
+  async listRefunds(@Query('status') status?: string) {
+    const where = status ? { status: status.toUpperCase() as any } : {};
+    return this.prisma.refund.findMany({
+      where,
+      include: { milestone: { select: { id: true, engagementId: true, milestoneIndex: true, amount: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  @Post('refunds/:id/complete')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Mark a refund as completed' })
+  @ApiResponse({ status: 200, description: 'Refund updated' })
+  async completeRefund(@Param('id') id: string) {
+    return this.prisma.refund.update({
+      where: { id },
+      data: { status: 'COMPLETED' },
+    });
+  }
+
+  @Post('disputes/:id/refund')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Record a refund tied to a resolved dispute' })
+  @ApiResponse({ status: 201, description: 'Refund recorded' })
+  async createDisputeRefund(
+    @Param('id') id: string,
+    @Body() dto: { amount?: number | string; reason?: string } = {},
+  ) {
+    const milestone = await this.prisma.milestone.findUnique({ where: { id } });
+    if (!milestone) throw new Error('Milestone not found');
+
+    return this.prisma.refund.upsert({
+      where: { milestoneId: milestone.id },
+      update: {
+        amount: BigInt(dto.amount ?? milestone.amount ?? 0),
+        status: 'PENDING',
+        reason: dto.reason ?? 'Dispute resolved in favor of the company',
+      },
+      create: {
+        milestoneId: milestone.id,
+        amount: BigInt(dto.amount ?? milestone.amount ?? 0),
+        status: 'PENDING',
+        reason: dto.reason ?? 'Dispute resolved in favor of the company',
+      },
+    });
   }
 
   // ────────────────────────────────────────────────────────────────
