@@ -7,20 +7,25 @@ import {
   UnauthorizedException,
   HttpException,
   HttpStatus,
-} from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { JwtService } from '@nestjs/jwt';
-import { Prisma, SecurityEventAction, User, UserRole } from '@prisma/client';
-import { randomBytes, scrypt as scryptCallback, timingSafeEqual, createHash } from 'crypto';
-import { promisify } from 'util';
-import { TOTP } from 'otpauth';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { StellarService } from '../../common/stellar/stellar.service';
-import { SecurityEventsService } from '../../common/security-events/security-events.service';
-import { PasswordPolicyService } from '../../common/password/password-policy.service';
-import { LoginDto } from './dto/login.dto';
-import { RegisterDto } from './dto/register.dto';
-import { Keypair } from '@stellar/stellar-sdk';
+} from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { JwtService } from "@nestjs/jwt";
+import { Prisma, SecurityEventAction, User, UserRole } from "@prisma/client";
+import {
+  randomBytes,
+  scrypt as scryptCallback,
+  timingSafeEqual,
+  createHash,
+} from "crypto";
+import { promisify } from "util";
+import { TOTP } from "otpauth";
+import { PrismaService } from "../../common/prisma/prisma.service";
+import { StellarService } from "../../common/stellar/stellar.service";
+import { SecurityEventsService } from "../../common/security-events/security-events.service";
+import { PasswordPolicyService } from "../../common/password/password-policy.service";
+import { LoginDto } from "./dto/login.dto";
+import { RegisterDto } from "./dto/register.dto";
+import { Keypair } from "@stellar/stellar-sdk";
 
 const scrypt = promisify(scryptCallback);
 const PASSWORD_KEY_LENGTH = 64;
@@ -29,7 +34,7 @@ const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MINUTES = 15;
 const IMPERSONATION_TOKEN_TTL_SECONDS = 5 * 60;
 
-type AuthUser = Omit<User, 'passwordHash' | 'webhookSecret'>;
+type AuthUser = Omit<User, "passwordHash" | "webhookSecret">;
 
 export interface RequestMeta {
   ip?: string;
@@ -41,7 +46,10 @@ export class AuthService {
   private readonly logger = new Logger(AuthService.name);
 
   // Kept for the existing nonce endpoint while email/password auth becomes primary.
-  private readonly nonces = new Map<string, { nonce: string; expiresAt: number }>();
+  private readonly nonces = new Map<
+    string,
+    { nonce: string; expiresAt: number }
+  >();
   private readonly regChallenges = new Map<string, string>(); // keyed by userId
   private readonly authChallenges = new Map<string, string>();
 
@@ -82,11 +90,17 @@ export class AuthService {
     const passwordHash = await this.hashPassword(dto.password);
 
     if (dto.stellarAddress) {
-      const skipAccountValidation = this.config.get<boolean>('SKIP_ACCOUNT_VALIDATION');
+      const skipAccountValidation = this.config.get<boolean>(
+        "SKIP_ACCOUNT_VALIDATION",
+      );
       if (!skipAccountValidation) {
-        const accountExists = await this.stellar.accountExists(dto.stellarAddress);
+        const accountExists = await this.stellar.accountExists(
+          dto.stellarAddress,
+        );
         if (!accountExists) {
-          throw new BadRequestException('Stellar address does not exist or is not funded.');
+          throw new BadRequestException(
+            "Stellar address does not exist or is not funded.",
+          );
         }
       }
     }
@@ -108,9 +122,11 @@ export class AuthService {
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
+        error.code === "P2002"
       ) {
-        throw new ConflictException('Email or Stellar address is already registered');
+        throw new ConflictException(
+          "Email or Stellar address is already registered",
+        );
       }
       throw error;
     }
@@ -120,22 +136,38 @@ export class AuthService {
     const email = dto.email.toLowerCase();
     const user = await this.prisma.user.findUnique({ where: { email } });
 
-    if (!user?.passwordHash || !(await this.verifyPassword(dto.password, user.passwordHash))) {
+    if (
+      !user?.passwordHash ||
+      !(await this.verifyPassword(dto.password, user.passwordHash))
+    ) {
       await this.handleFailedLogin(user?.id, meta);
-      throw new UnauthorizedException('Invalid email or password');
+      throw new UnauthorizedException("Invalid email or password");
     }
 
     if (user.deactivatedAt) {
-      await this.logSecurityEvent(SecurityEventAction.LOGIN_FAILURE, user.id, meta);
-      throw new ForbiddenException('Your account has been deactivated. Please contact an administrator.');
+      await this.logSecurityEvent(
+        SecurityEventAction.LOGIN_FAILURE,
+        user.id,
+        meta,
+      );
+      throw new ForbiddenException(
+        "Your account has been deactivated. Please contact an administrator.",
+      );
     }
 
     if (user.lockedUntil && user.lockedUntil > new Date()) {
-      await this.logSecurityEvent(SecurityEventAction.LOGIN_FAILURE, user.id, meta);
-      const retryAfterSeconds = Math.ceil((user.lockedUntil.getTime() - Date.now()) / 1000);
+      await this.logSecurityEvent(
+        SecurityEventAction.LOGIN_FAILURE,
+        user.id,
+        meta,
+      );
+      const retryAfterSeconds = Math.ceil(
+        (user.lockedUntil.getTime() - Date.now()) / 1000,
+      );
       throw new HttpException(
         {
-          message: 'Account temporarily locked due to repeated failed login attempts',
+          message:
+            "Account temporarily locked due to repeated failed login attempts",
           retryAfter: retryAfterSeconds,
         },
         HttpStatus.TOO_MANY_REQUESTS,
@@ -145,19 +177,25 @@ export class AuthService {
     // Check if 2FA is enabled
     if (user.totpEnabled) {
       if (!dto.totpCode) {
-        throw new UnauthorizedException('TOTP code required for 2FA-enabled account');
+        throw new UnauthorizedException(
+          "TOTP code required for 2FA-enabled account",
+        );
       }
 
       const isValid = this.verifyTotpCode(user.totpSecret!, dto.totpCode);
       if (!isValid) {
         await this.handleFailedLogin(user.id, meta);
-        throw new UnauthorizedException('Invalid TOTP code');
+        throw new UnauthorizedException("Invalid TOTP code");
       }
     }
 
     await this.resetFailedAttempts(user.id);
     this.logger.log(`User logged in: ${email}`);
-    await this.logSecurityEvent(SecurityEventAction.LOGIN_SUCCESS, user.id, meta);
+    await this.logSecurityEvent(
+      SecurityEventAction.LOGIN_SUCCESS,
+      user.id,
+      meta,
+    );
     return this.issueTokenPair(user);
   }
 
@@ -183,8 +221,14 @@ export class AuthService {
 
     if (user) {
       if (user.deactivatedAt || user.deletedAt) {
-        await this.logSecurityEvent(SecurityEventAction.LOGIN_FAILURE, user.id, meta);
-        throw new ForbiddenException('Your account has been deactivated. Please contact an administrator.');
+        await this.logSecurityEvent(
+          SecurityEventAction.LOGIN_FAILURE,
+          user.id,
+          meta,
+        );
+        throw new ForbiddenException(
+          "Your account has been deactivated. Please contact an administrator.",
+        );
       }
 
       if (!user.googleId) {
@@ -212,69 +256,78 @@ export class AuthService {
     }
 
     await this.resetFailedAttempts(user.id);
-    await this.logSecurityEvent(SecurityEventAction.LOGIN_SUCCESS, user.id, meta);
+    await this.logSecurityEvent(
+      SecurityEventAction.LOGIN_SUCCESS,
+      user.id,
+      meta,
+    );
     return this.issueTokenPair(user);
   }
 
   /** Build the Google OAuth2 authorization URL (authorization-code flow). */
   getGoogleAuthUrl(state: string): string {
-    const clientId = this.config.get<string>('GOOGLE_CLIENT_ID');
-    const callbackUrl = this.config.get<string>('GOOGLE_CALLBACK_URL');
+    const clientId = this.config.get<string>("GOOGLE_CLIENT_ID");
+    const callbackUrl = this.config.get<string>("GOOGLE_CALLBACK_URL");
     if (!clientId || !callbackUrl) {
-      throw new BadRequestException('Google OAuth is not configured');
+      throw new BadRequestException("Google OAuth is not configured");
     }
 
     const params = new URLSearchParams({
       client_id: clientId,
       redirect_uri: callbackUrl,
-      response_type: 'code',
-      scope: 'openid email profile',
-      access_type: 'online',
-      include_granted_scopes: 'true',
+      response_type: "code",
+      scope: "openid email profile",
+      access_type: "online",
+      include_granted_scopes: "true",
       state,
-      prompt: 'select_account',
+      prompt: "select_account",
     });
 
     return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
   }
 
   /** Exchange an authorization code for Google profile info. */
-  async exchangeGoogleCode(code: string): Promise<{ googleId: string; email: string; name?: string | null }> {
-    const clientId = this.config.get<string>('GOOGLE_CLIENT_ID');
-    const clientSecret = this.config.get<string>('GOOGLE_CLIENT_SECRET');
-    const callbackUrl = this.config.get<string>('GOOGLE_CALLBACK_URL');
+  async exchangeGoogleCode(
+    code: string,
+  ): Promise<{ googleId: string; email: string; name?: string | null }> {
+    const clientId = this.config.get<string>("GOOGLE_CLIENT_ID");
+    const clientSecret = this.config.get<string>("GOOGLE_CLIENT_SECRET");
+    const callbackUrl = this.config.get<string>("GOOGLE_CALLBACK_URL");
     if (!clientId || !clientSecret || !callbackUrl) {
-      throw new BadRequestException('Google OAuth is not configured');
+      throw new BadRequestException("Google OAuth is not configured");
     }
 
-    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         code,
         client_id: clientId,
         client_secret: clientSecret,
         redirect_uri: callbackUrl,
-        grant_type: 'authorization_code',
+        grant_type: "authorization_code",
       }),
     });
 
     if (!tokenRes.ok) {
       this.logger.warn(`Google token exchange failed: ${tokenRes.status}`);
-      throw new UnauthorizedException('Google OAuth token exchange failed');
+      throw new UnauthorizedException("Google OAuth token exchange failed");
     }
 
     const tokenJson = (await tokenRes.json()) as { access_token?: string };
     if (!tokenJson.access_token) {
-      throw new UnauthorizedException('Google OAuth token exchange failed');
+      throw new UnauthorizedException("Google OAuth token exchange failed");
     }
 
-    const profileRes = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
-      headers: { Authorization: `Bearer ${tokenJson.access_token}` },
-    });
+    const profileRes = await fetch(
+      "https://openidconnect.googleapis.com/v1/userinfo",
+      {
+        headers: { Authorization: `Bearer ${tokenJson.access_token}` },
+      },
+    );
 
     if (!profileRes.ok) {
-      throw new UnauthorizedException('Failed to fetch Google user profile');
+      throw new UnauthorizedException("Failed to fetch Google user profile");
     }
 
     const profile = (await profileRes.json()) as {
@@ -285,11 +338,13 @@ export class AuthService {
     };
 
     if (!profile.sub || !profile.email) {
-      throw new UnauthorizedException('Google account did not return a verified email');
+      throw new UnauthorizedException(
+        "Google account did not return a verified email",
+      );
     }
 
     if (profile.email_verified === false) {
-      throw new UnauthorizedException('Google email is not verified');
+      throw new UnauthorizedException("Google email is not verified");
     }
 
     return {
@@ -307,21 +362,24 @@ export class AuthService {
     });
 
     if (!stored) {
-      throw new UnauthorizedException('Invalid refresh token');
+      throw new UnauthorizedException("Invalid refresh token");
     }
 
     const now = new Date();
 
     if (stored.consumedAt) {
       await this.revokeFamily(stored.familyId);
-      throw new UnauthorizedException('Refresh token reuse detected');
+      throw new UnauthorizedException("Refresh token reuse detected");
     }
 
     if (stored.revokedAt || stored.expiresAt <= now) {
-      throw new UnauthorizedException('Refresh token is no longer valid');
+      throw new UnauthorizedException("Refresh token is no longer valid");
     }
 
-    const nextRefreshToken = await this.signRefreshToken(stored.user, stored.familyId);
+    const nextRefreshToken = await this.signRefreshToken(
+      stored.user,
+      stored.familyId,
+    );
     const nextRefreshTokenHash = this.hashRefreshToken(nextRefreshToken);
     const nextExpiresAt = this.refreshExpiryDate();
 
@@ -336,7 +394,7 @@ export class AuthService {
           where: { familyId: stored.familyId, revokedAt: null },
           data: { revokedAt: now },
         });
-        throw new UnauthorizedException('Refresh token reuse detected');
+        throw new UnauthorizedException("Refresh token reuse detected");
       }
 
       await tx.refreshToken.create({
@@ -366,7 +424,7 @@ export class AuthService {
     });
 
     if (!target || target.deletedAt || target.deactivatedAt) {
-      throw new ForbiddenException('User is not available for impersonation');
+      throw new ForbiddenException("User is not available for impersonation");
     }
 
     const accessToken = this.jwt.sign(
@@ -375,7 +433,7 @@ export class AuthService {
         email: target.email,
         stellarAddress: target.stellarAddress,
         role: target.role,
-        type: 'access',
+        type: "access",
         impersonated: true,
         impersonatorId: adminId,
       },
@@ -400,7 +458,9 @@ export class AuthService {
 
   async logout(refreshToken: string, meta: RequestMeta = {}) {
     const tokenHash = this.hashRefreshToken(refreshToken);
-    const stored = await this.prisma.refreshToken.findUnique({ where: { tokenHash } });
+    const stored = await this.prisma.refreshToken.findUnique({
+      where: { tokenHash },
+    });
 
     if (stored && !stored.revokedAt) {
       await this.prisma.refreshToken.update({
@@ -409,22 +469,34 @@ export class AuthService {
       });
     }
 
-    await this.logSecurityEvent(SecurityEventAction.LOGOUT, stored?.userId, meta);
+    await this.logSecurityEvent(
+      SecurityEventAction.LOGOUT,
+      stored?.userId,
+      meta,
+    );
     return { revoked: true };
   }
 
-  async updateProfile(userId: string, dto: any): Promise<AuthUser & { webhookSecret?: string }> {
-    const existing = await this.prisma.user.findUnique({ where: { id: userId } });
+  async updateProfile(
+    userId: string,
+    dto: any,
+  ): Promise<AuthUser & { webhookSecret?: string }> {
+    const existing = await this.prisma.user.findUnique({
+      where: { id: userId },
+    });
 
     // Generate a signing secret the first time a webhook subscription is created.
     const isNewWebhookSubscription = !!dto.webhookUrl && !existing?.webhookUrl;
-    const webhookSecret = isNewWebhookSubscription ? randomBytes(32).toString('hex') : undefined;
+    const webhookSecret = isNewWebhookSubscription
+      ? randomBytes(32).toString("hex")
+      : undefined;
 
     const updated = await this.prisma.user.update({
       where: { id: userId },
       data: {
         ...(dto.name !== undefined ? { name: dto.name } : {}),
         ...(dto.company !== undefined ? { company: dto.company } : {}),
+        ...(dto.timezone !== undefined ? { timezone: dto.timezone } : {}),
         ...(dto.webhookUrl !== undefined ? { webhookUrl: dto.webhookUrl } : {}),
         ...(webhookSecret ? { webhookSecret } : {}),
       },
@@ -443,7 +515,7 @@ export class AuthService {
         revokedAt: null,
         expiresAt: { gt: now },
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { createdAt: "desc" },
     });
 
     return sessions.map((session) => ({
@@ -455,21 +527,25 @@ export class AuthService {
     }));
   }
 
-  async revokeSession(sessionId: string, userId: string, currentRefreshToken?: string) {
+  async revokeSession(
+    sessionId: string,
+    userId: string,
+    currentRefreshToken?: string,
+  ) {
     const session = await this.prisma.refreshToken.findUnique({
       where: { id: sessionId },
     });
 
     if (!session) {
-      throw new BadRequestException('Session not found');
+      throw new BadRequestException("Session not found");
     }
 
     if (session.userId !== userId) {
-      throw new ForbiddenException('You can only revoke your own sessions');
+      throw new ForbiddenException("You can only revoke your own sessions");
     }
 
     if (session.revokedAt) {
-      throw new BadRequestException('Session already revoked');
+      throw new BadRequestException("Session already revoked");
     }
 
     await this.prisma.refreshToken.update({
@@ -490,26 +566,26 @@ export class AuthService {
   async generateTotpSecret(userId: string) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) {
-      throw new BadRequestException('User not found');
+      throw new BadRequestException("User not found");
     }
 
     if (user.totpEnabled) {
-      throw new BadRequestException('2FA is already enabled');
+      throw new BadRequestException("2FA is already enabled");
     }
 
     // Generate a random base32 secret
     const secretBytes = randomBytes(20);
-    const base32Chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-    let secret = '';
+    const base32Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    let secret = "";
     for (let i = 0; i < secretBytes.length; i += 5) {
       const chunk = secretBytes.slice(i, i + 5);
       secret += this.base32Encode(chunk);
     }
 
     const totp = new TOTP({
-      issuer: 'HireSettle',
+      issuer: "HireSettle",
       label: user.email || user.stellarAddress || userId,
-      algorithm: 'SHA1',
+      algorithm: "SHA1",
       digits: 6,
       period: 30,
       secret,
@@ -530,10 +606,10 @@ export class AuthService {
   }
 
   private base32Encode(bytes: Buffer): string {
-    const base32Chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+    const base32Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
     let bits = 0;
     let value = 0;
-    let output = '';
+    let output = "";
 
     for (let i = 0; i < bytes.length; i++) {
       value = (value << 8) | bytes[i];
@@ -555,16 +631,18 @@ export class AuthService {
   async enableTotp(userId: string, code: string) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user || !user.totpSecret) {
-      throw new BadRequestException('TOTP secret not found. Please generate a secret first.');
+      throw new BadRequestException(
+        "TOTP secret not found. Please generate a secret first.",
+      );
     }
 
     if (user.totpEnabled) {
-      throw new BadRequestException('2FA is already enabled');
+      throw new BadRequestException("2FA is already enabled");
     }
 
     const isValid = this.verifyTotpCode(user.totpSecret, code);
     if (!isValid) {
-      throw new UnauthorizedException('Invalid TOTP code');
+      throw new UnauthorizedException("Invalid TOTP code");
     }
 
     await this.prisma.user.update({
@@ -579,16 +657,16 @@ export class AuthService {
   async disableTotp(userId: string, code: string) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) {
-      throw new BadRequestException('User not found');
+      throw new BadRequestException("User not found");
     }
 
     if (!user.totpEnabled) {
-      throw new BadRequestException('2FA is not enabled');
+      throw new BadRequestException("2FA is not enabled");
     }
 
     const isValid = this.verifyTotpCode(user.totpSecret!, code);
     if (!isValid) {
-      throw new UnauthorizedException('Invalid TOTP code');
+      throw new UnauthorizedException("Invalid TOTP code");
     }
 
     await this.prisma.user.update({
@@ -606,7 +684,7 @@ export class AuthService {
   private verifyTotpCode(secret: string, code: string): boolean {
     const totp = new TOTP({
       secret,
-      algorithm: 'SHA1',
+      algorithm: "SHA1",
       digits: 6,
       period: 30,
     });
@@ -616,7 +694,7 @@ export class AuthService {
   }
 
   private async issueTokenPair(user: User) {
-    const familyId = randomBytes(24).toString('hex');
+    const familyId = randomBytes(24).toString("hex");
     const refreshToken = await this.signRefreshToken(user, familyId);
 
     await this.prisma.refreshToken.create({
@@ -642,42 +720,62 @@ export class AuthService {
         email: user.email,
         stellarAddress: user.stellarAddress,
         role: user.role,
-        type: 'access',
+        type: "access",
       },
-      { expiresIn: this.config.get<string>('JWT_ACCESS_EXPIRES_IN', '15m') },
+      { expiresIn: this.config.get<string>("JWT_ACCESS_EXPIRES_IN", "15m") },
     );
   }
 
-  private async signRefreshToken(user: User, familyId: string): Promise<string> {
+  private async signRefreshToken(
+    user: User,
+    familyId: string,
+  ): Promise<string> {
     return this.jwt.signAsync(
-      { sub: user.id, familyId, type: 'refresh' },
-      { expiresIn: this.config.get<string>('JWT_REFRESH_EXPIRES_IN', '7d') },
+      { sub: user.id, familyId, type: "refresh" },
+      { expiresIn: this.config.get<string>("JWT_REFRESH_EXPIRES_IN", "7d") },
     );
   }
 
   private refreshExpiryDate(): Date {
-    const days = this.config.get<number>('JWT_REFRESH_EXPIRES_DAYS', REFRESH_TOKEN_DAYS);
+    const days = this.config.get<number>(
+      "JWT_REFRESH_EXPIRES_DAYS",
+      REFRESH_TOKEN_DAYS,
+    );
     return new Date(Date.now() + days * 24 * 60 * 60 * 1000);
   }
 
   private hashRefreshToken(token: string): string {
-    return createHash('sha256').update(token).digest('hex');
+    return createHash("sha256").update(token).digest("hex");
   }
 
   private async hashPassword(password: string): Promise<string> {
-    const salt = randomBytes(16).toString('hex');
-    const derivedKey = (await scrypt(password, salt, PASSWORD_KEY_LENGTH)) as Buffer;
-    return `scrypt:${salt}:${derivedKey.toString('hex')}`;
+    const salt = randomBytes(16).toString("hex");
+    const derivedKey = (await scrypt(
+      password,
+      salt,
+      PASSWORD_KEY_LENGTH,
+    )) as Buffer;
+    return `scrypt:${salt}:${derivedKey.toString("hex")}`;
   }
 
-  private async verifyPassword(password: string, passwordHash: string): Promise<boolean> {
-    const [algorithm, salt, key] = passwordHash.split(':');
-    if (algorithm !== 'scrypt' || !salt || !key) return false;
+  private async verifyPassword(
+    password: string,
+    passwordHash: string,
+  ): Promise<boolean> {
+    const [algorithm, salt, key] = passwordHash.split(":");
+    if (algorithm !== "scrypt" || !salt || !key) return false;
 
-    const derivedKey = (await scrypt(password, salt, PASSWORD_KEY_LENGTH)) as Buffer;
-    const storedKey = Buffer.from(key, 'hex');
+    const derivedKey = (await scrypt(
+      password,
+      salt,
+      PASSWORD_KEY_LENGTH,
+    )) as Buffer;
+    const storedKey = Buffer.from(key, "hex");
 
-    return storedKey.length === derivedKey.length && timingSafeEqual(storedKey, derivedKey);
+    return (
+      storedKey.length === derivedKey.length &&
+      timingSafeEqual(storedKey, derivedKey)
+    );
   }
 
   private async revokeFamily(familyId: string) {
@@ -705,13 +803,24 @@ export class AuthService {
     });
   }
 
-  private async handleFailedLogin(userId: string | undefined, meta: RequestMeta) {
+  private async handleFailedLogin(
+    userId: string | undefined,
+    meta: RequestMeta,
+  ) {
     if (!userId) {
-      await this.logSecurityEvent(SecurityEventAction.LOGIN_FAILURE, null, meta);
+      await this.logSecurityEvent(
+        SecurityEventAction.LOGIN_FAILURE,
+        null,
+        meta,
+      );
       return;
     }
 
-    await this.logSecurityEvent(SecurityEventAction.LOGIN_FAILURE, userId, meta);
+    await this.logSecurityEvent(
+      SecurityEventAction.LOGIN_FAILURE,
+      userId,
+      meta,
+    );
 
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) return;
@@ -719,7 +828,9 @@ export class AuthService {
     const newFailedAttempts = (user.failedLoginAttempts || 0) + 1;
 
     if (newFailedAttempts >= MAX_FAILED_ATTEMPTS) {
-      const lockedUntil = new Date(Date.now() + LOCKOUT_DURATION_MINUTES * 60 * 1000);
+      const lockedUntil = new Date(
+        Date.now() + LOCKOUT_DURATION_MINUTES * 60 * 1000,
+      );
       await this.prisma.user.update({
         where: { id: userId },
         data: {
@@ -727,7 +838,9 @@ export class AuthService {
           lockedUntil,
         },
       });
-      this.logger.warn(`Account locked: ${user.email} after ${newFailedAttempts} failed attempts`);
+      this.logger.warn(
+        `Account locked: ${user.email} after ${newFailedAttempts} failed attempts`,
+      );
     } else {
       await this.prisma.user.update({
         where: { id: userId },
@@ -755,7 +868,8 @@ export class AuthService {
    * Creates the user if not present. Stores the challenge in memory keyed by user.id.
    */
   async generateWebauthnRegistrationOptions(stellarAddress: string) {
-    if (!stellarAddress) throw new BadRequestException('stellarAddress is required');
+    if (!stellarAddress)
+      throw new BadRequestException("stellarAddress is required");
 
     const user = await this.prisma.user.upsert({
       where: { stellarAddress },
@@ -763,17 +877,20 @@ export class AuthService {
       update: {},
     });
 
-    const rpName = this.config.get<string>('WEBAUTHN_RP_NAME', 'HireSettle');
-    const rpID = this.config.get<string>('WEBAUTHN_RP_ID', this.config.get<string>('HOST') || 'localhost');
+    const rpName = this.config.get<string>("WEBAUTHN_RP_NAME", "HireSettle");
+    const rpID = this.config.get<string>(
+      "WEBAUTHN_RP_ID",
+      this.config.get<string>("HOST") || "localhost",
+    );
 
     const options = generateRegistrationOptions({
       rpName,
       rpID,
       userID: user.id,
       userName: user.stellarAddress,
-      attestationType: 'none',
+      attestationType: "none",
       authenticatorSelection: {
-        userVerification: 'required', // require UV for phishing resistance
+        userVerification: "required", // require UV for phishing resistance
       },
       // prevent re-registration of same credential IDs on client side
       excludeCredentials: [],
@@ -788,18 +905,30 @@ export class AuthService {
   /**
    * Verify attestation response from client and persist credential.
    */
-  async verifyWebauthnRegistration(dto: { stellarAddress: string; attestationResponse: any }) {
+  async verifyWebauthnRegistration(dto: {
+    stellarAddress: string;
+    attestationResponse: any;
+  }) {
     const { stellarAddress, attestationResponse } = dto;
-    if (!stellarAddress || !attestationResponse) throw new BadRequestException('Missing fields');
+    if (!stellarAddress || !attestationResponse)
+      throw new BadRequestException("Missing fields");
 
-    const user = await this.prisma.user.findUnique({ where: { stellarAddress } });
-    if (!user) throw new BadRequestException('User not found');
+    const user = await this.prisma.user.findUnique({
+      where: { stellarAddress },
+    });
+    if (!user) throw new BadRequestException("User not found");
 
     const expectedChallenge = this.regChallenges.get(user.id);
-    if (!expectedChallenge) throw new BadRequestException('No registration in progress for this user');
+    if (!expectedChallenge)
+      throw new BadRequestException(
+        "No registration in progress for this user",
+      );
 
-    const origin = this.config.get<string>('ORIGIN', `http://localhost:3000`);
-    const rpID = this.config.get<string>('WEBAUTHN_RP_ID', this.config.get<string>('HOST') || 'localhost');
+    const origin = this.config.get<string>("ORIGIN", `http://localhost:3000`);
+    const rpID = this.config.get<string>(
+      "WEBAUTHN_RP_ID",
+      this.config.get<string>("HOST") || "localhost",
+    );
 
     let verification;
     try {
@@ -810,16 +939,18 @@ export class AuthService {
         expectedRPID: rpID,
       });
     } catch (err) {
-      this.logger.error('Registration verification failed', err as any);
-      throw new BadRequestException('Registration verification failed');
+      this.logger.error("Registration verification failed", err as any);
+      throw new BadRequestException("Registration verification failed");
     }
 
     const { verified, registrationInfo } = verification as any;
     if (!verified || !registrationInfo) {
-      throw new BadRequestException('Could not verify registration');
+      throw new BadRequestException("Could not verify registration");
     }
 
-    const credentialId = Buffer.from(registrationInfo.credentialID).toString('base64url');
+    const credentialId = Buffer.from(registrationInfo.credentialID).toString(
+      "base64url",
+    );
     const publicKey = registrationInfo.credentialPublicKey; // Buffer — store as base64
     const counter = registrationInfo.counter ?? 0;
 
@@ -828,9 +959,13 @@ export class AuthService {
       data: {
         userId: user.id,
         credentialId,
-        publicKey: Buffer.isBuffer(publicKey) ? publicKey.toString('base64') : String(publicKey),
+        publicKey: Buffer.isBuffer(publicKey)
+          ? publicKey.toString("base64")
+          : String(publicKey),
         counter: Number(counter),
-        transports: Array.isArray(attestationResponse.transports) ? attestationResponse.transports.join(',') : undefined,
+        transports: Array.isArray(attestationResponse.transports)
+          ? attestationResponse.transports.join(",")
+          : undefined,
       },
     });
 
@@ -844,24 +979,32 @@ export class AuthService {
    * Generate authentication (assertion) options for a user.
    */
   async generateWebauthnAuthenticationOptions(stellarAddress: string) {
-    if (!stellarAddress) throw new BadRequestException('stellarAddress is required');
+    if (!stellarAddress)
+      throw new BadRequestException("stellarAddress is required");
 
-    const user = await this.prisma.user.findUnique({ where: { stellarAddress } });
-    if (!user) throw new BadRequestException('User not found');
+    const user = await this.prisma.user.findUnique({
+      where: { stellarAddress },
+    });
+    if (!user) throw new BadRequestException("User not found");
 
-    const creds = await this.prisma.credential.findMany({ where: { userId: user.id } });
+    const creds = await this.prisma.credential.findMany({
+      where: { userId: user.id },
+    });
 
-    const rpID = this.config.get<string>('WEBAUTHN_RP_ID', this.config.get<string>('HOST') || 'localhost');
+    const rpID = this.config.get<string>(
+      "WEBAUTHN_RP_ID",
+      this.config.get<string>("HOST") || "localhost",
+    );
 
     const allowCredentials = creds.map((c) => ({
-      id: Buffer.from(c.credentialId, 'base64url'),
-      type: 'public-key' as const,
-      transports: c.transports ? c.transports.split(',') : undefined,
+      id: Buffer.from(c.credentialId, "base64url"),
+      type: "public-key" as const,
+      transports: c.transports ? c.transports.split(",") : undefined,
     }));
 
     const options = generateAuthenticationOptions({
       allowCredentials,
-      userVerification: 'required',
+      userVerification: "required",
       rpID,
     });
 
@@ -873,22 +1016,40 @@ export class AuthService {
   /**
    * Verify assertion response and issue JWT on success.
    */
-  async verifyWebauthnAuthentication(dto: { stellarAddress: string; assertionResponse: any }) {
+  async verifyWebauthnAuthentication(dto: {
+    stellarAddress: string;
+    assertionResponse: any;
+  }) {
     const { stellarAddress, assertionResponse } = dto;
-    if (!stellarAddress || !assertionResponse) throw new BadRequestException('Missing fields');
+    if (!stellarAddress || !assertionResponse)
+      throw new BadRequestException("Missing fields");
 
-    const user = await this.prisma.user.findUnique({ where: { stellarAddress } });
-    if (!user) throw new BadRequestException('User not found');
+    const user = await this.prisma.user.findUnique({
+      where: { stellarAddress },
+    });
+    if (!user) throw new BadRequestException("User not found");
 
     const expectedChallenge = this.authChallenges.get(user.id);
-    if (!expectedChallenge) throw new BadRequestException('No authentication in progress for this user');
+    if (!expectedChallenge)
+      throw new BadRequestException(
+        "No authentication in progress for this user",
+      );
 
     // find credential
-    const credential = await this.prisma.credential.findUnique({ where: { credentialId: Buffer.from(assertionResponse.id, 'base64').toString('base64url') } });
-    if (!credential) throw new BadRequestException('Unknown credential');
+    const credential = await this.prisma.credential.findUnique({
+      where: {
+        credentialId: Buffer.from(assertionResponse.id, "base64").toString(
+          "base64url",
+        ),
+      },
+    });
+    if (!credential) throw new BadRequestException("Unknown credential");
 
-    const origin = this.config.get<string>('ORIGIN', `http://localhost:3000`);
-    const rpID = this.config.get<string>('WEBAUTHN_RP_ID', this.config.get<string>('HOST') || 'localhost');
+    const origin = this.config.get<string>("ORIGIN", `http://localhost:3000`);
+    const rpID = this.config.get<string>(
+      "WEBAUTHN_RP_ID",
+      this.config.get<string>("HOST") || "localhost",
+    );
 
     let verification;
     try {
@@ -898,22 +1059,28 @@ export class AuthService {
         expectedOrigin: origin,
         expectedRPID: rpID,
         authenticator: {
-          credentialPublicKey: Buffer.from(credential.publicKey, 'base64'),
-          credentialID: Buffer.from(credential.credentialId, 'base64url'),
+          credentialPublicKey: Buffer.from(credential.publicKey, "base64"),
+          credentialID: Buffer.from(credential.credentialId, "base64url"),
           counter: credential.counter,
         },
       } as any);
     } catch (err) {
-      this.logger.error('Authentication verification failed', err as any);
-      throw new BadRequestException('Authentication verification failed');
+      this.logger.error("Authentication verification failed", err as any);
+      throw new BadRequestException("Authentication verification failed");
     }
 
     const { verified, authenticationInfo } = verification as any;
-    if (!verified) throw new BadRequestException('Assertion not verified');
+    if (!verified) throw new BadRequestException("Assertion not verified");
 
     // Update counter
-    if (authenticationInfo && typeof authenticationInfo.newCounter === 'number') {
-      await this.prisma.credential.update({ where: { id: credential.id }, data: { counter: Number(authenticationInfo.newCounter) } });
+    if (
+      authenticationInfo &&
+      typeof authenticationInfo.newCounter === "number"
+    ) {
+      await this.prisma.credential.update({
+        where: { id: credential.id },
+        data: { counter: Number(authenticationInfo.newCounter) },
+      });
     }
 
     // Cleanup

@@ -2,15 +2,15 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
-} from '@nestjs/common';
-import { NotificationType } from '@prisma/client';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { S3Service } from '../../common/s3/s3.service';
-import { CacheService } from '../../common/cache/cache.service';
-import { UpdatePreferencesDto } from './dto/update-preferences.dto';
-import { PublicUserDto } from './dto/public-user.dto';
-import { UserProfileDto } from './dto/user-profile.dto';
-import { UpdateProfileDto } from './dto/update-profile.dto';
+} from "@nestjs/common";
+import { NotificationType } from "@prisma/client";
+import { PrismaService } from "../../common/prisma/prisma.service";
+import { S3Service } from "../../common/s3/s3.service";
+import { CacheService } from "../../common/cache/cache.service";
+import { UpdatePreferencesDto } from "./dto/update-preferences.dto";
+import { PublicUserDto } from "./dto/public-user.dto";
+import { UserProfileDto } from "./dto/user-profile.dto";
+import { UpdateProfileDto } from "./dto/update-profile.dto";
 
 @Injectable()
 export class UsersService {
@@ -43,10 +43,10 @@ export class UsersService {
       where: { stellarAddress },
       select: { name: true, company: true, role: true, verifiedAt: true },
     });
-    if (!user) throw new NotFoundException('User not found');
+    if (!user) throw new NotFoundException("User not found");
 
     let averageRating: number | null | undefined;
-    if (user.role === 'RECRUITER') {
+    if (user.role === "RECRUITER") {
       const avg = await this.prisma.recruiterReview.aggregate({
         where: { recruiterId: user.id },
         _avg: { rating: true },
@@ -56,7 +56,10 @@ export class UsersService {
     }
 
     const { id: _id, ...profile } = user;
-    const result: PublicUserDto = { ...profile, ...(averageRating !== undefined ? { averageRating } : {}) };
+    const result: PublicUserDto = {
+      ...profile,
+      ...(averageRating !== undefined ? { averageRating } : {}),
+    };
     await this.cache?.set(cacheKey, result, UsersService.PROFILE_TTL_S);
     return result;
   }
@@ -81,6 +84,7 @@ export class UsersService {
         name: true,
         email: true,
         company: true,
+        timezone: true,
         stellarAddress: true,
         avatarUrl: true,
         role: true,
@@ -89,7 +93,7 @@ export class UsersService {
     });
 
     if (!user) {
-      throw new NotFoundException('User not found');
+      throw new NotFoundException("User not found");
     }
 
     return user;
@@ -102,7 +106,7 @@ export class UsersService {
     // Prevent stellarAddress modification
     if (dto.stellarAddress !== undefined) {
       throw new BadRequestException(
-        'stellarAddress is immutable and cannot be updated',
+        "stellarAddress is immutable and cannot be updated",
       );
     }
 
@@ -111,6 +115,7 @@ export class UsersService {
       data: {
         ...(dto.name !== undefined && { name: dto.name }),
         ...(dto.company !== undefined && { company: dto.company }),
+        ...(dto.timezone !== undefined && { timezone: dto.timezone }),
         ...(dto.email !== undefined && { email: dto.email }),
         ...(dto.locale !== undefined && { locale: dto.locale }),
       },
@@ -118,6 +123,7 @@ export class UsersService {
         name: true,
         email: true,
         company: true,
+        timezone: true,
         stellarAddress: true,
         avatarUrl: true,
         role: true,
@@ -128,17 +134,29 @@ export class UsersService {
     return user;
   }
 
-  async getAvatarUploadUrl(userId: string, contentType: string): Promise<{ uploadUrl: string; key: string }> {
-    const ext = contentType === 'image/png' ? 'png' : 'jpg';
+  async getAvatarUploadUrl(
+    userId: string,
+    contentType: string,
+  ): Promise<{ uploadUrl: string; key: string }> {
+    const ext = contentType === "image/png" ? "png" : "jpg";
     const key = `avatars/${userId}/${Date.now()}.${ext}`;
-    const uploadUrl = await this.s3Service.getPresignedUploadUrl(key, contentType);
+    const uploadUrl = await this.s3Service.getPresignedUploadUrl(
+      key,
+      contentType,
+    );
     // Store the key on the user record so the CDN URL is available after upload
     const cdnBase = process.env.S3_CDN_URL || process.env.S3_ENDPOINT;
     const avatarUrl = `${cdnBase}/${key}`;
-    const existing = await this.prisma.user.findUnique({ where: { id: userId }, select: { avatarUrl: true } });
+    const existing = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { avatarUrl: true },
+    });
     // Note: old avatar key is not deleted here — cleanup of orphaned objects should
     // be handled by a scheduled S3 lifecycle rule or the s3-cleanup service.
-    await this.prisma.user.update({ where: { id: userId }, data: { avatarUrl } });
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { avatarUrl },
+    });
     return { uploadUrl, key };
   }
 
@@ -167,19 +185,19 @@ export class UsersService {
     userId: string,
     file: Express.Multer.File,
   ): Promise<UserProfileDto> {
-    const allowedMimeTypes = ['image/jpeg', 'image/png', 'image/jpg'];
+    const allowedMimeTypes = ["image/jpeg", "image/png", "image/jpg"];
     if (!allowedMimeTypes.includes(file.mimetype)) {
       throw new BadRequestException(
-        'Invalid file type. Only JPEG and PNG are allowed.',
+        "Invalid file type. Only JPEG and PNG are allowed.",
       );
     }
 
     const maxSize = 2 * 1024 * 1024;
     if (file.size > maxSize) {
-      throw new BadRequestException('File size exceeds 2 MB limit.');
+      throw new BadRequestException("File size exceeds 2 MB limit.");
     }
 
-    const fileExtension = file.mimetype === 'image/png' ? 'png' : 'jpg';
+    const fileExtension = file.mimetype === "image/png" ? "png" : "jpg";
     const key = `avatars/${userId}/${Date.now()}.${fileExtension}`;
 
     await this.s3Service.uploadFile(key, file.buffer, file.mimetype);
@@ -189,16 +207,21 @@ export class UsersService {
     return this.updateAvatar(userId, cdnUrl);
   }
 
-  async getCustomFieldsConfig(userId: string): Promise<{ allowedCustomFields: string[] }> {
+  async getCustomFieldsConfig(
+    userId: string,
+  ): Promise<{ allowedCustomFields: string[] }> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { allowedCustomFields: true },
     });
-    if (!user) throw new NotFoundException('User not found');
+    if (!user) throw new NotFoundException("User not found");
     return { allowedCustomFields: user.allowedCustomFields };
   }
 
-  async updateCustomFieldsConfig(userId: string, allowedCustomFields: string[]): Promise<{ allowedCustomFields: string[] }> {
+  async updateCustomFieldsConfig(
+    userId: string,
+    allowedCustomFields: string[],
+  ): Promise<{ allowedCustomFields: string[] }> {
     const user = await this.prisma.user.update({
       where: { id: userId },
       data: { allowedCustomFields },
