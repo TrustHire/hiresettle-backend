@@ -129,7 +129,25 @@ async flushCache() {
 }
 ```
 
-### 4. `src/modules/users/users.service.ts`
+### 4. `src/common/exchange-rates/exchange-rate.service.ts`
+
+| Aspect         | Detail                                                                                                  |
+| -------------- | ------------------------------------------------------------------------------------------------------- |
+| **Purpose**    | Cache CoinGecko crypto→fiat rates so reporting endpoints never rate-limit the provider                   |
+| **Cache Key**  | `fx:<symbol>:<fiat>` (e.g. `fx:usdc:usd`)                                                               |
+| **Value**      | `number` — price of one token unit in the fiat currency                                                 |
+| **TTL**        | **`EXCHANGE_RATE_TTL_S` seconds (default 300)**                                                         |
+| **Invocation** | `getRate(symbol, fiat)` — checks cache first; on miss calls CoinGecko `/simple/price` and caches         |
+
+```typescript
+const cacheKey = `fx:${symbol.toLowerCase()}:${currency.toLowerCase()}`;
+const cached = await this.cache?.get<number>(cacheKey);
+if (cached != null) return cached;
+const rate = await this.fetchRate(coinId, currency);
+await this.cache?.set(cacheKey, rate, ttl);
+```
+
+### 5. `src/modules/users/users.service.ts`
 
 | Aspect         | Detail                                                                            |
 | -------------- | --------------------------------------------------------------------------------- |
@@ -169,6 +187,7 @@ which module owns it, the default TTL, and what triggers explicit invalidation.
 | `stellar:fee_estimate` | `StellarService` (`common/stellar`) | **10 s** | TTL expiry only — no explicit `del()` call; fee data is short-lived by design |
 | `admin:metrics` | `AdminUsersService` (`modules/admin`) | **60 s** | Explicit `cache.del('admin:metrics')` via `invalidateMetricsCache()`, called after any admin action that mutates engagement, milestone, dispute, or user data |
 | `user:profile:<stellarAddress>` | `UsersService` (`modules/users`) | **60 s** | TTL expiry only — profile data (name, company, role, verifiedAt) changes infrequently; a 60-second window is acceptable |
+| `fx:<symbol>:<fiat>` | `ExchangeRateService` (`common/exchange-rates`) | **`EXCHANGE_RATE_TTL_S` (default 300 s)** | TTL expiry only — rates change slowly; the TTL is the rate-limiting throttle for the provider |
 
 > **TTL default:** 10–60 seconds, chosen to absorb burst reads without serving
 > data that is meaningfully stale. No key is cached without a finite TTL.

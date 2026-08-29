@@ -60,14 +60,16 @@ export class BillingController {
   @ApiOperation({ summary: 'Get company billing summary (OWNER and BILLING roles)' })
   @ApiQuery({ name: 'from', required: false, description: 'Start date (ISO format)' })
   @ApiQuery({ name: 'to', required: false, description: 'End date (ISO format)' })
+  @ApiQuery({ name: 'fiat', required: false, description: '3-letter ISO 4217 currency for fiat-equivalent totals (e.g. USD). Omit for token amounts only.' })
   getBillingSummary(
     @CurrentUser() user: any,
     @Query('from') from?: string,
     @Query('to') to?: string,
+    @Query('fiat') fiat?: string,
   ) {
     const fromDate = from ? new Date(from) : undefined;
     const toDate = to ? new Date(to) : undefined;
-    return this.billingService.getBillingSummary(user, fromDate, toDate);
+    return this.billingService.getBillingSummary(user, fromDate, toDate, parseFiat(fiat));
   }
 
   @Get('billing/export.csv')
@@ -76,15 +78,17 @@ export class BillingController {
   @ApiOperation({ summary: 'Export billing data as CSV (OWNER and BILLING roles)' })
   @ApiQuery({ name: 'from', required: false, description: 'Start date (ISO format)' })
   @ApiQuery({ name: 'to', required: false, description: 'End date (ISO format)' })
+  @ApiQuery({ name: 'fiat', required: false, description: '3-letter ISO 4217 currency to include fiat-equivalent columns (e.g. USD)' })
   async exportBillingCsv(
     @CurrentUser() user: any,
     @Res() res: Response,
     @Query('from') from?: string,
     @Query('to') to?: string,
+    @Query('fiat') fiat?: string,
   ) {
     const fromDate = from ? new Date(from) : undefined;
     const toDate = to ? new Date(to) : undefined;
-    const csvContent = await this.billingService.exportBillingToCsv(user, fromDate, toDate);
+    const csvContent = await this.billingService.exportBillingToCsv(user, fromDate, toDate, parseFiat(fiat));
 
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', 'attachment; filename="billing-export.csv"');
@@ -194,5 +198,17 @@ export class BillingExportController {
     );
     res.status(HttpStatus.OK).send(csv);
   }
+}
+
+/** Validate and normalize an optional fiat currency query param. */
+function parseFiat(fiat?: string): string | undefined {
+  if (!fiat) return undefined;
+  const normalized = fiat.trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(normalized)) {
+    throw new BadRequestException(
+      'fiat must be a 3-letter ISO 4217 currency code (e.g. USD)',
+    );
+  }
+  return normalized;
 }
 

@@ -2,6 +2,8 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { EngagementStatus, UserRole } from '@prisma/client';
 import { BillingService } from './billing.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { StellarService } from '../../common/stellar/stellar.service';
+import { ExchangeRateService } from '../../common/exchange-rates/exchange-rate.service';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -25,6 +27,7 @@ const makeEngagement = (overrides: Partial<{
   status: EngagementStatus;
   totalAmount: bigint;
   createdAt: Date;
+  tokenAddress: string;
 }> = {}) => ({
   id: overrides.id ?? 'eng-1',
   companyAddress: overrides.companyAddress ?? COMPANY_ADDRESS,
@@ -32,12 +35,26 @@ const makeEngagement = (overrides: Partial<{
   releasedAmount: BigInt(0),
   status: overrides.status ?? EngagementStatus.ACTIVE,
   jobTitle: 'Senior Engineer',
+  tokenAddress: overrides.tokenAddress ?? 'CUSDC0001',
   createdAt: overrides.createdAt ?? new Date('2026-07-01T10:00:00Z'),
   updatedAt: new Date('2026-07-01T10:00:00Z'),
 });
 
 const mockPrisma = {
   engagement: { findMany: jest.fn() },
+};
+
+const mockStellar = {
+  getTokenConfig: jest.fn((tokenAddress: string) => ({
+    address: tokenAddress,
+    symbol: tokenAddress === 'CXLM0001' ? 'XLM' : 'USDC',
+    decimals: 7,
+  })),
+  stroopsToHuman: jest.fn((stroops: bigint) => '1.0000000'),
+};
+
+const mockExchangeRates = {
+  getRate: jest.fn(),
 };
 
 // ---------------------------------------------------------------------------
@@ -64,6 +81,8 @@ describe('BillingService — exportBillingHistory()', () => {
       providers: [
         BillingService,
         { provide: PrismaService, useValue: mockPrisma },
+        { provide: StellarService, useValue: mockStellar },
+        { provide: ExchangeRateService, useValue: mockExchangeRates },
       ],
     }).compile();
 
@@ -187,5 +206,108 @@ describe('BillingService — exportBillingHistory()', () => {
     const csv = await service.exportBillingHistory(makeUser(UserRole.COMPANY));
 
     expect(csv).toContain('"eng,with,commas"');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getBillingSummary() — fiat-equivalent totals
+// ---------------------------------------------------------------------------
+
+describe('BillingService — getBillingSummary() fiat totals', () => {
+  let service: BillingService;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        BillingService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: StellarService, useValue: mockStellar },
+        { provide: ExchangeRateService, useValue: mockExchangeRates },
+      ],
+    }).compile();
+
+    service = module.get<BillingService>(BillingService);
+    jest.clearAllMocks();
+    mockExchangeRates.getRate.mockResolvedValue(1.0);
+  });
+
+  it('returns raw totals with null fiat fields when no fiat is requested', async () => {
+    mockPrisma.engagement.findMany.mockResolvedValue([makeEngagement()]);
+
+    const result = await service.getBillingSummary(makeUser(UserRole.COMPANY));
+
+    expect(result.fiat).toBeNull();
+    expect(result.summary.totalEscrowedFiat).toBeNull();
+    expect(result.summary.totalReleasedFiat).toBeNull();
+    expect(result.engagementBreakdown[0].totalEscrowedFiat).toBeNull();
+    expect(mockExchangeRates.getRate).not.toHaveBeenCalled();
+  });
+
+  it('converts per-token amounts to a consistent fiat total across tokens', async () => {
+    mockPrisma.engagement.findMany.mockResolvedValue([
+      makeEngagement({ id: 'eng-usdc', tokenAddress: 'CUSDC0001', totalAmount: BigInt(1_000_000) }),
+      makeEngagement({ id: 'eng-xlm', tokenAddress: 'CXLM0001', totalAmount: BigInt(2_000_000) }),
+    ]);
+    mockExchangeRates.getRate.mockImplementation((symbol: string) =>
+      Promise.resolve(symbol === 'USDC' ? 1.0 : 0.5),
+    );
+
+    const result = await service.getBillingSummary(makeUser(UserRole.COMPANY), undefined, undefined, 'USD');
+
+    expect(result.fiat).toBe('USD');
+    // Both convert to 1.0 human × their rate → 1.0 + 0.5 = 1.5 total
+    expect(result.engagementBreakdown[0]).toMatchObject({
+      tokenSymbol: 'USDC',
+      totalEscrowedFiat: 1.0,
+    });
+    expect(result.engagementBreakdown[1]).toMatchObject({
+      tokenSymbol: 'XLM',
+      totalEscrowedFiat: 0.5,
+    });
+    expect(result.summary.totalEscrowedFiat).toBe(1.5);
+    expect(mockExchangeRates.getRate).toHaveBeenCalledWith('USDC', 'USD');
+    expect(mockExchangeRates.getRate).toHaveBeenCalledWith('XLM', 'USD');
+  });
+
+  it('leaves fiat fields null (no error) when a rate is unavailable', async () => {
+    mockPrisma.engagement.findMany.mockResolvedValue([makeEngagement()]);
+    mockExchangeRates.getRate.mockResolvedValue(null);
+
+    const result = await service.getBillingSummary(makeUser(UserRole.COMPANY), undefined, undefined, 'USD');
+
+    expect(result.engagementBreakdown[0].totalEscrowedFiat).toBeNull();
+    expect(result.engagementBreakdown[0].tokenSymbol).toBe('USDC');
+    expect(result.summary.totalEscrowedFiat).toBeNull();
+  });
+
+  it('degrades gracefully when the token config throws', async () => {
+    mockPrisma.engagement.findMany.mockResolvedValue([makeEngagement()]);
+    (mockStellar.getTokenConfig as jest.Mock).mockImplementation(() => {
+      throw new Error('Token not allowed');
+    });
+
+    const result = await service.getBillingSummary(makeUser(UserRole.COMPANY), undefined, undefined, 'USD');
+
+    expect(result.engagementBreakdown[0].totalEscrowedFiat).toBeNull();
+    expect(result.engagementBreakdown[0].tokenSymbol).toBeNull();
+    expect(result.engagementBreakdown[0].totalEscrowed).toBe('1000000');
+    expect(result.summary.totalEscrowedFiat).toBeNull();
+  });
+
+  it('includes fiat columns in the CSV export when fiat is requested', async () => {
+    // Restore the default token config (overridden by the degrading test above).
+    (mockStellar.getTokenConfig as jest.Mock).mockImplementation((tokenAddress: string) => ({
+      address: tokenAddress,
+      symbol: tokenAddress === 'CXLM0001' ? 'XLM' : 'USDC',
+      decimals: 7,
+    }));
+    mockPrisma.engagement.findMany.mockResolvedValue([makeEngagement()]);
+    mockExchangeRates.getRate.mockResolvedValue(1.0);
+
+    const csv = await service.exportBillingToCsv(makeUser(UserRole.COMPANY), undefined, undefined, 'USD');
+
+    expect(csv).toContain('Total Escrowed (USD)');
+    expect(csv).toContain('Total Released (USD)');
+    expect(csv).toContain('USDC');
   });
 });
