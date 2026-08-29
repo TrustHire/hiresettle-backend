@@ -78,7 +78,7 @@ export class BillingController {
   ) {
     const fromDate = from ? new Date(from) : undefined;
     const toDate = to ? new Date(to) : undefined;
-    return this.billingService.getBillingSummary(user, fromDate, toDate);
+    return this.billingService.getBillingSummary(user, fromDate, toDate, parseFiat(fiat));
   }
 
   @Get("billing/export.csv")

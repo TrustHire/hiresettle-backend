@@ -22,7 +22,11 @@ export class BillingService {
   private static readonly usageWindowMs = 24 * 60 * 60 * 1000;
   private static readonly usageCounts = new Map<string, number[]>();
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly stellar: StellarService,
+    private readonly exchangeRates: ExchangeRateService,
+  ) {}
 
   private static createPdfBuffer(lines: string[]) {
     const content = lines.join("\n");
@@ -75,6 +79,7 @@ export class BillingService {
     invoiceId: string | number,
     fromDate?: Date,
     toDate?: Date,
+    fiat?: string,
   ) {
     const billingData = this.getBillingSummary(companyUser, fromDate, toDate);
     return billingData.then(({ summary, engagementBreakdown }) => {
@@ -173,31 +178,56 @@ export class BillingService {
     // Calculate aggregates
     let totalEscrowed = BigInt(0);
     let totalReleased = BigInt(0);
+    let totalEscrowedFiat: number | null = null;
+    let totalReleasedFiat: number | null = null;
+    const fiatCurrency = fiat ? fiat.trim().toUpperCase() : null;
 
-    const engagementBreakdown = engagements.map((engagement) => {
-      const escrowed = engagement.totalAmount;
-      const released = engagement.releasedAmount;
+    const engagementBreakdown = await Promise.all(
+      engagements.map(async (engagement) => {
+        const escrowed = engagement.totalAmount;
+        const released = engagement.releasedAmount;
 
-      totalEscrowed += escrowed;
-      totalReleased += released;
+        totalEscrowed += escrowed;
+        totalReleased += released;
 
-      return {
-        engagementId: engagement.id,
-        jobTitle: engagement.jobTitle,
-        createdAt: engagement.createdAt,
-        totalEscrowed: escrowed.toString(),
-        totalReleased: released.toString(),
-        status: engagement.status,
-      };
-    });
+        // Optional fiat-equivalent totals, converted per token.
+        const fiatValues = fiatCurrency
+          ? await this.toFiatValues(engagement.tokenAddress, escrowed, released, fiatCurrency)
+          : { escrowedFiat: null, releasedFiat: null, tokenSymbol: null };
+
+        if (fiatValues.escrowedFiat != null) {
+          totalEscrowedFiat =
+            (totalEscrowedFiat ?? 0) + fiatValues.escrowedFiat;
+        }
+        if (fiatValues.releasedFiat != null) {
+          totalReleasedFiat =
+            (totalReleasedFiat ?? 0) + fiatValues.releasedFiat;
+        }
+
+        return {
+          engagementId: engagement.id,
+          jobTitle: engagement.jobTitle,
+          createdAt: engagement.createdAt,
+          totalEscrowed: escrowed.toString(),
+          totalReleased: released.toString(),
+          status: engagement.status,
+          tokenSymbol: fiatValues.tokenSymbol,
+          totalEscrowedFiat: fiatValues.escrowedFiat,
+          totalReleasedFiat: fiatValues.releasedFiat,
+        };
+      }),
+    );
 
     return {
       fromDate: startDate,
       toDate: endDate,
+      fiat: fiatCurrency,
       summary: {
         totalEscrowed: totalEscrowed.toString(),
         totalReleased: totalReleased.toString(),
         totalEngagements: engagements.length,
+        totalEscrowedFiat: totalEscrowedFiat == null ? null : roundFiat(totalEscrowedFiat),
+        totalReleasedFiat: totalReleasedFiat == null ? null : roundFiat(totalReleasedFiat),
       },
       engagementBreakdown,
     };
@@ -225,9 +255,13 @@ export class BillingService {
       item.engagementId,
       `"${item.jobTitle.replace(/"/g, '""')}"`, // Escape quotes
       item.createdAt.toISOString(),
+      item.tokenSymbol ?? '',
       item.totalEscrowed,
       item.totalReleased,
       item.status,
+      ...(fiatCurrency
+        ? [item.totalEscrowedFiat ?? '', item.totalReleasedFiat ?? '']
+        : []),
     ]);
 
     // Add summary row
@@ -238,6 +272,9 @@ export class BillingService {
       billingData.summary.totalEscrowed,
       billingData.summary.totalReleased,
       `${billingData.summary.totalEngagements} engagements`,
+      ...(fiatCurrency
+        ? [billingData.summary.totalEscrowedFiat ?? '', billingData.summary.totalReleasedFiat ?? '']
+        : []),
     ];
 
     // Combine all parts
