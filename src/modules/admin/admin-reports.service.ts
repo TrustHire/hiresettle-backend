@@ -72,7 +72,7 @@ export class AdminReportsService {
       toDate.setUTCHours(23, 59, 59, 999);
     }
 
-    const milestones = await this.prisma.milestone.findMany({
+    const milestones = await this.prisma.replica.milestone.findMany({
       where: {
         status: 'CONFIRMED',
         confirmedAt: { gte: fromDate, lte: toDate },
@@ -130,7 +130,7 @@ export class AdminReportsService {
   ): Promise<void> {
     const { fromDate, toDate } = parseAndValidateDateRange(from, to);
 
-    const engagements = await this.prisma.engagement.findMany({
+    const engagements = await this.prisma.replica.engagement.findMany({
       where: { createdAt: { gte: fromDate, lte: toDate } },
       orderBy: { createdAt: 'asc' },
       include: {
@@ -196,7 +196,7 @@ export class AdminReportsService {
   ): Promise<void> {
     const { fromDate, toDate } = parseAndValidateDateRange(from, to);
 
-    const milestones = await this.prisma.milestone.findMany({
+    const milestones = await this.prisma.replica.milestone.findMany({
       where: {
         status: 'CONFIRMED',
         confirmedAt: { gte: fromDate, lte: toDate },
@@ -261,7 +261,7 @@ export class AdminReportsService {
   ): Promise<void> {
     const { fromDate, toDate } = parseAndValidateDateRange(from, to);
 
-    const milestones = await this.prisma.milestone.findMany({
+    const milestones = await this.prisma.replica.milestone.findMany({
       where: {
         status: { in: ['DISPUTED', 'RESOLVED'] },
         updatedAt: { gte: fromDate, lte: toDate },

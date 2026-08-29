@@ -719,3 +719,13 @@ model CompanyMember {
   @@index([memberId])
   @@map("company_members")
 }
+
+model FeatureFlag {
+  name        String   @id
+  isEnabled   Boolean  @default(false)
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("feature_flags")
+}
