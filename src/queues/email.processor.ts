@@ -12,6 +12,7 @@ export interface EmailJobData {
   type: NotificationType;
   notificationId?: string;
   data?: Record<string, any>;
+  locale?: string;
 }
 
 @Processor(QUEUE_EMAIL)
@@ -23,10 +24,10 @@ export class EmailProcessor extends WorkerHost {
   }
 
   async process(job: Job<EmailJobData>): Promise<void> {
-    const { to, subject, message, type, notificationId, data } = job.data;
+    const { to, subject, message, type, notificationId, data, locale } = job.data;
     this.logger.log(`Sending email job ${job.id} to ${to} (type: ${type}, attempt: ${job.attemptsMade + 1})`);
 
-    await this.notifications.sendEmailDirect(to, subject, message, type, data);
+    await this.notifications.sendEmailDirect(to, subject, message, type, data, locale);
 
     if (notificationId) {
       await this.notifications.markEmailSent(notificationId);

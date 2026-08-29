@@ -6,6 +6,7 @@ import { Queue } from 'bullmq';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { NotificationType, Notification } from '@prisma/client';
 import { MetricsService } from '../../metrics/metrics.service';
+import { EmailTemplateService } from '../../common/email/email-template.service';
 import { cursorPage } from '../../common/pagination/cursor-pagination';
 
 @Injectable()
@@ -17,7 +18,9 @@ export class NotificationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly emailTemplates: EmailTemplateService,
     @Optional() @InjectQueue('email') private readonly emailQueue?: Queue,
+    @Optional() @InjectQueue('slack') private readonly slackQueue?: Queue,
     @Optional() private readonly metrics?: MetricsService,
   ) {
     this.transporter = nodemailer.createTransport({
@@ -127,6 +130,7 @@ export class NotificationsService {
         const emailEnabled = pref ? pref.emailEnabled : true;
 
         if (emailEnabled) {
+          const locale = user.locale ?? 'en';
           if (this.emailQueue) {
             await this.emailQueue.add('send', {
               to: user.email,
@@ -135,14 +139,31 @@ export class NotificationsService {
               type,
               notificationId: notification.id,
               data,
+              locale,
             });
           } else {
-            await this.sendEmail(user.email, title, message, type, data);
+            await this.sendEmail(user.email, title, message, type, data, locale);
             await this.prisma.notification.update({
               where: { id: notification.id },
               data: { emailSent: true },
             });
           }
+        }
+      }
+
+      // Slack: post key, company-facing types when the user has configured a webhook.
+      if (user.slackWebhookUrl && isSlackKeyType(type)) {
+        const slackJob = {
+          webhookUrl: user.slackWebhookUrl,
+          type,
+          title,
+          message,
+          data,
+        };
+        if (this.slackQueue) {
+          await this.slackQueue.add('send', slackJob);
+        } else {
+          await this.slackNotifications.send(type, title, message, data, user.slackWebhookUrl);
         }
       }
 
@@ -176,6 +197,37 @@ export class NotificationsService {
         update: changes,
       })),
     );
+  }
+
+  async getDigestPreference(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { digestEnabled: true },
+    });
+    return { digestEnabled: user?.digestEnabled ?? false };
+  }
+
+  async setDigestPreference(userId: string, digestEnabled: boolean) {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { digestEnabled },
+    });
+    return { digestEnabled };
+  }
+
+  /**
+   * Send a pre-rendered weekly digest email. Renders inline HTML (no
+   * notification-type template) and rethrows on failure so callers can
+   * track per-user send errors.
+   */
+  async sendDigestEmail(to: string, subject: string, html: string) {
+    await this.transporter.sendMail({
+      from: this.config.get('EMAIL_FROM') ?? 'noreply@hiresettle.com',
+      to,
+      subject,
+      html,
+    });
+    this.logger.log(`Digest email sent to ${to}: ${subject}`);
   }
 
   async findForUser(userId: string, unreadOnly = false, page = 1, limit = 20, cursor?: string) {
@@ -232,8 +284,9 @@ export class NotificationsService {
     message: string,
     type: NotificationType,
     data?: Record<string, any>,
+    locale = 'en',
   ) {
-    return this.sendEmail(to, subject, message, type, data);
+    return this.sendEmail(to, subject, message, type, data, locale);
   }
 
   async markEmailSent(notificationId: string) {
@@ -249,6 +302,7 @@ export class NotificationsService {
     message: string,
     type: NotificationType,
     data?: Record<string, any>,
+    locale = 'en',
   ) {
     // Pick an emoji for the email subject based on notification type
     const typeEmoji: Partial<Record<NotificationType, string>> = {
@@ -265,21 +319,22 @@ export class NotificationsService {
       STELLAR_BALANCE_LOW: '⚠️',
     };
 
+    const html = this.emailTemplates.render(type.toLowerCase(), locale, {
+      subject: `HireSettle — ${subject}`,
+      message,
+      ctaLink: data?.ctaLink,
+      year: new Date().getFullYear(),
+      // Pass all data properties to the template context
+      ...data,
+    });
+
     try {
       await this.transporter.sendMail({
         from: this.config.get('EMAIL_FROM') ?? 'noreply@hiresettle.com',
         to,
         subject: `${typeEmoji[type] ?? '📬'} HireSettle — ${subject}`,
-        template: type.toLowerCase(), // Use the notification type as the template name
-        context: {
-          subject: `HireSettle — ${subject}`,
-          message,
-          ctaLink: data?.ctaLink,
-          year: new Date().getFullYear(),
-          // Pass all data properties to the template context
-          ...data,
-        },
-      } as any);
+        html,
+      });
       this.logger.log(`Email sent to ${to}: ${subject}`);
     } catch (error) {
       this.logger.error(`Email failed to ${to}`, error.message);

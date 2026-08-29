@@ -104,6 +104,7 @@ model User {
   role           UserRole       @default(COMPANY)
   webhookUrl     String?
   webhookSecret  String?        // HMAC-SHA256 signing secret, generated when webhookUrl is first set
+  timezone       String?        @default("UTC") // recipient local timezone for scheduling notifications
   rateLimitOverride Int?        // custom per-user request limit for UserJwtSubThrottlerGuard; falls back to default when unset
   avatarUrl      String?        // CDN URL for user avatar
   verifiedAt     DateTime?      // Set by an admin after company verification
@@ -119,7 +120,9 @@ model User {
   kycReviewedAt  DateTime?
   kycReviewedBy  String?        // admin userId who approved/rejected
   kycRejectionReason String?
+  locale         String         @default("en") // email template locale, falls back to English (#281)
   allowedCustomFields String[]  @default([]) // COMPANY only: permitted keys for engagement customFields
+  slackWebhookUrl String?       // Slack incoming-webhook URL for notification alerts (#277)
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
@@ -142,6 +145,15 @@ model User {
   engagementNotes      EngagementNote[]
   apiKeys              ApiKey[]
   milestoneApprovals   MilestoneApproval[]
+  recruiterReviews     RecruiterReview[]        @relation("RecruiterReviews")
+  reviewerReviews      RecruiterReview[]        @relation("ReviewerReviews")
+  kycDocuments         KycDocument[]
+  teamInvites          TeamInvite[]             @relation("TeamInvites")
+  savedFilters         SavedFilter[]
+  companyFavorites     FavoriteRecruiter[]      @relation("CompanyFavorites")
+  recruiterFavorites   FavoriteRecruiter[]      @relation("RecruiterFavorites")
+  companyMembers       CompanyMember[]          @relation("CompanyOwner")
+  memberOfCompanies    CompanyMember[]          @relation("MemberUser")
 
   @@index([role, deactivatedAt])
   @@index([deletedAt, anonymizedAt]) // Used by PiiAnonymizationSchedulerService
