@@ -17,4 +17,5 @@ This directory contains the technical documentation for the HireSettle backend.
 | [Security](./security.md) | Dependency vulnerability scanning and triage process. |
 | [Stellar Integration](./stellar-integration.md) | Integration details with the Stellar blockchain, event polling, and contract interaction. |
 | [Data Retention](./data-retention.md) | Retention windows, account deletion lifecycle, scheduled PII anonymization job, and env vars. |
+| [API Versioning](./api-versioning.md) | Current URL versioning convention and deprecation/sunset policy. |
 | [Testing](./testing.md) | Testing layers, test layout, mocking conventions, commands, and coverage requirements. |
