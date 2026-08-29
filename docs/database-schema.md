@@ -167,6 +167,7 @@ Represents every authenticated platform user, including companies, recruiters, a
 | avatarUrl | User avatar |
 | locale | BCP-47 tag for localized email templates (default `en`) |
 | deactivatedAt | Soft delete timestamp |
+| digestEnabled | Weekly digest email opt-in (#276) |
 
 ## Relationships
 

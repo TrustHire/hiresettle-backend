@@ -10,7 +10,7 @@ import { EmailTemplateModule } from '../../common/email/email-template.module';
     BullModule.registerQueue({ name: 'email' }),
     EmailTemplateModule,
   ],
-  providers: [NotificationsService, NotificationCleanupService],
+  providers: [NotificationsService, NotificationCleanupService, WeeklyDigestService],
   controllers: [NotificationsController],
   exports: [NotificationsService],
 })

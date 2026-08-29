@@ -7,6 +7,7 @@ import { Throttle } from '@nestjs/throttler';
 import { UserJwtSubThrottlerGuard } from '../../common/guards/user-jwt-sub-throttler.guard';
 import { Response } from 'express';
 import { UpdateNotificationPreferencesDto } from './dto/update-notification-preferences.dto';
+import { UpdateDigestPreferenceDto } from './dto/update-digest-preference.dto';
 
 @ApiTags('notifications')
 @ApiBearerAuth()
@@ -53,6 +54,26 @@ export class NotificationsController {
     @Body() dto: UpdateNotificationPreferencesDto,
   ) {
     return this.notificationsService.updatePreferences(userId, dto.preferences);
+  }
+
+  @Get('digest-preference')
+  @ApiOperation({ summary: 'Get the weekly digest email opt-in status for the current user' })
+  @ApiResponse({ status: 200, description: 'Digest preference returned' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  getDigestPreference(@CurrentUser('id') userId: string) {
+    return this.notificationsService.getDigestPreference(userId);
+  }
+
+  @Patch('digest-preference')
+  @ApiOperation({ summary: 'Opt in or out of the weekly digest email for the current user' })
+  @ApiResponse({ status: 200, description: 'Digest preference updated' })
+  @ApiResponse({ status: 400, description: 'Validation failed' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  updateDigestPreference(
+    @CurrentUser('id') userId: string,
+    @Body() dto: UpdateDigestPreferenceDto,
+  ) {
+    return this.notificationsService.setDigestPreference(userId, dto.digestEnabled);
   }
 
   @Get('unread-count')

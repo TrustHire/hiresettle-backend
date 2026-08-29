@@ -30,6 +30,7 @@ describe('NotificationsService', () => {
           useValue: {
             user: {
               findUnique: jest.fn(),
+              update: jest.fn(),
             },
             notification: {
               create: jest.fn(),
@@ -426,6 +427,61 @@ describe('NotificationsService', () => {
       (prisma.notification.deleteMany as jest.Mock).mockResolvedValue({ count: 0 });
 
       await expect(service.remove(notificationId, userId)).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('getDigestPreference', () => {
+    it('should return the digest opt-in status from the user record', async () => {
+      const userId = 'test_user_id';
+      (prisma.user.findUnique as jest.Mock).mockResolvedValue({ id: userId, digestEnabled: true });
+
+      const result = await service.getDigestPreference(userId);
+
+      expect(prisma.user.findUnique).toHaveBeenCalledWith({
+        where: { id: userId },
+        select: { digestEnabled: true },
+      });
+      expect(result).toEqual({ digestEnabled: true });
+    });
+
+    it('should default to disabled when the user has no digest flag', async () => {
+      (prisma.user.findUnique as jest.Mock).mockResolvedValue(null);
+
+      const result = await service.getDigestPreference('missing_user');
+
+      expect(result).toEqual({ digestEnabled: false });
+    });
+  });
+
+  describe('setDigestPreference', () => {
+    it('should persist the digest opt-in flag on the user', async () => {
+      const userId = 'test_user_id';
+      (prisma.user.update as jest.Mock).mockResolvedValue({ id: userId, digestEnabled: true });
+
+      const result = await service.setDigestPreference(userId, true);
+
+      expect(prisma.user.update).toHaveBeenCalledWith({
+        where: { id: userId },
+        data: { digestEnabled: true },
+      });
+      expect(result).toEqual({ digestEnabled: true });
+    });
+  });
+
+  describe('sendDigestEmail', () => {
+    it('should send a pre-rendered HTML digest via the transporter', async () => {
+      const to = 'digest@example.com';
+      const subject = 'Your weekly HireSettle digest';
+      const html = '<p>digest content</p>';
+
+      await service.sendDigestEmail(to, subject, html);
+
+      expect(mockNodemailerSendMail).toHaveBeenCalledWith({
+        from: 'test@example.com',
+        to,
+        subject,
+        html,
+      });
     });
   });
 });
