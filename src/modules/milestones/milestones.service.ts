@@ -479,6 +479,61 @@ export class MilestonesService {
     return { results };
   }
 
+  // Issue #262 — Bulk milestone status update
+  private static readonly VALID_STATUS_TRANSITIONS: Record<MilestoneStatus, MilestoneStatus[]> = {
+    [MilestoneStatus.LOCKED]: [MilestoneStatus.PENDING],
+    [MilestoneStatus.PENDING]: [MilestoneStatus.PROOF_SUBMITTED],
+    [MilestoneStatus.PROOF_SUBMITTED]: [MilestoneStatus.CONFIRMED, MilestoneStatus.DISPUTED],
+    [MilestoneStatus.DISPUTED]: [MilestoneStatus.RESOLVED],
+    [MilestoneStatus.CONFIRMED]: [],
+    [MilestoneStatus.RESOLVED]: [],
+  };
+
+  async bulkUpdateMilestoneStatus(
+    milestoneIds: string[],
+    status: MilestoneStatus,
+    reason: string,
+    adminId: string,
+  ) {
+    const results = [];
+
+    for (const milestoneId of milestoneIds) {
+      try {
+        const milestone = await this.prisma.milestone.findUnique({
+          where: { id: milestoneId },
+        });
+
+        if (!milestone) {
+          throw new NotFoundException(`Milestone ${milestoneId} not found`);
+        }
+
+        const allowedTargets = MilestonesService.VALID_STATUS_TRANSITIONS[milestone.status] ?? [];
+        if (!allowedTargets.includes(status)) {
+          throw new UnprocessableEntityException(
+            `Invalid transition from ${milestone.status} to ${status}`,
+          );
+        }
+
+        const data = await this.updateMilestoneStatusByAdmin(
+          milestone.engagementId,
+          milestone.milestoneIndex,
+          status,
+          reason,
+          adminId,
+        );
+        results.push({ milestoneId, success: true, data });
+      } catch (error) {
+        results.push({
+          milestoneId,
+          success: false,
+          error: error instanceof Error ? error.message : 'Unable to update milestone status',
+        });
+      }
+    }
+
+    return { results };
+  }
+
   // ----------------------------------------------------------
   // State update methods — called by EventsService
   // ----------------------------------------------------------

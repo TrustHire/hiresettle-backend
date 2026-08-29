@@ -10,6 +10,7 @@ import { EngagementTemplatesService } from './engagement-templates.service';
 import { CreateEngagementTemplateDto } from './dto/create-engagement-template.dto';
 import { UpdateEngagementTemplateDto } from './dto/update-engagement-template.dto';
 import { CloneEngagementTemplateDto } from './dto/clone-engagement-template.dto';
+import { AdoptEngagementTemplateDto } from './dto/adopt-engagement-template.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -49,6 +50,15 @@ export class EngagementTemplatesController {
   @ApiOperation({ summary: 'List all templates for the current company' })
   findAll(@CurrentUser() user: User) {
     return this.templatesService.findAll(user.id);
+  }
+
+  // Issue #263 — Browse public templates published by other companies (read-only, no PII)
+  @Get('browse')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.COMPANY)
+  @ApiOperation({ summary: 'Browse public templates published by other companies (#263)' })
+  browsePublic(@CurrentUser() user: User) {
+    return this.templatesService.browsePublic(user.id);
   }
 
   @Get(':id')
@@ -101,6 +111,23 @@ export class EngagementTemplatesController {
     @Body() dto: CloneEngagementTemplateDto,
   ) {
     return this.templatesService.clone(id, user.id, dto?.name);
+  }
+
+  // Issue #263 — Adopt a public template into the requester's own templates
+  @Post(':id/adopt')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.COMPANY)
+  @HttpCode(HttpStatus.CREATED)
+  @Idempotent()
+  @UseInterceptors(IdempotencyInterceptor)
+  @ApiOperation({ summary: 'Adopt a public template into the requester\'s own templates (#263)' })
+  @ApiResponse({ status: 404, description: 'Public template not found' })
+  adopt(
+    @CurrentUser() user: User,
+    @Param('id') id: string,
+    @Body() dto: AdoptEngagementTemplateDto,
+  ) {
+    return this.templatesService.adopt(id, user.id, dto?.name);
   }
 
   @Delete(':id')

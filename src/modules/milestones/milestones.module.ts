@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { MilestonesController } from './milestones.controller';
 import { MilestoneDetailController } from './milestone-detail.controller';
 import { AdminDisputesController } from './admin-disputes.controller';
+import { AdminMilestonesController } from './admin-milestones.controller';
 import { MilestonesService } from './milestones.service';
 import { RetentionSchedulerService } from './retention-scheduler.service';
 import { S3Module } from '../../common/s3/s3.module';
@@ -11,7 +12,9 @@ import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.in
 
 @Module({
   imports: [S3Module, EngagementsModule, IdempotencyModule],
-  controllers: [MilestonesController, MilestoneDetailController, AdminDisputesController],
+  controllers: [
+    MilestonesController, MilestoneDetailController, AdminDisputesController, AdminMilestonesController,
+  ],
   providers: [MilestonesService, RetentionSchedulerService, IdempotencyInterceptor],
   exports: [MilestonesService],
 })

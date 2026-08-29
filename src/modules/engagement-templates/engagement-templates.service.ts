@@ -80,6 +80,7 @@ export class EngagementTemplatesService {
       milestoneConfig: dto.milestoneConfig ?? existing.milestoneConfig,
     };
     const nextVersion = existing.currentVersion + 1;
+    const isPublic = dto.isPublic ?? existing.isPublic;
 
     return this.prisma.$transaction(async (tx) => {
       await tx.engagementTemplateVersion.create({
@@ -88,7 +89,7 @@ export class EngagementTemplatesService {
 
       return tx.engagementTemplate.update({
         where: { id },
-        data: { ...merged, currentVersion: nextVersion },
+        data: { ...merged, currentVersion: nextVersion, isPublic },
       });
     });
   }
@@ -106,6 +107,41 @@ export class EngagementTemplatesService {
     const source = await this.findOne(id, companyId);
     return this.create(companyId, {
       name: name ?? `${source.name} (copy)`,
+      jobTitle: source.jobTitle,
+      jobDescription: source.jobDescription ?? undefined,
+      salaryRange: source.salaryRange ?? undefined,
+      location: source.location ?? undefined,
+      milestoneConfig: source.milestoneConfig,
+    });
+  }
+
+  // Issue #263 — Template sharing/marketplace: browse public templates from other companies,
+  // read-only, no PII (no company relation and no companyId is exposed).
+  async browsePublic(companyId: string) {
+    return this.prisma.engagementTemplate.findMany({
+      where: { isPublic: true, archived: false, companyId: { not: companyId } },
+      select: {
+        id: true,
+        name: true,
+        jobTitle: true,
+        jobDescription: true,
+        salaryRange: true,
+        location: true,
+        milestoneConfig: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  // Issue #263 — Adopting a public template copies it into the requester's own templates
+  async adopt(id: string, companyId: string, name?: string) {
+    const source = await this.prisma.engagementTemplate.findUnique({ where: { id } });
+    if (!source || !source.isPublic || source.archived) {
+      throw new NotFoundException(`Public template ${id} not found`);
+    }
+    return this.create(companyId, {
+      name: name ?? `${source.name} (adopted)`,
       jobTitle: source.jobTitle,
       jobDescription: source.jobDescription ?? undefined,
       salaryRange: source.salaryRange ?? undefined,
