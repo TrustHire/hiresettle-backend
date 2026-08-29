@@ -12,6 +12,7 @@ import { JwtOrApiKeyGuard } from '../../common/guards/jwt-or-api-key.guard';
 
 @Module({
   imports: [
+    ConfigModule,
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
