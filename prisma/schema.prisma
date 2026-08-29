@@ -122,6 +122,7 @@ model User {
   kycRejectionReason String?
   locale         String         @default("en") // email template locale, falls back to English (#281)
   allowedCustomFields String[]  @default([]) // COMPANY only: permitted keys for engagement customFields
+  slackWebhookUrl String?       // Slack incoming-webhook URL for notification alerts (#277)
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 

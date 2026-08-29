@@ -11,6 +11,7 @@ Every notification is written to the database as an **in-app** record. Depending
 | **In-app** | Persisted in the `notifications` table. Always delivered regardless of preferences. Queried via `GET /notifications`. |
 | **SSE** | Real-time push to `GET /notifications/stream`. Delivered whenever the user has an open connection; no persistence of missed messages. |
 | **Email** | Sent via Nodemailer through a BullMQ queue (`email` queue, 3 retries with exponential backoff). Controlled by per-type user preferences (enabled by default). |
+| **Slack** | Posted to a company's Slack channel via an incoming webhook (`slack` queue, 3 retries). Opt-in per user via `slackWebhookUrl`; only key, company-facing notification types are posted. |
 
 ---
 
@@ -148,30 +149,35 @@ model NotificationPreference {
 
 ---
 
-## Weekly Digest (#276)
+## Slack Integration
 
-Users can opt in to a single weekly email that summarizes their prior 7 days of notifications, instead of reading individual in-app alerts.
+Companies that want alerts in their team Slack channel can configure an incoming webhook. When set, key notification types are posted to that channel in a readable Blocks format (header + message + link back to the app) — never raw JSON.
 
-### Behavior
+### Key Notification Types
 
-- **Opt-in per user**: a `digestEnabled` flag on the `users` record (default: `false` — no one receives a digest unless they opt in).
-- **Schedule**: the `WeeklyDigestService` cron runs **Monday 09:00 UTC**.
-- **Window**: summarizes notifications created in the prior `DIGEST_WINDOW_DAYS` (default: `7`).
-- **No empty digests**: users with no notifications in the window receive nothing.
-- The digest is sent **in addition to** individual per-type emails; opting in does not change per-type email preferences.
+Only these company-facing, actionable types are posted to Slack:
+
+- `ENGAGEMENT_CREATED`, `PROOF_SUBMITTED`, `MILESTONE_CONFIRMED`, `PAYMENT_RELEASED`
+- `DISPUTE_RAISED`, `DISPUTE_RESOLVED`, `REPLACEMENT_REQUESTED`, `ENGAGEMENT_CANCELLED`
+- `FUNDING_SHORTFALL_DETECTED`
+
+Other types stay in-app/email-only even when a webhook is configured.
 
 ### API Endpoints
 
 | Method | Route | Description |
 |--------|-------|-------------|
-| `GET` | `/notifications/digest-preference` | Returns `{ digestEnabled }` for the current user |
-| `PATCH` | `/notifications/digest-preference` | Sets the opt-in. Body: `{ "digestEnabled": true }` |
+| `PUT` | `/users/me/slack-webhook` | Set the webhook. Body: `{ "url": "https://hooks.slack.com/services/<team-id>/<webhook-id>/<token>" }` (https only) |
+| `DELETE` | `/users/me/slack-webhook` | Clear the webhook (disables Slack alerts) |
+| `GET` | `/users/me` | Profile includes the current `slackWebhookUrl` (or `null`) |
 
-### Env Vars
+### Data Model
 
-| Env Var | Default | Description |
-|---------|---------|-------------|
-| `DIGEST_WINDOW_DAYS` | `7` | Number of prior days summarized by the digest |
+Stored as `slackWebhookUrl` on the `users` table (nullable, no default — Slack is off until a company opts in).
+
+### Delivery
+
+Sends run through the BullMQ `slack` queue (3 attempts, exponential backoff). A failed webhook call is retried by the queue and logged; it never blocks notification creation.
 
 ---
 

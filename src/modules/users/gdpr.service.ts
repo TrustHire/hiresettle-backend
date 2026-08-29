@@ -28,6 +28,7 @@ export class GdprService {
         stellarAddress: true,
         avatarUrl: true,
         role: true,
+        slackWebhookUrl: true,
         createdAt: true,
         updatedAt: true,
       },

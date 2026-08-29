@@ -20,6 +20,7 @@ export class NotificationsService {
     private readonly config: ConfigService,
     private readonly emailTemplates: EmailTemplateService,
     @Optional() @InjectQueue('email') private readonly emailQueue?: Queue,
+    @Optional() @InjectQueue('slack') private readonly slackQueue?: Queue,
     @Optional() private readonly metrics?: MetricsService,
   ) {
     this.transporter = nodemailer.createTransport({
@@ -147,6 +148,22 @@ export class NotificationsService {
               data: { emailSent: true },
             });
           }
+        }
+      }
+
+      // Slack: post key, company-facing types when the user has configured a webhook.
+      if (user.slackWebhookUrl && isSlackKeyType(type)) {
+        const slackJob = {
+          webhookUrl: user.slackWebhookUrl,
+          type,
+          title,
+          message,
+          data,
+        };
+        if (this.slackQueue) {
+          await this.slackQueue.add('send', slackJob);
+        } else {
+          await this.slackNotifications.send(type, title, message, data, user.slackWebhookUrl);
         }
       }
 

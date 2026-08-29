@@ -14,6 +14,7 @@ import { PublicUserDto } from './dto/public-user.dto';
 import { UpdatePreferencesDto } from './dto/update-preferences.dto';
 import { UserProfileDto } from './dto/user-profile.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+import { SetSlackWebhookDto } from './dto/set-slack-webhook.dto';
 import { AvatarUploadDto } from './dto/avatar-upload.dto';
 import { UserDataExportDto } from './dto/user-data-export.dto';
 import { UsersService } from './users.service';
@@ -114,6 +115,31 @@ export class UsersController {
     @Body() dto: UpdateProfileDto,
   ): Promise<UserProfileDto> {
     return this.usersService.updateProfile(userId, dto);
+  }
+
+  @Put('me/slack-webhook')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Set the Slack incoming-webhook URL for notification alerts' })
+  @ApiResponse({ status: 200, description: 'Slack webhook configured' })
+  @ApiResponse({ status: 400, description: 'Invalid URL' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  setSlackWebhook(
+    @CurrentUser('id') userId: string,
+    @Body() dto: SetSlackWebhookDto,
+  ) {
+    return this.usersService.setSlackWebhook(userId, dto.url);
+  }
+
+  @Delete('me/slack-webhook')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Clear the Slack incoming-webhook URL (disable Slack alerts)' })
+  @ApiResponse({ status: 200, description: 'Slack webhook cleared' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  clearSlackWebhook(@CurrentUser('id') userId: string) {
+    return this.usersService.clearSlackWebhook(userId);
   }
 
   @Post('me/avatar/presigned-url')
