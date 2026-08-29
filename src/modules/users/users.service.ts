@@ -229,4 +229,36 @@ export class UsersService {
     });
     return { allowedCustomFields: user.allowedCustomFields };
   }
+
+  async setSlackWebhook(userId: string, url: string) {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { slackWebhookUrl: url },
+    });
+    return { slackWebhookUrl: url };
+  }
+
+  async clearSlackWebhook(userId: string) {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { slackWebhookUrl: null },
+    });
+    return { slackWebhookUrl: null };
+  }
+
+  async setDiscordWebhook(userId: string, url: string) {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { discordWebhookUrl: url },
+    });
+    return { discordWebhookUrl: url };
+  }
+
+  async clearDiscordWebhook(userId: string) {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { discordWebhookUrl: null },
+    });
+    return { discordWebhookUrl: null };
+  }
 }
