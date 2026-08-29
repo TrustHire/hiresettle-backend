@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEmail, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsEmail, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 
 export class UpdateProfileDto {
   @ApiProperty({ example: 'Ada Lovelace', required: false })
@@ -23,4 +23,11 @@ export class UpdateProfileDto {
   @IsOptional()
   @IsString()
   stellarAddress?: string;
+
+  @ApiProperty({ example: 'es', required: false, description: 'BCP-47 locale tag used for localized email templates (falls back to English)' })
+  @IsOptional()
+  @Matches(/^[a-z]{2,3}(?:-[A-Za-z]{2,4})?$/, {
+    message: 'locale must be a BCP-47 tag such as "en" or "es"',
+  })
+  locale?: string;
 }

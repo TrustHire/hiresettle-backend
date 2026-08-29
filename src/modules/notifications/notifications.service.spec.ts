@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { NotificationsService } from './notifications.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { ConfigService } from '@nestjs/config';
+import { EmailTemplateService } from '../../common/email/email-template.service';
 import * as nodemailer from 'nodemailer';
 import { NotificationType } from '@prisma/client';
 
@@ -17,6 +18,7 @@ describe('NotificationsService', () => {
   let service: NotificationsService;
   let prisma: PrismaService;
   let config: ConfigService;
+  let emailTemplates: EmailTemplateService;
   let mockNodemailerSendMail: jest.Mock;
 
   beforeEach(async () => {
@@ -57,12 +59,17 @@ describe('NotificationsService', () => {
             }),
           },
         },
+        {
+          provide: EmailTemplateService,
+          useValue: { render: jest.fn(() => '<p>rendered html</p>') },
+        },
       ],
     }).compile();
 
     service = module.get<NotificationsService>(NotificationsService);
     prisma = module.get<PrismaService>(PrismaService);
     config = module.get<ConfigService>(ConfigService);
+    emailTemplates = module.get<EmailTemplateService>(EmailTemplateService);
     mockNodemailerSendMail = (nodemailer.createTransport as jest.Mock)().sendMail;
   });
 
@@ -104,18 +111,22 @@ describe('NotificationsService', () => {
       expect(prisma.notification.create).toHaveBeenCalledWith({
         data: { userId, type: notificationType, title, message, data },
       });
-      expect(mockNodemailerSendMail).toHaveBeenCalledWith({
-        from: 'test@example.com',
-        to: email,
-        subject: '💰 HireSettle — Test Notification',
-        template: 'payment_released',
-        context: {
+      expect(emailTemplates.render).toHaveBeenCalledWith(
+        'payment_released',
+        'en',
+        expect.objectContaining({
           subject: expect.any(String),
           message,
           ctaLink: undefined,
           year: expect.any(Number),
           ...data,
-        },
+        }),
+      );
+      expect(mockNodemailerSendMail).toHaveBeenCalledWith({
+        from: 'test@example.com',
+        to: email,
+        subject: '💰 HireSettle — Test Notification',
+        html: '<p>rendered html</p>',
       });
       expect(prisma.notification.update).toHaveBeenCalledWith({
         where: { id: 'notification_id' },
@@ -212,6 +223,24 @@ describe('NotificationsService', () => {
       expect(mockNodemailerSendMail).toHaveBeenCalledWith(expect.objectContaining({
         subject: '⚠️ HireSettle — Test Notification',
       }));
+    });
+
+    it('should pass the user locale to the template renderer', async () => {
+      (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+        id: userId,
+        stellarAddress,
+        email,
+        locale: 'es',
+      });
+      const notificationType = NotificationType.PAYMENT_RELEASED;
+
+      await service.notifyUser(stellarAddress, notificationType, title, message, data);
+
+      expect(emailTemplates.render).toHaveBeenCalledWith(
+        'payment_released',
+        'es',
+        expect.anything(),
+      );
     });
 
     it('should use a default emoji if notification type is not in the map', async () => {

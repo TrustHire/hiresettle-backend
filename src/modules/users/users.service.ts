@@ -84,6 +84,7 @@ export class UsersService {
         stellarAddress: true,
         avatarUrl: true,
         role: true,
+        locale: true,
       },
     });
 
@@ -111,6 +112,7 @@ export class UsersService {
         ...(dto.name !== undefined && { name: dto.name }),
         ...(dto.company !== undefined && { company: dto.company }),
         ...(dto.email !== undefined && { email: dto.email }),
+        ...(dto.locale !== undefined && { locale: dto.locale }),
       },
       select: {
         name: true,
@@ -119,6 +121,7 @@ export class UsersService {
         stellarAddress: true,
         avatarUrl: true,
         role: true,
+        locale: true,
       },
     });
 
@@ -153,6 +156,7 @@ export class UsersService {
         stellarAddress: true,
         avatarUrl: true,
         role: true,
+        locale: true,
       },
     });
 
