@@ -1,19 +1,30 @@
-import { IsOptional, IsString, IsUrl } from 'class-validator';
-import { ApiPropertyOptional } from '@nestjs/swagger';
+import { IsOptional, IsString, IsUrl } from "class-validator";
+import { ApiPropertyOptional } from "@nestjs/swagger";
 
 export class UpdateProfileDto {
-  @ApiPropertyOptional({ description: 'Optional name of the user profile' })
+  @ApiPropertyOptional({ description: "Optional name of the user profile" })
   @IsOptional()
   @IsString()
   name?: string;
 
-  @ApiPropertyOptional({ description: 'Optional company name association' })
+  @ApiPropertyOptional({ description: "Optional company name association" })
   @IsOptional()
   @IsString()
   company?: string;
 
-  @ApiPropertyOptional({ description: 'Optional HTTP outgoing webhook delivery target destination URL' })
+  @ApiPropertyOptional({
+    description:
+      "Optional timezone used for non-urgent notification scheduling, e.g. America/New_York",
+  })
   @IsOptional()
-  @IsUrl({}, { message: 'Invalid webhook URL format' })
+  @IsString()
+  timezone?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "Optional HTTP outgoing webhook delivery target destination URL",
+  })
+  @IsOptional()
+  @IsUrl({}, { message: "Invalid webhook URL format" })
   webhookUrl?: string;
 }
