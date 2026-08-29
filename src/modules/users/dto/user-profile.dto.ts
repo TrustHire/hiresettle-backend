@@ -19,4 +19,7 @@ export class UserProfileDto {
 
   @ApiProperty({ enum: UserRole })
   role: UserRole;
+
+  @ApiProperty({ example: 'https://hooks.slack.com/services/<team-id>/<webhook-id>/<token>', required: false, description: 'Slack incoming-webhook URL for notification alerts' })
+  slackWebhookUrl: string | null;
 }

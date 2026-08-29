@@ -173,6 +173,7 @@ async function bootstrap() {
         new BullMQAdapter(new Queue('email', { connection })),
         new BullMQAdapter(new Queue('stellar-tx', { connection })),
         new BullMQAdapter(new Queue('webhook', { connection })),
+        new BullMQAdapter(new Queue('slack', { connection })),
       ],
       serverAdapter,
     });

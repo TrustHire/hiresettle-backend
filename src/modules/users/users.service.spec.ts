@@ -95,6 +95,7 @@ describe('UsersService', () => {
           stellarAddress: true,
           avatarUrl: true,
           role: true,
+          slackWebhookUrl: true,
         },
       });
     });
@@ -144,6 +145,7 @@ describe('UsersService', () => {
           stellarAddress: true,
           avatarUrl: true,
           role: true,
+          slackWebhookUrl: true,
         },
       });
     });
@@ -156,6 +158,39 @@ describe('UsersService', () => {
       await expect(service.updateProfile(userId, dto)).rejects.toThrow(
         BadRequestException,
       );
+    });
+  });
+
+  describe('setSlackWebhook()', () => {
+    const userId = 'user-123';
+    const url = 'https://hooks.slack.com/services/<team-id>/<webhook-id>/<token>';
+
+    it('persists the Slack webhook URL', async () => {
+      mockPrisma.user.update.mockResolvedValue({ id: userId, slackWebhookUrl: url });
+
+      const result = await service.setSlackWebhook(userId, url);
+
+      expect(mockPrisma.user.update).toHaveBeenCalledWith({
+        where: { id: userId },
+        data: { slackWebhookUrl: url },
+      });
+      expect(result).toEqual({ slackWebhookUrl: url });
+    });
+  });
+
+  describe('clearSlackWebhook()', () => {
+    const userId = 'user-123';
+
+    it('clears the Slack webhook URL', async () => {
+      mockPrisma.user.update.mockResolvedValue({ id: userId, slackWebhookUrl: null });
+
+      const result = await service.clearSlackWebhook(userId);
+
+      expect(mockPrisma.user.update).toHaveBeenCalledWith({
+        where: { id: userId },
+        data: { slackWebhookUrl: null },
+      });
+      expect(result).toEqual({ slackWebhookUrl: null });
     });
   });
 

@@ -6,6 +6,7 @@ import { Queue } from 'bullmq';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { NotificationType, Notification } from '@prisma/client';
 import { MetricsService } from '../../metrics/metrics.service';
+import { SlackNotificationsService, isSlackKeyType } from './slack-notifications.service';
 import { cursorPage } from '../../common/pagination/cursor-pagination';
 
 @Injectable()
@@ -17,7 +18,9 @@ export class NotificationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly slackNotifications: SlackNotificationsService,
     @Optional() @InjectQueue('email') private readonly emailQueue?: Queue,
+    @Optional() @InjectQueue('slack') private readonly slackQueue?: Queue,
     @Optional() private readonly metrics?: MetricsService,
   ) {
     this.transporter = nodemailer.createTransport({
@@ -143,6 +146,22 @@ export class NotificationsService {
               data: { emailSent: true },
             });
           }
+        }
+      }
+
+      // Slack: post key, company-facing types when the user has configured a webhook.
+      if (user.slackWebhookUrl && isSlackKeyType(type)) {
+        const slackJob = {
+          webhookUrl: user.slackWebhookUrl,
+          type,
+          title,
+          message,
+          data,
+        };
+        if (this.slackQueue) {
+          await this.slackQueue.add('send', slackJob);
+        } else {
+          await this.slackNotifications.send(type, title, message, data, user.slackWebhookUrl);
         }
       }
 

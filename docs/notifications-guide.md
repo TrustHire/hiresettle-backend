@@ -11,6 +11,7 @@ Every notification is written to the database as an **in-app** record. Depending
 | **In-app** | Persisted in the `notifications` table. Always delivered regardless of preferences. Queried via `GET /notifications`. |
 | **SSE** | Real-time push to `GET /notifications/stream`. Delivered whenever the user has an open connection; no persistence of missed messages. |
 | **Email** | Sent via Nodemailer through a BullMQ queue (`email` queue, 3 retries with exponential backoff). Controlled by per-type user preferences (enabled by default). |
+| **Slack** | Posted to a company's Slack channel via an incoming webhook (`slack` queue, 3 retries). Opt-in per user via `slackWebhookUrl`; only key, company-facing notification types are posted. |
 
 ---
 
@@ -119,6 +120,38 @@ model NotificationPreference {
   @@unique([userId, type])
 }
 ```
+
+---
+
+## Slack Integration
+
+Companies that want alerts in their team Slack channel can configure an incoming webhook. When set, key notification types are posted to that channel in a readable Blocks format (header + message + link back to the app) — never raw JSON.
+
+### Key Notification Types
+
+Only these company-facing, actionable types are posted to Slack:
+
+- `ENGAGEMENT_CREATED`, `PROOF_SUBMITTED`, `MILESTONE_CONFIRMED`, `PAYMENT_RELEASED`
+- `DISPUTE_RAISED`, `DISPUTE_RESOLVED`, `REPLACEMENT_REQUESTED`, `ENGAGEMENT_CANCELLED`
+- `FUNDING_SHORTFALL_DETECTED`
+
+Other types stay in-app/email-only even when a webhook is configured.
+
+### API Endpoints
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| `PUT` | `/users/me/slack-webhook` | Set the webhook. Body: `{ "url": "https://hooks.slack.com/services/<team-id>/<webhook-id>/<token>" }` (https only) |
+| `DELETE` | `/users/me/slack-webhook` | Clear the webhook (disables Slack alerts) |
+| `GET` | `/users/me` | Profile includes the current `slackWebhookUrl` (or `null`) |
+
+### Data Model
+
+Stored as `slackWebhookUrl` on the `users` table (nullable, no default — Slack is off until a company opts in).
+
+### Delivery
+
+Sends run through the BullMQ `slack` queue (3 attempts, exponential backoff). A failed webhook call is retried by the queue and logged; it never blocks notification creation.
 
 ---
 

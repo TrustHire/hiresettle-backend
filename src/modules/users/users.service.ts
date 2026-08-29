@@ -84,6 +84,7 @@ export class UsersService {
         stellarAddress: true,
         avatarUrl: true,
         role: true,
+        slackWebhookUrl: true,
       },
     });
 
@@ -119,6 +120,7 @@ export class UsersService {
         stellarAddress: true,
         avatarUrl: true,
         role: true,
+        slackWebhookUrl: true,
       },
     });
 
@@ -153,6 +155,7 @@ export class UsersService {
         stellarAddress: true,
         avatarUrl: true,
         role: true,
+        slackWebhookUrl: true,
       },
     });
 
@@ -183,6 +186,22 @@ export class UsersService {
     const cdnUrl = `${process.env.S3_CDN_URL || process.env.S3_ENDPOINT}/${key}`;
 
     return this.updateAvatar(userId, cdnUrl);
+  }
+
+  async setSlackWebhook(userId: string, url: string) {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { slackWebhookUrl: url },
+    });
+    return { slackWebhookUrl: url };
+  }
+
+  async clearSlackWebhook(userId: string) {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { slackWebhookUrl: null },
+    });
+    return { slackWebhookUrl: null };
   }
 
   async getCustomFieldsConfig(userId: string): Promise<{ allowedCustomFields: string[] }> {

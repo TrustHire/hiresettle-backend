@@ -120,6 +120,7 @@ model User {
   kycReviewedBy  String?        // admin userId who approved/rejected
   kycRejectionReason String?
   allowedCustomFields String[]  @default([]) // COMPANY only: permitted keys for engagement customFields
+  slackWebhookUrl String?       // Slack incoming-webhook URL for notification alerts (#277)
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
@@ -142,6 +143,15 @@ model User {
   engagementNotes      EngagementNote[]
   apiKeys              ApiKey[]
   milestoneApprovals   MilestoneApproval[]
+  recruiterReviews     RecruiterReview[]        @relation("RecruiterReviews")
+  reviewerReviews      RecruiterReview[]        @relation("ReviewerReviews")
+  kycDocuments         KycDocument[]
+  teamInvites          TeamInvite[]             @relation("TeamInvites")
+  savedFilters         SavedFilter[]
+  companyFavorites     FavoriteRecruiter[]      @relation("CompanyFavorites")
+  recruiterFavorites   FavoriteRecruiter[]      @relation("RecruiterFavorites")
+  companyMembers       CompanyMember[]          @relation("CompanyOwner")
+  memberOfCompanies    CompanyMember[]          @relation("MemberUser")
 
   @@index([role, deactivatedAt])
   @@index([deletedAt, anonymizedAt]) // Used by PiiAnonymizationSchedulerService

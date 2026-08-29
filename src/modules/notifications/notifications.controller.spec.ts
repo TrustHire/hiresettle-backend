@@ -53,7 +53,7 @@ describe('NotificationsController', () => {
 
       const result = await controller.findAll(userId, false, 1, 10);
 
-      expect(service.findForUser).toHaveBeenCalledWith(userId, false, 1, 10);
+      expect(service.findForUser).toHaveBeenCalledWith(userId, false, 1, 10, undefined);
       expect(result).toEqual({ data: notifications, meta });
     });
   });
