@@ -29,4 +29,11 @@ export class UpdateProfileDto {
   @IsOptional()
   @IsString()
   stellarAddress?: string;
+
+  @ApiProperty({ example: 'es', required: false, description: 'BCP-47 locale tag used for localized email templates (falls back to English)' })
+  @IsOptional()
+  @Matches(/^[a-z]{2,3}(?:-[A-Za-z]{2,4})?$/, {
+    message: 'locale must be a BCP-47 tag such as "en" or "es"',
+  })
+  locale?: string;
 }

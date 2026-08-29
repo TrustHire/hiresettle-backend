@@ -120,7 +120,7 @@ model User {
   kycReviewedAt  DateTime?
   kycReviewedBy  String?        // admin userId who approved/rejected
   kycRejectionReason String?
-  digestEnabled  Boolean        @default(false) // weekly digest email opt-in (#276)
+  locale         String         @default("en") // email template locale, falls back to English (#281)
   allowedCustomFields String[]  @default([]) // COMPANY only: permitted keys for engagement customFields
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt

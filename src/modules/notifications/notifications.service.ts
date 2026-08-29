@@ -6,6 +6,7 @@ import { Queue } from 'bullmq';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { NotificationType, Notification } from '@prisma/client';
 import { MetricsService } from '../../metrics/metrics.service';
+import { EmailTemplateService } from '../../common/email/email-template.service';
 import { cursorPage } from '../../common/pagination/cursor-pagination';
 
 @Injectable()
@@ -17,6 +18,7 @@ export class NotificationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly emailTemplates: EmailTemplateService,
     @Optional() @InjectQueue('email') private readonly emailQueue?: Queue,
     @Optional() private readonly metrics?: MetricsService,
   ) {
@@ -127,6 +129,7 @@ export class NotificationsService {
         const emailEnabled = pref ? pref.emailEnabled : true;
 
         if (emailEnabled) {
+          const locale = user.locale ?? 'en';
           if (this.emailQueue) {
             await this.emailQueue.add('send', {
               to: user.email,
@@ -135,9 +138,10 @@ export class NotificationsService {
               type,
               notificationId: notification.id,
               data,
+              locale,
             });
           } else {
-            await this.sendEmail(user.email, title, message, type, data);
+            await this.sendEmail(user.email, title, message, type, data, locale);
             await this.prisma.notification.update({
               where: { id: notification.id },
               data: { emailSent: true },
@@ -263,8 +267,9 @@ export class NotificationsService {
     message: string,
     type: NotificationType,
     data?: Record<string, any>,
+    locale = 'en',
   ) {
-    return this.sendEmail(to, subject, message, type, data);
+    return this.sendEmail(to, subject, message, type, data, locale);
   }
 
   async markEmailSent(notificationId: string) {
@@ -280,6 +285,7 @@ export class NotificationsService {
     message: string,
     type: NotificationType,
     data?: Record<string, any>,
+    locale = 'en',
   ) {
     // Pick an emoji for the email subject based on notification type
     const typeEmoji: Partial<Record<NotificationType, string>> = {
@@ -296,21 +302,22 @@ export class NotificationsService {
       STELLAR_BALANCE_LOW: '⚠️',
     };
 
+    const html = this.emailTemplates.render(type.toLowerCase(), locale, {
+      subject: `HireSettle — ${subject}`,
+      message,
+      ctaLink: data?.ctaLink,
+      year: new Date().getFullYear(),
+      // Pass all data properties to the template context
+      ...data,
+    });
+
     try {
       await this.transporter.sendMail({
         from: this.config.get('EMAIL_FROM') ?? 'noreply@hiresettle.com',
         to,
         subject: `${typeEmoji[type] ?? '📬'} HireSettle — ${subject}`,
-        template: type.toLowerCase(), // Use the notification type as the template name
-        context: {
-          subject: `HireSettle — ${subject}`,
-          message,
-          ctaLink: data?.ctaLink,
-          year: new Date().getFullYear(),
-          // Pass all data properties to the template context
-          ...data,
-        },
-      } as any);
+        html,
+      });
       this.logger.log(`Email sent to ${to}: ${subject}`);
     } catch (error) {
       this.logger.error(`Email failed to ${to}`, error.message);

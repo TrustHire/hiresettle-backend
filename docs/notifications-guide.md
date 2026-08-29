@@ -41,22 +41,43 @@ Types without a dedicated email template still send an email using the base temp
 
 ### Location
 
+Templates live in per-locale directories (BCP-47 tags):
+
 ```
 src/common/email/templates/
-├── base.html                              — shared layout (header, footer, CTA button)
-├── ENGAGEMENT_CREATED.html
-├── ENGAGEMENT_CANCELLED.html
-├── MILESTONE_CONFIRMED.html
-├── PAYMENT_RELEASED.html
-├── DISPUTE_RAISED.html
-├── DISPUTE_RESOLVED.html
-├── REPLICATION_REQUESTED.html
-└── RETENTION_WINDOW_APPROACHING.html
+├── en/                                  — English (default, always present)
+│   ├── base.html                        — shared layout (header, footer, CTA button)
+│   ├── engagement_created.html
+│   ├── engagement_cancelled.html
+│   ├── milestone_confirmed.html
+│   ├── payment_released.html
+│   ├── dispute_raised.html
+│   ├── dispute_resolved.html
+│   ├── replacement_requested.html
+│   └── retention_window_approaching.html
+└── es/                                  — Spanish (example secondary locale)
+    └── (same set of templates)
 ```
 
 ### How Templates Work
 
-Templates are Handlebars `.html` files rendered by Nodemailer. Each extends `base.html` and overrides content blocks.
+Templates are plain Handlebars `.html` files rendered by `EmailTemplateService` (`src/common/email/email-template.service.ts`). Each type template is a partial block that fills the `base` layout:
+
+```html
+{{#> base}}
+<p>Your localized content here — {{engagementTitle}}, {{amount}}, ...</p>
+{{/base}}
+```
+
+The `base.html` layout exposes the block via `{{> @partial-block}}` and supplies the header, footer, and optional CTA button.
+
+**Locale resolution** follows the user's `locale` preference with a guaranteed English fallback:
+
+1. `templates/<locale>/<name>.html` — the user's preferred locale (e.g. `es`)
+2. `templates/en/<name>.html` — English variant
+3. `templates/en/base.html` + the notification's `message` text — last resort; a missing template never errors
+
+The template name is the lowercased notification type (e.g. `PAYMENT_RELEASED` → `payment_released`), so filenames must match exactly.
 
 **Common variables available in all templates:**
 
@@ -80,17 +101,22 @@ Templates are Handlebars `.html` files rendered by Nodemailer. Each extends `bas
 | `REPLACEMENT_REQUESTED` | `engagementTitle` |
 | `RETENTION_WINDOW_APPROACHING` | `engagementTitle`, `milestoneIndex` |
 
-### Adding a New Template
+### Adding a New Locale
 
-1. Create `src/common/email/templates/NEW_TYPE.html` using Handlebars syntax.
-2. Extend `base.html` with `{{#partial "content"}}`.
-3. The service derives the template name from `type.toLowerCase()` (e.g. `NEW_TYPE` → `new_type`), so the filename must match exactly.
+1. Create `src/common/email/templates/<locale>/` and copy the English set.
+2. Translate `base.html` and each type template; keep the filename and variable names identical to the English versions.
+3. Templates you don't translate simply fall back to English automatically — no code change needed.
+4. Users select the locale via `PATCH /users/me/profile` with `{ "locale": "<tag>" }`.
+
+### Setting the User Locale
+
+Each user has a `locale` field (BCP-47 tag, default `en`). It is read/writable through the profile endpoint (`PATCH /users/me/profile`) and is carried onto the email queue so both queued and direct sends render in the user's language.
 
 ---
 
 ## User Preferences (Email Opt-Out)
 
-Users can control which notification types send emails. The preference system is per-type with a single boolean toggle.
+Users can control which notification types send emails. The preference system is per-type with a single boolean toggle. Email language is controlled separately by the user's `locale` (see [Setting the User Locale](#setting-the-user-locale)).
 
 ### Defaults
 

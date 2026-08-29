@@ -25,4 +25,7 @@ export class UserProfileDto {
 
   @ApiProperty({ enum: UserRole })
   role: UserRole;
+
+  @ApiProperty({ example: 'en', description: 'BCP-47 locale tag used for localized email templates' })
+  locale: string;
 }
