@@ -24,7 +24,7 @@ import {
 } from '@nestjs/swagger';
 import { SecurityEventAction, UserRole } from '@prisma/client';
 import { Request, Response } from 'express';
-import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { JwtOrApiKeyGuard } from '../../common/guards/jwt-or-api-key.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { AdminUsersService } from './admin-users.service';
@@ -48,7 +48,7 @@ import { CreateApiKeyDto } from '../auth/dto/create-api-key.dto';
 
 @ApiTags('admin')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtOrApiKeyGuard, RolesGuard)
 @Roles(UserRole.ADMIN)
 @Controller('admin')
 export class AdminController {
