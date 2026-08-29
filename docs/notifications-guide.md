@@ -122,6 +122,33 @@ model NotificationPreference {
 
 ---
 
+## Weekly Digest (#276)
+
+Users can opt in to a single weekly email that summarizes their prior 7 days of notifications, instead of reading individual in-app alerts.
+
+### Behavior
+
+- **Opt-in per user**: a `digestEnabled` flag on the `users` record (default: `false` — no one receives a digest unless they opt in).
+- **Schedule**: the `WeeklyDigestService` cron runs **Monday 09:00 UTC**.
+- **Window**: summarizes notifications created in the prior `DIGEST_WINDOW_DAYS` (default: `7`).
+- **No empty digests**: users with no notifications in the window receive nothing.
+- The digest is sent **in addition to** individual per-type emails; opting in does not change per-type email preferences.
+
+### API Endpoints
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| `GET` | `/notifications/digest-preference` | Returns `{ digestEnabled }` for the current user |
+| `PATCH` | `/notifications/digest-preference` | Sets the opt-in. Body: `{ "digestEnabled": true }` |
+
+### Env Vars
+
+| Env Var | Default | Description |
+|---------|---------|-------------|
+| `DIGEST_WINDOW_DAYS` | `7` | Number of prior days summarized by the digest |
+
+---
+
 ## SSE (Server-Sent Events)
 
 ### Connecting
