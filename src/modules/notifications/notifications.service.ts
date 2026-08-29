@@ -1,13 +1,26 @@
-import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import * as nodemailer from 'nodemailer';
-import { InjectQueue } from '@nestjs/bullmq';
-import { Queue } from 'bullmq';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { NotificationType, Notification } from '@prisma/client';
-import { MetricsService } from '../../metrics/metrics.service';
-import { EmailTemplateService } from '../../common/email/email-template.service';
-import { cursorPage } from '../../common/pagination/cursor-pagination';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  Optional,
+} from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import * as nodemailer from "nodemailer";
+import { InjectQueue } from "@nestjs/bullmq";
+import { Queue } from "bullmq";
+import { PrismaService } from "../../common/prisma/prisma.service";
+import { NotificationType, Notification } from "@prisma/client";
+import { MetricsService } from "../../metrics/metrics.service";
+import { EmailTemplateService } from "../../common/email/email-template.service";
+import { cursorPage } from "../../common/pagination/cursor-pagination";
+import {
+  SlackNotificationsService,
+  isSlackKeyType,
+} from "./slack-notifications.service";
+import {
+  DiscordNotificationsService,
+  isDiscordKeyType,
+} from "./discord-notifications.service";
 
 @Injectable()
 export class NotificationsService {
@@ -19,17 +32,21 @@ export class NotificationsService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     private readonly emailTemplates: EmailTemplateService,
-    @Optional() @InjectQueue('email') private readonly emailQueue?: Queue,
-    @Optional() @InjectQueue('slack') private readonly slackQueue?: Queue,
+    @Optional() @InjectQueue("email") private readonly emailQueue?: Queue,
+    @Optional() @InjectQueue("slack") private readonly slackQueue?: Queue,
+    @Optional() @InjectQueue("discord") private readonly discordQueue?: Queue,
     @Optional() private readonly metrics?: MetricsService,
+    @Optional() private readonly slackNotifications?: SlackNotificationsService,
+    @Optional()
+    private readonly discordNotifications?: DiscordNotificationsService,
   ) {
     this.transporter = nodemailer.createTransport({
-      host: this.config.get('SMTP_HOST'),
-      port: this.config.get<number>('SMTP_PORT', 587),
+      host: this.config.get("SMTP_HOST"),
+      port: this.config.get<number>("SMTP_PORT", 587),
       secure: false,
       auth: {
-        user: this.config.get('SMTP_USER'),
-        pass: this.config.get('SMTP_PASS'),
+        user: this.config.get("SMTP_USER"),
+        pass: this.config.get("SMTP_PASS"),
       },
     });
   }
@@ -41,7 +58,7 @@ export class NotificationsService {
     this.userConnections.get(userId)!.push(res);
     this.metrics?.sseActiveConnections.inc();
 
-    res.on('close', () => {
+    res.on("close", () => {
       const connections = this.userConnections.get(userId);
       if (connections) {
         const index = connections.indexOf(res);
@@ -73,7 +90,7 @@ export class NotificationsService {
   private pushToConnections(notification: Notification) {
     const connections = this.userConnections.get(notification.userId);
     if (connections) {
-      connections.forEach(res => {
+      connections.forEach((res) => {
         res.write(`data: ${JSON.stringify(notification)}\n\n`);
       });
     }
@@ -87,9 +104,13 @@ export class NotificationsService {
     data?: Record<string, any>,
   ) {
     try {
-      const user = await this.prisma.user.findUnique({ where: { stellarAddress } });
+      const user = await this.prisma.user.findUnique({
+        where: { stellarAddress },
+      });
       if (!user) {
-        this.logger.warn(`No user found for ${stellarAddress} — skipping notification`);
+        this.logger.warn(
+          `No user found for ${stellarAddress} — skipping notification`,
+        );
         return;
       }
 
@@ -109,7 +130,9 @@ export class NotificationsService {
     try {
       const user = await this.prisma.user.findUnique({ where: { id: userId } });
       if (!user) {
-        this.logger.warn(`No user found for id ${userId} — skipping notification`);
+        this.logger.warn(
+          `No user found for id ${userId} — skipping notification`,
+        );
         return;
       }
 
@@ -130,9 +153,9 @@ export class NotificationsService {
         const emailEnabled = pref ? pref.emailEnabled : true;
 
         if (emailEnabled) {
-          const locale = user.locale ?? 'en';
+          const locale = user.locale ?? "en";
           if (this.emailQueue) {
-            await this.emailQueue.add('send', {
+            await this.emailQueue.add("send", {
               to: user.email,
               subject: title,
               message,
@@ -142,7 +165,14 @@ export class NotificationsService {
               locale,
             });
           } else {
-            await this.sendEmail(user.email, title, message, type, data, locale);
+            await this.sendEmail(
+              user.email,
+              title,
+              message,
+              type,
+              data,
+              locale,
+            );
             await this.prisma.notification.update({
               where: { id: notification.id },
               data: { emailSent: true },
@@ -151,19 +181,70 @@ export class NotificationsService {
         }
       }
 
+      // Batching (#279): group same-type events for the same user within batchWindowSeconds.
+      const batchWindow = (user as any).batchWindowSeconds ?? 60;
+      const now = new Date();
+      const existingBatch = await this.prisma.notificationBatch.findFirst({
+        where: { userId, type, flushedAt: null, expiresAt: { gt: now } },
+      });
+      if (existingBatch) {
+        await this.prisma.notificationBatch.update({
+          where: { id: existingBatch.id },
+          data: { count: { increment: 1 } },
+        });
+        // Already batched — skip external channel delivery for this event
+        return notification;
+      }
+      // Open a new batch window
+      await this.prisma.notificationBatch.create({
+        data: {
+          userId,
+          type,
+          count: 1,
+          firstData: (data as any) ?? {},
+          expiresAt: new Date(now.getTime() + batchWindow * 1000),
+        },
+      });
+
       // Slack: post key, company-facing types when the user has configured a webhook.
-      if (user.slackWebhookUrl && isSlackKeyType(type)) {
+      if ((user as any).slackWebhookUrl && isSlackKeyType(type)) {
         const slackJob = {
-          webhookUrl: user.slackWebhookUrl,
+          webhookUrl: (user as any).slackWebhookUrl,
           type,
           title,
           message,
           data,
         };
         if (this.slackQueue) {
-          await this.slackQueue.add('send', slackJob);
-        } else {
-          await this.slackNotifications.send(type, title, message, data, user.slackWebhookUrl);
+          await this.slackQueue.add("send", slackJob);
+        } else if (this.slackNotifications) {
+          await this.slackNotifications.send(
+            type,
+            title,
+            message,
+            data,
+            (user as any).slackWebhookUrl,
+          );
+        }
+      }
+
+      // Discord: mirror Slack event selection (#278)
+      if ((user as any).discordWebhookUrl && isDiscordKeyType(type)) {
+        const discordJob = {
+          webhookUrl: (user as any).discordWebhookUrl,
+          type,
+          title,
+          message,
+        };
+        if (this.discordQueue) {
+          await this.discordQueue.add("send", discordJob);
+        } else if (this.discordNotifications) {
+          await this.discordNotifications.send(
+            type,
+            title,
+            message,
+            (user as any).discordWebhookUrl,
+          );
         }
       }
 
@@ -174,7 +255,9 @@ export class NotificationsService {
   }
 
   async getPreferences(userId: string) {
-    const saved = await this.prisma.notificationPreference.findMany({ where: { userId } });
+    const saved = await this.prisma.notificationPreference.findMany({
+      where: { userId },
+    });
     return Object.values(NotificationType).map((type) => {
       const pref = saved.find((p) => p.type === type);
       return {
@@ -188,14 +271,21 @@ export class NotificationsService {
 
   async updatePreferences(
     userId: string,
-    items: { type: NotificationType; emailEnabled?: boolean; inAppEnabled?: boolean; sseEnabled?: boolean }[],
+    items: {
+      type: NotificationType;
+      emailEnabled?: boolean;
+      inAppEnabled?: boolean;
+      sseEnabled?: boolean;
+    }[],
   ) {
     return Promise.all(
-      items.map(({ type, ...changes }) => this.prisma.notificationPreference.upsert({
-        where: { userId_type: { userId, type } },
-        create: { userId, type, ...changes },
-        update: changes,
-      })),
+      items.map(({ type, ...changes }) =>
+        this.prisma.notificationPreference.upsert({
+          where: { userId_type: { userId, type } },
+          create: { userId, type, ...changes },
+          update: changes,
+        }),
+      ),
     );
   }
 
@@ -222,7 +312,7 @@ export class NotificationsService {
    */
   async sendDigestEmail(to: string, subject: string, html: string) {
     await this.transporter.sendMail({
-      from: this.config.get('EMAIL_FROM') ?? 'noreply@hiresettle.com',
+      from: this.config.get("EMAIL_FROM") ?? "noreply@hiresettle.com",
       to,
       subject,
       html,
@@ -230,30 +320,54 @@ export class NotificationsService {
     this.logger.log(`Digest email sent to ${to}: ${subject}`);
   }
 
-  async findForUser(userId: string, unreadOnly = false, page = 1, limit = 20, cursor?: string) {
+  async findForUser(
+    userId: string,
+    unreadOnly = false,
+    page = 1,
+    limit = 20,
+    cursor?: string,
+  ) {
     const where: any = { userId };
     if (unreadOnly) where.read = false;
 
     const notifications = await this.prisma.notification.findMany({
       where,
-      orderBy: { createdAt: 'desc' },
+      orderBy: { createdAt: "desc" },
       ...(cursor
         ? { cursor: { id: cursor }, skip: 1, take: limit + 1 }
         : { skip: (page - 1) * limit, take: limit }),
     });
     const total = await this.prisma.notification.count({ where });
-    const unreadCount = await this.prisma.notification.count({ where: { userId, read: false } });
+    const unreadCount = await this.prisma.notification.count({
+      where: { userId, read: false },
+    });
 
     if (cursor) {
       const pageResult = cursorPage(notifications, limit);
-      return { data: pageResult.data, meta: { total, limit, unreadCount, nextCursor: pageResult.nextCursor } };
+      return {
+        data: pageResult.data,
+        meta: { total, limit, unreadCount, nextCursor: pageResult.nextCursor },
+      };
     }
 
-    return { data: notifications, meta: { total, page, limit, totalPages: Math.ceil(total / limit), unreadCount } };
+    return {
+      data: notifications,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+        unreadCount,
+      },
+    };
   }
 
   async getUnreadCount(userId: string) {
-    return { unreadCount: await this.prisma.notification.count({ where: { userId, read: false } }) };
+    return {
+      unreadCount: await this.prisma.notification.count({
+        where: { userId, read: false },
+      }),
+    };
   }
 
   async markRead(notificationId: string, userId: string) {
@@ -274,7 +388,8 @@ export class NotificationsService {
     const { count } = await this.prisma.notification.deleteMany({
       where: { id: notificationId, userId },
     });
-    if (count === 0) throw new NotFoundException(`Notification ${notificationId} not found`);
+    if (count === 0)
+      throw new NotFoundException(`Notification ${notificationId} not found`);
     return { success: true };
   }
 
@@ -284,7 +399,7 @@ export class NotificationsService {
     message: string,
     type: NotificationType,
     data?: Record<string, any>,
-    locale = 'en',
+    locale = "en",
   ) {
     return this.sendEmail(to, subject, message, type, data, locale);
   }
@@ -302,21 +417,21 @@ export class NotificationsService {
     message: string,
     type: NotificationType,
     data?: Record<string, any>,
-    locale = 'en',
+    locale = "en",
   ) {
     // Pick an emoji for the email subject based on notification type
     const typeEmoji: Partial<Record<NotificationType, string>> = {
-      PAYMENT_RELEASED: '💰',
-      MILESTONE_UNLOCKED: '🔓',
-      PROOF_SUBMITTED: '📄',
-      DISPUTE_RAISED: '⚠️',
-      DISPUTE_RESOLVED: '⚖️',
-      REPLACEMENT_REQUESTED: '🔄',
-      RETENTION_WINDOW_APPROACHING: '⏰',
-      PLACEMENT_MILESTONE_DUE_SOON: '📅',
-      ENGAGEMENT_CANCELLED: '❌',
-      ENGAGEMENT_CREATED: '🎉', // Added for completeness
-      STELLAR_BALANCE_LOW: '⚠️',
+      PAYMENT_RELEASED: "💰",
+      MILESTONE_UNLOCKED: "🔓",
+      PROOF_SUBMITTED: "📄",
+      DISPUTE_RAISED: "⚠️",
+      DISPUTE_RESOLVED: "⚖️",
+      REPLACEMENT_REQUESTED: "🔄",
+      RETENTION_WINDOW_APPROACHING: "⏰",
+      PLACEMENT_MILESTONE_DUE_SOON: "📅",
+      ENGAGEMENT_CANCELLED: "❌",
+      ENGAGEMENT_CREATED: "🎉", // Added for completeness
+      STELLAR_BALANCE_LOW: "⚠️",
     };
 
     const html = this.emailTemplates.render(type.toLowerCase(), locale, {
@@ -330,9 +445,9 @@ export class NotificationsService {
 
     try {
       await this.transporter.sendMail({
-        from: this.config.get('EMAIL_FROM') ?? 'noreply@hiresettle.com',
+        from: this.config.get("EMAIL_FROM") ?? "noreply@hiresettle.com",
         to,
-        subject: `${typeEmoji[type] ?? '📬'} HireSettle — ${subject}`,
+        subject: `${typeEmoji[type] ?? "📬"} HireSettle — ${subject}`,
         html,
       });
       this.logger.log(`Email sent to ${to}: ${subject}`);

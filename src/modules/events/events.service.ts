@@ -1,13 +1,13 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { StellarService } from '../../common/stellar/stellar.service';
-import { MilestonesService } from '../milestones/milestones.service';
-import { NotificationsService } from '../notifications/notifications.service';
-import { EngagementsService } from '../engagements/engagements.service';
-import { WebhooksService } from '../webhooks/webhooks.service';
-import { NotificationType } from '@prisma/client';
-import { cursorPage } from '../../common/pagination/cursor-pagination';
+import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { Cron, CronExpression } from "@nestjs/schedule";
+import { PrismaService } from "../../common/prisma/prisma.service";
+import { StellarService } from "../../common/stellar/stellar.service";
+import { MilestonesService } from "../milestones/milestones.service";
+import { NotificationsService } from "../notifications/notifications.service";
+import { EngagementsService } from "../engagements/engagements.service";
+import { WebhooksService } from "../webhooks/webhooks.service";
+import { NotificationType } from "@prisma/client";
+import { cursorPage } from "../../common/pagination/cursor-pagination";
 
 /**
  * EventsService
@@ -38,10 +38,14 @@ export class EventsService implements OnModuleInit {
     try {
       const latest = await this.stellar.getLatestLedger();
       this.lastProcessedLedger = Math.max(1, latest - 10);
-      this.logger.log(`Event poller initialised at ledger ${this.lastProcessedLedger}`);
+      this.logger.log(
+        `Event poller initialised at ledger ${this.lastProcessedLedger}`,
+      );
     } catch {
       this.lastProcessedLedger = 1;
-      this.logger.warn('Could not fetch latest ledger on init — will retry on first poll');
+      this.logger.warn(
+        "Could not fetch latest ledger on init — will retry on first poll",
+      );
     }
   }
 
@@ -52,17 +56,22 @@ export class EventsService implements OnModuleInit {
   @Cron(CronExpression.EVERY_5_SECONDS)
   async pollEvents() {
     try {
-      const events = await this.stellar.fetchContractEvents(this.lastProcessedLedger);
+      const events = await this.stellar.fetchContractEvents(
+        this.lastProcessedLedger,
+      );
       if (!events.length) return;
 
       this.logger.log(`Processing ${events.length} chain event(s)`);
 
       for (const event of events) {
         await this.processEvent(event);
-        this.lastProcessedLedger = Math.max(this.lastProcessedLedger, event.ledger + 1);
+        this.lastProcessedLedger = Math.max(
+          this.lastProcessedLedger,
+          event.ledger + 1,
+        );
       }
     } catch (error) {
-      this.logger.error('Event polling failed', error.message);
+      this.logger.error("Event polling failed", error.message);
     }
   }
 
@@ -73,20 +82,22 @@ export class EventsService implements OnModuleInit {
   private async processEvent(event: any) {
     const eventName = this.extractEventName(event);
     const payload = this.extractPayload(event);
-    const txHash = event.txHash ?? '';
+    const txHash = event.txHash ?? "";
 
     // Idempotency check: check if we already processed this txHash
     const existingEvent = await this.prisma.chainEvent.findFirst({
-      where: { txHash, processed: true }
+      where: { txHash, processed: true },
     });
     if (existingEvent) {
-      this.logger.log(`Event with txHash ${txHash} already processed — skipping`);
+      this.logger.log(
+        `Event with txHash ${txHash} already processed — skipping`,
+      );
       return;
     }
 
     // Save or get the ChainEvent
     let chainEvent = await this.prisma.chainEvent.findFirst({
-      where: { txHash, eventName }
+      where: { txHash, eventName },
     });
     if (!chainEvent) {
       chainEvent = await this.saveRawEvent(eventName, event, payload);
@@ -100,21 +111,38 @@ export class EventsService implements OnModuleInit {
     await this.prisma.$transaction(async (tx) => {
       // Handle the event with our existing handlers
       switch (eventName) {
-        case 'engagement_created':    await this.handleEngagementCreated(payload, tx); break;
-        case 'milestone_unlocked':    await this.handleMilestoneUnlocked(payload, tx); break;
-        case 'proof_submitted':       await this.handleProofSubmitted(payload, tx); break;
-        case 'milestone_confirmed':   await this.handleMilestoneConfirmed(payload, tx); break;
-        case 'dispute_raised':        await this.handleDisputeRaised(payload, tx); break;
-        case 'dispute_resolved':      await this.handleDisputeResolved(payload, tx); break;
-        case 'replacement_requested': await this.handleReplacementRequested(payload, tx); break;
-        case 'engagement_cancelled':  await this.handleEngagementCancelled(payload, tx); break;
-        default: this.logger.warn(`Unknown event: ${eventName}`);
+        case "engagement_created":
+          await this.handleEngagementCreated(payload, tx);
+          break;
+        case "milestone_unlocked":
+          await this.handleMilestoneUnlocked(payload, tx);
+          break;
+        case "proof_submitted":
+          await this.handleProofSubmitted(payload, tx);
+          break;
+        case "milestone_confirmed":
+          await this.handleMilestoneConfirmed(payload, tx);
+          break;
+        case "dispute_raised":
+          await this.handleDisputeRaised(payload, tx);
+          break;
+        case "dispute_resolved":
+          await this.handleDisputeResolved(payload, tx);
+          break;
+        case "replacement_requested":
+          await this.handleReplacementRequested(payload, tx);
+          break;
+        case "engagement_cancelled":
+          await this.handleEngagementCancelled(payload, tx);
+          break;
+        default:
+          this.logger.warn(`Unknown event: ${eventName}`);
       }
 
       // Mark ChainEvent as processed
       await tx.chainEvent.update({
         where: { id: chainEvent.id },
-        data: { processed: true }
+        data: { processed: true },
       });
     });
   }
@@ -122,7 +150,7 @@ export class EventsService implements OnModuleInit {
   async processUnprocessedEvents() {
     const unprocessedEvents = await this.prisma.chainEvent.findMany({
       where: { processed: false },
-      orderBy: { ledger: 'asc' }
+      orderBy: { ledger: "asc" },
     });
 
     for (const chainEvent of unprocessedEvents) {
@@ -132,14 +160,19 @@ export class EventsService implements OnModuleInit {
           ledger: chainEvent.ledger,
           txHash: chainEvent.txHash,
           topic: [chainEvent.eventName],
-          value: chainEvent.payload
+          value: chainEvent.payload,
         };
 
         // Process it (reuses existing logic)
         await this.processEvent(pseudoEvent);
-        this.logger.log(`Processed unprocessed event: ${chainEvent.id} (${chainEvent.eventName})`);
+        this.logger.log(
+          `Processed unprocessed event: ${chainEvent.id} (${chainEvent.eventName})`,
+        );
       } catch (error) {
-        this.logger.error(`Failed to process unprocessed event ${chainEvent.id}`, error.message);
+        this.logger.error(
+          `Failed to process unprocessed event ${chainEvent.id}`,
+          error.message,
+        );
       }
     }
   }
@@ -151,10 +184,15 @@ export class EventsService implements OnModuleInit {
   private async dispatchWebhookIfConfigured(
     companyAddress: string,
     eventDetails: {
-      event: 'COMPLETED' | 'CANCELLED' | 'REPLACEMENT_REQUESTED' | 'DISPUTE_RAISED' | 'PAYMENT_RELEASED';
+      event:
+        | "COMPLETED"
+        | "CANCELLED"
+        | "REPLACEMENT_REQUESTED"
+        | "DISPUTE_RAISED"
+        | "PAYMENT_RELEASED";
       engagementId: string;
       status: string;
-    }
+    },
   ) {
     try {
       const companyUser = await this.prisma.user.findFirst({
@@ -162,18 +200,41 @@ export class EventsService implements OnModuleInit {
         select: { id: true, webhookUrl: true, webhookSecret: true },
       });
 
-      await this.webhooks.sendWebhook(
-        companyUser?.webhookUrl,
-        {
-          event: eventDetails.event,
-          engagementId: eventDetails.engagementId,
-          status: eventDetails.status,
-          timestamp: new Date().toISOString(),
-        },
-        { userId: companyUser?.id, secret: companyUser?.webhookSecret },
-      );
+      const payload = {
+        event: eventDetails.event,
+        engagementId: eventDetails.engagementId,
+        status: eventDetails.status,
+        timestamp: new Date().toISOString(),
+      };
+
+      // Legacy single webhookUrl
+      if (companyUser?.webhookUrl) {
+        await this.webhooks.sendWebhook(companyUser.webhookUrl, payload, {
+          userId: companyUser.id,
+          secret: companyUser.webhookSecret,
+        });
+      }
+
+      // Per-subscription delivery with eventTypes filtering (#275)
+      if (companyUser?.id) {
+        const subscriptions = await this.prisma.webhookSubscription.findMany({
+          where: { companyId: companyUser.id },
+        });
+        for (const sub of subscriptions) {
+          const allowed: string[] = sub.eventTypes as string[];
+          if (allowed.length === 0 || allowed.includes(eventDetails.event)) {
+            await this.webhooks.sendWebhook(sub.url, payload, {
+              userId: companyUser.id,
+              secret: companyUser.webhookSecret ?? undefined,
+            });
+          }
+        }
+      }
     } catch (err) {
-      this.logger.error(`Webhook runtime dispatcher encounter error for engagement ${eventDetails.engagementId}:`, err.message);
+      this.logger.error(
+        `Webhook runtime dispatcher encounter error for engagement ${eventDetails.engagementId}:`,
+        err.message,
+      );
     }
   }
 
@@ -184,7 +245,7 @@ export class EventsService implements OnModuleInit {
   private async handleEngagementCreated(payload: any, tx?: any) {
     const engagementId = String(payload);
     this.logger.log(`Engagement created on-chain: ${engagementId}`);
-    
+
     // We already create engagement in EngagementsService.create, so just sync if needed
     await this.engagements.syncFromChain(engagementId);
 
@@ -195,7 +256,7 @@ export class EventsService implements OnModuleInit {
       await this.notifications.notifyUser(
         engagement.recruiterAddress,
         NotificationType.ENGAGEMENT_CREATED,
-        'New engagement created',
+        "New engagement created",
         `A new engagement (${engagementId}) has been created for you.`,
         { engagementId },
       );
@@ -206,10 +267,16 @@ export class EventsService implements OnModuleInit {
     const [engagementId, milestoneIndex] = this.destructurePayload(payload);
     this.logger.log(`Milestone unlocked: ${engagementId}[${milestoneIndex}]`);
 
-    await this.milestones.markUnlocked(String(engagementId), Number(milestoneIndex));
+    await this.milestones.markUnlocked(
+      String(engagementId),
+      Number(milestoneIndex),
+    );
 
     await (tx || this.prisma).retentionSchedule.updateMany({
-      where: { engagementId: String(engagementId), milestoneIndex: Number(milestoneIndex) },
+      where: {
+        engagementId: String(engagementId),
+        milestoneIndex: Number(milestoneIndex),
+      },
       data: { unlocked: true },
     });
 
@@ -220,7 +287,7 @@ export class EventsService implements OnModuleInit {
       await this.notifications.notifyUser(
         engagement.recruiterAddress,
         NotificationType.MILESTONE_UNLOCKED,
-        'Retention milestone unlocked',
+        "Retention milestone unlocked",
         `Milestone ${milestoneIndex} for engagement ${engagementId} is now available. Submit your proof to claim payment.`,
         { engagementId, milestoneIndex },
       );
@@ -232,7 +299,9 @@ export class EventsService implements OnModuleInit {
     this.logger.log(`Proof submitted: ${engagementId}[${milestoneIndex}]`);
 
     await this.milestones.markProofSubmitted(
-      String(engagementId), Number(milestoneIndex), '',
+      String(engagementId),
+      Number(milestoneIndex),
+      "",
     );
 
     const engagement = await (tx || this.prisma).engagement.findUnique({
@@ -242,7 +311,7 @@ export class EventsService implements OnModuleInit {
       await this.notifications.notifyUser(
         engagement.companyAddress,
         NotificationType.PROOF_SUBMITTED,
-        'Proof submitted — action required',
+        "Proof submitted — action required",
         `Milestone ${milestoneIndex} proof has been submitted for engagement ${engagementId}. Please review and confirm or dispute.`,
         { engagementId, milestoneIndex },
       );
@@ -250,8 +319,11 @@ export class EventsService implements OnModuleInit {
   }
 
   private async handleMilestoneConfirmed(payload: any, tx?: any) {
-    const [engagementId, milestoneIndex, paymentAmount] = this.destructurePayload(payload);
-    this.logger.log(`Milestone confirmed: ${engagementId}[${milestoneIndex}] — ${paymentAmount} released`);
+    const [engagementId, milestoneIndex, paymentAmount] =
+      this.destructurePayload(payload);
+    this.logger.log(
+      `Milestone confirmed: ${engagementId}[${milestoneIndex}] — ${paymentAmount} released`,
+    );
 
     await this.milestones.markConfirmed(
       String(engagementId),
@@ -269,14 +341,14 @@ export class EventsService implements OnModuleInit {
       await this.notifications.notifyUser(
         engagement.recruiterAddress,
         NotificationType.PAYMENT_RELEASED,
-        'Payment released',
+        "Payment released",
         `$${usdcAmount} USDC has been released for milestone ${milestoneIndex} on engagement ${engagementId}.`,
         { engagementId, milestoneIndex, amount: usdcAmount },
       );
 
       // Trigger Outgoing Webhook Event
       await this.dispatchWebhookIfConfigured(engagement.companyAddress, {
-        event: 'PAYMENT_RELEASED',
+        event: "PAYMENT_RELEASED",
         engagementId: String(engagementId),
         status: engagement.status,
       });
@@ -287,17 +359,23 @@ export class EventsService implements OnModuleInit {
     const [engagementId, milestoneIndex] = this.destructurePayload(payload);
     this.logger.log(`Dispute raised: ${engagementId}[${milestoneIndex}]`);
 
-    await this.milestones.markDisputed(String(engagementId), Number(milestoneIndex));
+    await this.milestones.markDisputed(
+      String(engagementId),
+      Number(milestoneIndex),
+    );
 
     const engagement = await (tx || this.prisma).engagement.findUnique({
       where: { id: String(engagementId) },
     });
     if (engagement) {
-      for (const address of [engagement.recruiterAddress, engagement.arbiterAddress]) {
+      for (const address of [
+        engagement.recruiterAddress,
+        engagement.arbiterAddress,
+      ]) {
         await this.notifications.notifyUser(
           address,
           NotificationType.DISPUTE_RAISED,
-          'Dispute raised',
+          "Dispute raised",
           `A dispute has been raised on milestone ${milestoneIndex} for engagement ${engagementId}.`,
           { engagementId, milestoneIndex },
         );
@@ -305,19 +383,24 @@ export class EventsService implements OnModuleInit {
 
       // Trigger Outgoing Webhook Event
       await this.dispatchWebhookIfConfigured(engagement.companyAddress, {
-        event: 'DISPUTE_RAISED',
+        event: "DISPUTE_RAISED",
         engagementId: String(engagementId),
-        status: 'DISPUTED',
+        status: "DISPUTED",
       });
     }
   }
 
   private async handleDisputeResolved(payload: any, tx?: any) {
-    const [engagementId, milestoneIndex, approved] = this.destructurePayload(payload);
-    this.logger.log(`Dispute resolved: ${engagementId}[${milestoneIndex}] approved=${approved}`);
+    const [engagementId, milestoneIndex, approved] =
+      this.destructurePayload(payload);
+    this.logger.log(
+      `Dispute resolved: ${engagementId}[${milestoneIndex}] approved=${approved}`,
+    );
 
     await this.milestones.markResolved(
-      String(engagementId), Number(milestoneIndex), Boolean(approved),
+      String(engagementId),
+      Number(milestoneIndex),
+      Boolean(approved),
     );
     await this.engagements.syncFromChain(String(engagementId));
 
@@ -325,19 +408,22 @@ export class EventsService implements OnModuleInit {
       where: { id: String(engagementId) },
     });
     if (engagement) {
-      for (const address of [engagement.companyAddress, engagement.recruiterAddress]) {
+      for (const address of [
+        engagement.companyAddress,
+        engagement.recruiterAddress,
+      ]) {
         await this.notifications.notifyUser(
           address,
           NotificationType.DISPUTE_RESOLVED,
-          `Dispute ${approved ? 'approved' : 'rejected'}`,
-          `The dispute on milestone ${milestoneIndex} (${engagementId}) was ${approved ? 'approved — payment released' : 'rejected — recruiter must resubmit proof'}.`,
+          `Dispute ${approved ? "approved" : "rejected"}`,
+          `The dispute on milestone ${milestoneIndex} (${engagementId}) was ${approved ? "approved — payment released" : "rejected — recruiter must resubmit proof"}.`,
           { engagementId, milestoneIndex, approved },
         );
       }
 
       // Trigger Outgoing Webhook Event
       await this.dispatchWebhookIfConfigured(engagement.companyAddress, {
-        event: approved ? 'COMPLETED' : 'PAYMENT_RELEASED',
+        event: approved ? "COMPLETED" : "PAYMENT_RELEASED",
         engagementId: String(engagementId),
         status: engagement.status,
       });
@@ -353,7 +439,7 @@ export class EventsService implements OnModuleInit {
 
     await (tx || this.prisma).engagement.update({
       where: { id: engagementId },
-      data: { status: 'REPLACEMENT_REQUESTED' },
+      data: { status: "REPLACEMENT_REQUESTED" },
     });
 
     const engagement = await (tx || this.prisma).engagement.findUnique({
@@ -363,16 +449,16 @@ export class EventsService implements OnModuleInit {
       await this.notifications.notifyUser(
         engagement.recruiterAddress,
         NotificationType.REPLACEMENT_REQUESTED,
-        'Replacement requested',
+        "Replacement requested",
         `The company has requested a replacement candidate for engagement ${engagementId}. Please submit proof for the new placement when ready.`,
         { engagementId },
       );
 
       // Trigger Outgoing Webhook Event
       await this.dispatchWebhookIfConfigured(engagement.companyAddress, {
-        event: 'REPLACEMENT_REQUESTED',
+        event: "REPLACEMENT_REQUESTED",
         engagementId: engagementId,
-        status: 'REPLACEMENT_REQUESTED',
+        status: "REPLACEMENT_REQUESTED",
       });
     }
   }
@@ -383,7 +469,7 @@ export class EventsService implements OnModuleInit {
 
     await (tx || this.prisma).engagement.update({
       where: { id: String(engagementId) },
-      data: { status: 'CANCELLED' },
+      data: { status: "CANCELLED" },
     });
 
     const engagement = await (tx || this.prisma).engagement.findUnique({
@@ -393,16 +479,16 @@ export class EventsService implements OnModuleInit {
       await this.notifications.notifyUser(
         engagement.recruiterAddress,
         NotificationType.ENGAGEMENT_CANCELLED,
-        'Engagement cancelled',
+        "Engagement cancelled",
         `Engagement ${engagementId} has been cancelled by the company. No further payments will be made.`,
         { engagementId },
       );
 
       // Trigger Outgoing Webhook Event
       await this.dispatchWebhookIfConfigured(engagement.companyAddress, {
-        event: 'CANCELLED',
+        event: "CANCELLED",
         engagementId: String(engagementId),
-        status: 'CANCELLED',
+        status: "CANCELLED",
       });
     }
   }
@@ -414,14 +500,18 @@ export class EventsService implements OnModuleInit {
   private extractEventName(event: any): string {
     try {
       const topics = event.topic ?? [];
-      return topics[0]?.toString() ?? 'unknown';
-    } catch { return 'unknown'; }
+      return topics[0]?.toString() ?? "unknown";
+    } catch {
+      return "unknown";
+    }
   }
 
   private extractPayload(event: any): any {
     try {
       return event.value ? JSON.parse(JSON.stringify(event.value)) : null;
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   }
 
   private destructurePayload(payload: any): any[] {
@@ -432,20 +522,24 @@ export class EventsService implements OnModuleInit {
   private async saveRawEvent(eventName: string, event: any, payload: any) {
     try {
       const engagementId = Array.isArray(payload)
-        ? typeof payload[0] === 'string' ? payload[0] : null
-        : typeof payload === 'string' ? payload : null;
+        ? typeof payload[0] === "string"
+          ? payload[0]
+          : null
+        : typeof payload === "string"
+          ? payload
+          : null;
 
       return await this.prisma.chainEvent.create({
         data: {
           eventName,
           ledger: event.ledger ?? 0,
-          txHash: event.txHash ?? '',
+          txHash: event.txHash ?? "",
           payload: payload ?? {},
           engagementId: engagementId || undefined,
         },
       });
     } catch (error) {
-      this.logger.error('Failed to save raw event', error.message);
+      this.logger.error("Failed to save raw event", error.message);
       throw error;
     }
   }
@@ -487,16 +581,19 @@ export class EventsService implements OnModuleInit {
         cursor: { id: cursor },
         skip: 1,
         take: limit + 1,
-        orderBy: { ledger: 'desc' },
+        orderBy: { ledger: "desc" },
       });
       const pageResult = cursorPage(events, limit);
-      return { data: pageResult.data, meta: { limit, nextCursor: pageResult.nextCursor } };
+      return {
+        data: pageResult.data,
+        meta: { limit, nextCursor: pageResult.nextCursor },
+      };
     }
 
     const [events, total] = await this.prisma.$transaction([
       this.prisma.chainEvent.findMany({
         where,
-        orderBy: { ledger: 'desc' },
+        orderBy: { ledger: "desc" },
         skip: (page - 1) * limit,
         take: limit,
       }),

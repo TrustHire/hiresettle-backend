@@ -135,6 +135,8 @@ model User {
   locale         String         @default("en") // email template locale, falls back to English (#281)
   allowedCustomFields String[]  @default([]) // COMPANY only: permitted keys for engagement customFields
   slackWebhookUrl String?       // Slack incoming-webhook URL for notification alerts (#277)
+  discordWebhookUrl String?     // Discord incoming-webhook URL for notification alerts (#278)
+  batchWindowSeconds Int        @default(60) // notification batching window in seconds (#279)
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
@@ -426,10 +428,11 @@ model Refund {
 
 // Webhook subscriptions managed per-company via the API.
 model WebhookSubscription {
-  id        String   @id @default(uuid())
-  companyId String
-  url       String
-  createdAt DateTime @default(now())
+  id         String   @id @default(uuid())
+  companyId  String
+  url        String
+  eventTypes String[] @default([]) // empty = all events; non-empty = only matching event types (#275)
+  createdAt  DateTime @default(now())
 
   @@index([companyId])
   @@map("webhook_subscriptions")
@@ -714,6 +717,23 @@ model SavedFilter {
   @@unique([userId, name])
   @@index([userId])
   @@map("saved_filters")
+}
+
+// Groups same-type notifications for the same user within a batching window
+// so multiple rapid-fire events produce a single delivery (#279).
+model NotificationBatch {
+  id        String           @id @default(uuid())
+  userId    String
+  type      NotificationType
+  count     Int              @default(1)
+  firstData Json?            // data from the first event in the batch
+  flushedAt DateTime?        // set when the batch has been delivered
+  expiresAt DateTime         // end of the batching window
+  createdAt DateTime         @default(now())
+
+  @@index([userId, type, flushedAt])
+  @@index([expiresAt])
+  @@map("notification_batches")
 }
 
 // Caches responses for requests submitted with an Idempotency-Key header so
