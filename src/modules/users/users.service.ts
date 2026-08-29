@@ -184,4 +184,22 @@ export class UsersService {
 
     return this.updateAvatar(userId, cdnUrl);
   }
+
+  async getCustomFieldsConfig(userId: string): Promise<{ allowedCustomFields: string[] }> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { allowedCustomFields: true },
+    });
+    if (!user) throw new NotFoundException('User not found');
+    return { allowedCustomFields: user.allowedCustomFields };
+  }
+
+  async updateCustomFieldsConfig(userId: string, allowedCustomFields: string[]): Promise<{ allowedCustomFields: string[] }> {
+    const user = await this.prisma.user.update({
+      where: { id: userId },
+      data: { allowedCustomFields },
+      select: { allowedCustomFields: true },
+    });
+    return { allowedCustomFields: user.allowedCustomFields };
+  }
 }
