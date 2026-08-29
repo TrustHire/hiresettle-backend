@@ -104,6 +104,7 @@ model User {
   role           UserRole       @default(COMPANY)
   webhookUrl     String?
   webhookSecret  String?        // HMAC-SHA256 signing secret, generated when webhookUrl is first set
+  timezone       String?        @default("UTC") // recipient local timezone for scheduling notifications
   rateLimitOverride Int?        // custom per-user request limit for UserJwtSubThrottlerGuard; falls back to default when unset
   avatarUrl      String?        // CDN URL for user avatar
   verifiedAt     DateTime?      // Set by an admin after company verification
