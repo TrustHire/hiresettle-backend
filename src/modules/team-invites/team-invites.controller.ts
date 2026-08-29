@@ -10,6 +10,7 @@ import {
   Query,
   Request,
   UseGuards,
+  BadRequestException,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -26,11 +27,15 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { TeamInvitesService } from './team-invites.service';
 import { SendInviteDto } from './dto/send-invite.dto';
 import { AcceptInviteDto } from './dto/accept-invite.dto';
+import { FeatureFlagsService } from '../feature-flags/feature-flags.service';
 
 @ApiTags('team-invites')
 @Controller('team-invites')
 export class TeamInvitesController {
-  constructor(private readonly teamInvitesService: TeamInvitesService) {}
+  constructor(
+    private readonly teamInvitesService: TeamInvitesService,
+    private readonly featureFlagsService: FeatureFlagsService,
+  ) {}
 
   /**
    * POST /team-invites — Send an invite to a teammate (COMPANY only).
@@ -46,7 +51,11 @@ export class TeamInvitesController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Forbidden — only COMPANY users may invite' })
   @ApiResponse({ status: 409, description: 'Email already registered' })
-  sendInvite(@Request() req: any, @Body() dto: SendInviteDto) {
+  async sendInvite(@Request() req: any, @Body() dto: SendInviteDto) {
+    const isEnabled = await this.featureFlagsService.isEnabled('team_invites');
+    if (!isEnabled) {
+      throw new BadRequestException('Team invites feature is currently disabled');
+    }
     return this.teamInvitesService.sendInvite(req.user.id, dto);
   }
 

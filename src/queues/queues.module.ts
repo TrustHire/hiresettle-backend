@@ -3,24 +3,27 @@ import { BullModule } from '@nestjs/bullmq';
 import { EmailProcessor } from './email.processor';
 import { StellarTxProcessor } from './stellar-tx.processor';
 import { WebhookProcessor } from './webhook.processor';
+import { SlackProcessor } from './slack.processor';
 import { NotificationsModule } from '../modules/notifications/notifications.module';
 import { StellarModule } from '../common/stellar/stellar.module';
 
 export const QUEUE_EMAIL = 'email';
 export const QUEUE_STELLAR_TX = 'stellar-tx';
 export const QUEUE_WEBHOOK = 'webhook';
+export const QUEUE_SLACK = 'slack';
 
 // Shared retry defaults — imported by any module that registers a queue
 export const emailQueueOptions = { name: QUEUE_EMAIL, defaultJobOptions: { attempts: 3, backoff: { type: 'exponential', delay: 2000 } } };
 export const stellarTxQueueOptions = { name: QUEUE_STELLAR_TX, defaultJobOptions: { attempts: 5, backoff: { type: 'exponential', delay: 5000 } } };
 export const webhookQueueOptions = { name: QUEUE_WEBHOOK, defaultJobOptions: { attempts: 3, backoff: { type: 'exponential', delay: 2000 } } };
+export const slackQueueOptions = { name: QUEUE_SLACK, defaultJobOptions: { attempts: 3, backoff: { type: 'exponential', delay: 2000 } } };
 
 @Module({
   imports: [
-    BullModule.registerQueue(emailQueueOptions, stellarTxQueueOptions, webhookQueueOptions),
+    BullModule.registerQueue(emailQueueOptions, stellarTxQueueOptions, webhookQueueOptions, slackQueueOptions),
     NotificationsModule,
     StellarModule,
   ],
-  providers: [EmailProcessor, StellarTxProcessor, WebhookProcessor],
+  providers: [EmailProcessor, StellarTxProcessor, WebhookProcessor, SlackProcessor],
 })
 export class QueuesModule {}

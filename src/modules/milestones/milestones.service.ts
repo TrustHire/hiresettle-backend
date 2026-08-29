@@ -416,17 +416,8 @@ export class MilestonesService {
     if (!approved) {
       await this.prisma.refund.upsert({
         where: { milestoneId: milestone.id },
-        update: {
-          amount: BigInt(milestone.amount ?? 0),
-          status: 'PENDING',
-          reason: 'Resolved dispute in favor of the company',
-        },
-        create: {
-          milestoneId: milestone.id,
-          amount: BigInt(milestone.amount ?? 0),
-          status: 'PENDING',
-          reason: 'Resolved dispute in favor of the company',
-        },
+        update: { amount: BigInt(milestone.amount ?? 0), status: 'PENDING', reason: 'Resolved dispute in favor of the company' },
+        create: { milestoneId: milestone.id, amount: BigInt(milestone.amount ?? 0), status: 'PENDING', reason: 'Resolved dispute in favor of the company' },
       });
     }
 

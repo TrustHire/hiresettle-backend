@@ -35,6 +35,7 @@ import { TeamInvitesModule } from './modules/team-invites/team-invites.module';
 import { GraphqlModule } from './graphql/graphql.module';
 import stellarConfig from './config/stellar.config';
 import { MaintenanceModeModule } from './common/maintenance/maintenance-mode.module';
+import { FeatureFlagsModule } from './modules/feature-flags/feature-flags.module';
 
 @Module({
   imports: [
@@ -81,6 +82,7 @@ import { MaintenanceModeModule } from './common/maintenance/maintenance-mode.mod
     BillingModule,
     TeamInvitesModule,
     GraphqlModule,
+    FeatureFlagsModule,
   ],
 })
 export class AppModule implements NestModule {

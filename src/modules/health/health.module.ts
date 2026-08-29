@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { HealthController } from './health.controller';
 import { HealthService } from './health.service';
 import { QueueHealthIndicator } from './queue-health.indicator';
+import { StatusController } from './status.controller';
 import { TerminusModule } from '@nestjs/terminus';
 import { BullModule } from '@nestjs/bullmq';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -13,7 +14,7 @@ import { QUEUE_EMAIL } from '../../queues/queues.module';
     TerminusModule,
     BullModule.registerQueue({ name: QUEUE_EMAIL }),
   ],
-  controllers: [HealthController],
+  controllers: [HealthController, StatusController],
   providers: [HealthService, QueueHealthIndicator, PrismaService, StellarService],
 })
 export class HealthModule {}

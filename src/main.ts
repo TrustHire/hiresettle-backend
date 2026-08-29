@@ -2,6 +2,7 @@ import './tracing';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger, RequestMethod } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import * as express from 'express';
 import { ConfigService } from '@nestjs/config';
 import helmet from 'helmet';
 import * as Sentry from '@sentry/node';
@@ -18,6 +19,7 @@ import { MetricsService } from './metrics/metrics.service';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  app.use('/webhooks/billing', express.raw({ type: 'application/json' }));
   const logger = app.get(WINSTON_MODULE_NEST_PROVIDER);
   app.useLogger(logger);
 
@@ -173,6 +175,7 @@ async function bootstrap() {
         new BullMQAdapter(new Queue('email', { connection })),
         new BullMQAdapter(new Queue('stellar-tx', { connection })),
         new BullMQAdapter(new Queue('webhook', { connection })),
+        new BullMQAdapter(new Queue('slack', { connection })),
       ],
       serverAdapter,
     });

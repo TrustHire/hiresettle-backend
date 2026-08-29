@@ -15,24 +15,25 @@ export class PrismaService
   implements OnModuleInit, OnModuleDestroy
 {
   private readonly logger = new Logger(PrismaService.name);
+  public readonly replica: PrismaClient;
 
   constructor(
     @Optional() private readonly metrics?: MetricsService,
     @Optional() private readonly configService?: ConfigService,
   ) {
-    super({
+    const prismaOptions = {
       log: [
         {
-          emit: 'event',
-          level: 'query',
+          emit: 'event' as const,
+          level: 'query' as const,
         },
         {
-          emit: 'stdout',
-          level: 'error',
+          emit: 'stdout' as const,
+          level: 'error' as const,
         },
         {
-          emit: 'stdout',
-          level: 'warn',
+          emit: 'stdout' as const,
+          level: 'warn' as const,
         },
       ],
       // Configure connection pooling for production
@@ -51,41 +52,74 @@ export class PrismaService
           },
         }),
       }),
-    });
+    };
+    super(prismaOptions);
 
-    // Setup query logging in development
-    if (configService?.get('NODE_ENV') === 'development') {
-      this.$on('query' as never, (event: any) => {
-        this.logger.debug(`Query: ${event.query} | Duration: ${event.duration}ms`);
+    const replicaUrl = configService?.get<string>('DATABASE_REPLICA_URL');
+    if (replicaUrl) {
+      this.logger.log('Initializing database replica client');
+      this.replica = new PrismaClient({
+        ...prismaOptions,
+        datasources: {
+          db: {
+            url: replicaUrl,
+          },
+        },
       });
+    } else {
+      this.replica = this;
     }
 
-    // Setup slow query logging in all environments
-    this.$on('query' as never, (event: any) => {
-      if (event.duration > 500) {
-        this.logger.warn(`Slow query detected: ${event.query} | Duration: ${event.duration}ms`);
+    const setupLogging = (client: any, prefix: string) => {
+      // Setup query logging in development
+      if (configService?.get('NODE_ENV') === 'development') {
+        client.$on('query', (event: any) => {
+          this.logger.debug(`[${prefix}] Query: ${event.query} | Duration: ${event.duration}ms`);
+        });
       }
-    });
+  
+      // Setup slow query logging in all environments
+      client.$on('query', (event: any) => {
+        if (event.duration > 500) {
+          this.logger.warn(`[${prefix}] Slow query detected: ${event.query} | Duration: ${event.duration}ms`);
+        }
+      });
+    };
+
+    setupLogging(this, 'Primary');
+    if (this.replica !== this) {
+      setupLogging(this.replica, 'Replica');
+    }
   }
 
   async onModuleInit() {
     if (this.metrics) {
-      this.$use(async (params, next) => {
-        const start = Date.now();
-        const result = await next(params);
-        const duration = Date.now() - start;
-        this.metrics!.recordDbQuery(params.model ?? 'unknown', params.action, duration);
-        
-        // Log slow queries for monitoring
-        if (duration > 500) {
-          this.logger.warn(`Slow query detected: ${params.model}.${params.action} took ${duration}ms`);
-        }
-        
-        return result;
-      });
+      const setupMetrics = (client: any, prefix: string) => {
+        client.$use(async (params: any, next: any) => {
+          const start = Date.now();
+          const result = await next(params);
+          const duration = Date.now() - start;
+          this.metrics!.recordDbQuery(params.model ?? 'unknown', params.action, duration);
+          
+          // Log slow queries for monitoring
+          if (duration > 500) {
+            this.logger.warn(`[${prefix}] Slow query detected: ${params.model}.${params.action} took ${duration}ms`);
+          }
+          
+          return result;
+        });
+      };
+      
+      setupMetrics(this, 'Primary');
+      if (this.replica !== this) {
+        setupMetrics(this.replica, 'Replica');
+      }
     }
     
     await this.$connect();
+    if (this.replica !== this) {
+      await this.replica.$connect();
+    }
     
     // Log connection pool information
     const poolMin = this.configService?.get<number>('DATABASE_POOL_MIN', 2);
@@ -95,5 +129,8 @@ export class PrismaService
 
   async onModuleDestroy() {
     await this.$disconnect();
+    if (this.replica !== this) {
+      await this.replica.$disconnect();
+    }
   }
 }

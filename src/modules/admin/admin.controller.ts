@@ -397,6 +397,7 @@ export class AdminController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Mark a refund as completed' })
   @ApiResponse({ status: 200, description: 'Refund updated' })
+  @ApiResponse({ status: 404, description: 'Refund not found' })
   async completeRefund(@Param('id') id: string) {
     return this.prisma.refund.update({
       where: { id },
@@ -406,28 +407,15 @@ export class AdminController {
 
   @Post('disputes/:id/refund')
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Record a refund tied to a resolved dispute' })
+  @ApiOperation({ summary: 'Record a refund for a dispute resolved in favor of the company' })
   @ApiResponse({ status: 201, description: 'Refund recorded' })
-  async createDisputeRefund(
-    @Param('id') id: string,
-    @Body() dto: { amount?: number | string; reason?: string } = {},
-  ) {
+  async createDisputeRefund(@Param('id') id: string, @Body() dto?: { amount?: number | string; reason?: string }) {
     const milestone = await this.prisma.milestone.findUnique({ where: { id } });
     if (!milestone) throw new Error('Milestone not found');
-
     return this.prisma.refund.upsert({
       where: { milestoneId: milestone.id },
-      update: {
-        amount: BigInt(dto.amount ?? milestone.amount ?? 0),
-        status: 'PENDING',
-        reason: dto.reason ?? 'Dispute resolved in favor of the company',
-      },
-      create: {
-        milestoneId: milestone.id,
-        amount: BigInt(dto.amount ?? milestone.amount ?? 0),
-        status: 'PENDING',
-        reason: dto.reason ?? 'Dispute resolved in favor of the company',
-      },
+      update: { amount: BigInt(dto?.amount ?? milestone.amount ?? 0), status: 'PENDING', reason: dto?.reason ?? 'Dispute resolved in favor of the company' },
+      create: { milestoneId: milestone.id, amount: BigInt(dto?.amount ?? milestone.amount ?? 0), status: 'PENDING', reason: dto?.reason ?? 'Dispute resolved in favor of the company' },
     });
   }
 
