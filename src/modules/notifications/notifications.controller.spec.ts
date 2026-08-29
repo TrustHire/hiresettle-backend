@@ -16,6 +16,8 @@ describe('NotificationsController', () => {
     markAllRead: jest.fn(),
     addConnection: jest.fn(),
     removeConnection: jest.fn(),
+    getDigestPreference: jest.fn(),
+    setDigestPreference: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -92,6 +94,30 @@ describe('NotificationsController', () => {
 
       expect(service.markAllRead).toHaveBeenCalledWith(userId);
       expect(result).toEqual({ count: 3 });
+    });
+  });
+
+  describe('getDigestPreference', () => {
+    it('should return the digest opt-in status', async () => {
+      const userId = 'user123';
+      mockNotificationsService.getDigestPreference.mockResolvedValue({ digestEnabled: true });
+
+      const result = await controller.getDigestPreference(userId);
+
+      expect(service.getDigestPreference).toHaveBeenCalledWith(userId);
+      expect(result).toEqual({ digestEnabled: true });
+    });
+  });
+
+  describe('updateDigestPreference', () => {
+    it('should update the digest opt-in status', async () => {
+      const userId = 'user123';
+      mockNotificationsService.setDigestPreference.mockResolvedValue({ digestEnabled: false });
+
+      const result = await controller.updateDigestPreference(userId, { digestEnabled: false });
+
+      expect(service.setDigestPreference).toHaveBeenCalledWith(userId, false);
+      expect(result).toEqual({ digestEnabled: false });
     });
   });
 

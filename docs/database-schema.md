@@ -167,6 +167,7 @@ Represents every authenticated platform user, including companies, recruiters, a
 | avatarUrl | User avatar |
 | slackWebhookUrl | Slack incoming-webhook URL for notification alerts (#277) |
 | deactivatedAt | Soft delete timestamp |
+| digestEnabled | Weekly digest email opt-in (#276) |
 
 ## Relationships
 

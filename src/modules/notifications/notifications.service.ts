@@ -197,6 +197,37 @@ export class NotificationsService {
     );
   }
 
+  async getDigestPreference(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { digestEnabled: true },
+    });
+    return { digestEnabled: user?.digestEnabled ?? false };
+  }
+
+  async setDigestPreference(userId: string, digestEnabled: boolean) {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { digestEnabled },
+    });
+    return { digestEnabled };
+  }
+
+  /**
+   * Send a pre-rendered weekly digest email. Renders inline HTML (no
+   * notification-type template) and rethrows on failure so callers can
+   * track per-user send errors.
+   */
+  async sendDigestEmail(to: string, subject: string, html: string) {
+    await this.transporter.sendMail({
+      from: this.config.get('EMAIL_FROM') ?? 'noreply@hiresettle.com',
+      to,
+      subject,
+      html,
+    });
+    this.logger.log(`Digest email sent to ${to}: ${subject}`);
+  }
+
   async findForUser(userId: string, unreadOnly = false, page = 1, limit = 20, cursor?: string) {
     const where: any = { userId };
     if (unreadOnly) where.read = false;
