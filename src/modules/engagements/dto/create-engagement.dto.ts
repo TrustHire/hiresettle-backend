@@ -1,9 +1,31 @@
 import {
   IsString, IsNotEmpty, IsArray, ValidateNested,
-  IsInt, Min, Max, IsOptional, IsIn,
+  IsInt, Min, Max, IsOptional, IsIn, registerDecorator, ValidationOptions, ValidationArguments,
+  ArrayMaxSize, IsDateString,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
+
+export function MilestonesSum100(validationOptions?: ValidationOptions) {
+  return function (object: Object, propertyName: string) {
+    registerDecorator({
+      name: 'milestonesSum100',
+      target: object.constructor,
+      propertyName: propertyName,
+      options: validationOptions,
+      validator: {
+        validate(value: any, args: ValidationArguments) {
+          if (!Array.isArray(value)) return false;
+          const sum = value.reduce((acc, m) => acc + (m.paymentPercent || 0), 0);
+          return sum === 100;
+        },
+        defaultMessage(args: ValidationArguments) {
+          return 'Milestone paymentPercent values must sum to exactly 100';
+        },
+      },
+    });
+  };
+}
 
 export class MilestoneInputDto {
   @ApiProperty({ example: 'Candidate Placed' })
@@ -17,6 +39,15 @@ export class MilestoneInputDto {
   @ApiProperty({ example: 'PLACEMENT', enum: ['PLACEMENT', 'RETENTION'] })
   @IsIn(['PLACEMENT', 'RETENTION'])
   kind: 'PLACEMENT' | 'RETENTION';
+
+  @ApiProperty({
+    required: false,
+    example: '2026-10-01',
+    description: 'ISO date — expected proof-submission date for PLACEMENT milestones. Used by the placement reminder scheduler (#260).',
+  })
+  @IsOptional()
+  @IsDateString()
+  placementDueAt?: string;
 }
 
 export class CreateEngagementDto {
@@ -44,9 +75,13 @@ export class CreateEngagementDto {
   @IsString() @IsNotEmpty()
   totalAmount: string;
 
-  @ApiProperty({ example: 'Senior Software Engineer' })
-  @IsString() @IsNotEmpty()
-  jobTitle: string;
+  @ApiProperty({ required: false, example: 'template-id' })
+  @IsOptional() @IsString()
+  templateId?: string;
+
+  @ApiProperty({ example: 'Senior Software Engineer', required: false })
+  @IsOptional() @IsString()
+  jobTitle?: string;
 
   @ApiProperty({ required: false })
   @IsOptional() @IsString()
@@ -60,11 +95,11 @@ export class CreateEngagementDto {
   @IsOptional() @IsString()
   location?: string;
 
-  @ApiProperty({ type: [MilestoneInputDto] })
-  @IsArray()
+  @ApiProperty({ type: [MilestoneInputDto], required: false })
+  @IsOptional() @IsArray()
   @ValidateNested({ each: true })
   @Type(() => MilestoneInputDto)
-  milestones: MilestoneInputDto[];
+  milestones?: MilestoneInputDto[];
 
   @ApiProperty({
     required: false,
@@ -76,11 +111,9 @@ export class CreateEngagementDto {
   @IsArray()
   retentionDays?: number[];
 
-  @ApiProperty({ required: false })
-  @IsOptional() @IsString()
-  txHash?: string;
-
-  @ApiProperty({ required: false })
-  @IsOptional() @IsInt()
-  createdLedger?: number;
+  @ApiProperty({ required: false, example: 1, description: 'Number of distinct approvals required before a milestone can be confirmed' })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  requiredApprovals?: number;
 }

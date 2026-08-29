@@ -5,27 +5,20 @@ import { StellarService } from '../../common/stellar/stellar.service';
 import { MilestonesService } from '../milestones/milestones.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { EngagementsService } from '../engagements/engagements.service';
+import { WebhooksService } from '../webhooks/webhooks.service';
 import { NotificationType } from '@prisma/client';
+import { cursorPage } from '../../common/pagination/cursor-pagination';
 
 /**
  * EventsService
  *
  * Polls the Stellar RPC every 5 seconds for HireSettle contract events.
  * When events are detected:
- *   1. Routes each event to the correct handler
- *   2. Updates Prisma DB records (engagement status, milestone status)
- *   3. Dispatches notifications to company, recruiter, or arbiter
- *   4. Saves raw event to chain_events for audit trail
- *
- * HireSettle events (from the contract):
- *   - engagement_created
- *   - milestone_unlocked
- *   - proof_submitted
- *   - milestone_confirmed
- *   - dispute_raised
- *   - dispute_resolved
- *   - replacement_requested
- *   - engagement_cancelled
+ * 1. Routes each event to the correct handler
+ * 2. Updates Prisma DB records (engagement status, milestone status)
+ * 3. Dispatches notifications to company, recruiter, or arbiter
+ * 4. Dispatches background HTTP webhooks to company-registered URLs
+ * 5. Saves raw event to chain_events for audit trail
  */
 @Injectable()
 export class EventsService implements OnModuleInit {
@@ -38,6 +31,7 @@ export class EventsService implements OnModuleInit {
     private readonly milestones: MilestonesService,
     private readonly notifications: NotificationsService,
     private readonly engagements: EngagementsService,
+    private readonly webhooks: WebhooksService,
   ) {}
 
   async onModuleInit() {
@@ -79,19 +73,107 @@ export class EventsService implements OnModuleInit {
   private async processEvent(event: any) {
     const eventName = this.extractEventName(event);
     const payload = this.extractPayload(event);
+    const txHash = event.txHash ?? '';
 
-    await this.saveRawEvent(eventName, event, payload);
+    // Idempotency check: check if we already processed this txHash
+    const existingEvent = await this.prisma.chainEvent.findFirst({
+      where: { txHash, processed: true }
+    });
+    if (existingEvent) {
+      this.logger.log(`Event with txHash ${txHash} already processed — skipping`);
+      return;
+    }
 
-    switch (eventName) {
-      case 'engagement_created':    return this.handleEngagementCreated(payload);
-      case 'milestone_unlocked':    return this.handleMilestoneUnlocked(payload);
-      case 'proof_submitted':       return this.handleProofSubmitted(payload);
-      case 'milestone_confirmed':   return this.handleMilestoneConfirmed(payload);
-      case 'dispute_raised':        return this.handleDisputeRaised(payload);
-      case 'dispute_resolved':      return this.handleDisputeResolved(payload);
-      case 'replacement_requested': return this.handleReplacementRequested(payload);
-      case 'engagement_cancelled':  return this.handleEngagementCancelled(payload);
-      default: this.logger.warn(`Unknown event: ${eventName}`);
+    // Save or get the ChainEvent
+    let chainEvent = await this.prisma.chainEvent.findFirst({
+      where: { txHash, eventName }
+    });
+    if (!chainEvent) {
+      chainEvent = await this.saveRawEvent(eventName, event, payload);
+    }
+
+    if (chainEvent.processed) {
+      return;
+    }
+
+    // Process the event inside a transaction
+    await this.prisma.$transaction(async (tx) => {
+      // Handle the event with our existing handlers
+      switch (eventName) {
+        case 'engagement_created':    await this.handleEngagementCreated(payload, tx); break;
+        case 'milestone_unlocked':    await this.handleMilestoneUnlocked(payload, tx); break;
+        case 'proof_submitted':       await this.handleProofSubmitted(payload, tx); break;
+        case 'milestone_confirmed':   await this.handleMilestoneConfirmed(payload, tx); break;
+        case 'dispute_raised':        await this.handleDisputeRaised(payload, tx); break;
+        case 'dispute_resolved':      await this.handleDisputeResolved(payload, tx); break;
+        case 'replacement_requested': await this.handleReplacementRequested(payload, tx); break;
+        case 'engagement_cancelled':  await this.handleEngagementCancelled(payload, tx); break;
+        default: this.logger.warn(`Unknown event: ${eventName}`);
+      }
+
+      // Mark ChainEvent as processed
+      await tx.chainEvent.update({
+        where: { id: chainEvent.id },
+        data: { processed: true }
+      });
+    });
+  }
+
+  async processUnprocessedEvents() {
+    const unprocessedEvents = await this.prisma.chainEvent.findMany({
+      where: { processed: false },
+      orderBy: { ledger: 'asc' }
+    });
+
+    for (const chainEvent of unprocessedEvents) {
+      try {
+        // Create a pseudo-event object from the stored ChainEvent
+        const pseudoEvent = {
+          ledger: chainEvent.ledger,
+          txHash: chainEvent.txHash,
+          topic: [chainEvent.eventName],
+          value: chainEvent.payload
+        };
+
+        // Process it (reuses existing logic)
+        await this.processEvent(pseudoEvent);
+        this.logger.log(`Processed unprocessed event: ${chainEvent.id} (${chainEvent.eventName})`);
+      } catch (error) {
+        this.logger.error(`Failed to process unprocessed event ${chainEvent.id}`, error.message);
+      }
+    }
+  }
+
+  // ----------------------------------------------------------
+  // WEBHOOK DISPATCH HELPER
+  // ----------------------------------------------------------
+
+  private async dispatchWebhookIfConfigured(
+    companyAddress: string,
+    eventDetails: {
+      event: 'COMPLETED' | 'CANCELLED' | 'REPLACEMENT_REQUESTED' | 'DISPUTE_RAISED' | 'PAYMENT_RELEASED';
+      engagementId: string;
+      status: string;
+    }
+  ) {
+    try {
+      const companyUser = await this.prisma.user.findFirst({
+        where: { stellarAddress: companyAddress },
+        select: { id: true, webhookUrl: true, webhookSecret: true },
+      });
+
+      await this.webhooks.sendWebhook(
+        companyUser?.webhookUrl,
+        {
+          event: eventDetails.event,
+          engagementId: eventDetails.engagementId,
+          status: eventDetails.status,
+          timestamp: new Date().toISOString(),
+        },
+        { userId: companyUser?.id, secret: companyUser?.webhookSecret },
+      );
+    } catch (err) {
+      this.logger.error(`Webhook runtime dispatcher encounter error for engagement ${eventDetails.engagementId}:`, err.message);
     }
   }
 
@@ -99,26 +181,39 @@ export class EventsService implements OnModuleInit {
   // EVENT HANDLERS
   // ----------------------------------------------------------
 
-  private async handleEngagementCreated(payload: any) {
+  private async handleEngagementCreated(payload: any, tx?: any) {
     const engagementId = String(payload);
     this.logger.log(`Engagement created on-chain: ${engagementId}`);
-    // The record is created by POST /engagements from the frontend.
-    // This handler is a safety net in case the frontend call was missed.
+    
+    // We already create engagement in EngagementsService.create, so just sync if needed
+    await this.engagements.syncFromChain(engagementId);
+
+    const engagement = await (tx || this.prisma).engagement.findUnique({
+      where: { id: engagementId },
+    });
+    if (engagement) {
+      await this.notifications.notifyUser(
+        engagement.recruiterAddress,
+        NotificationType.ENGAGEMENT_CREATED,
+        'New engagement created',
+        `A new engagement (${engagementId}) has been created for you.`,
+        { engagementId },
+      );
+    }
   }
 
-  private async handleMilestoneUnlocked(payload: any) {
+  private async handleMilestoneUnlocked(payload: any, tx?: any) {
     const [engagementId, milestoneIndex] = this.destructurePayload(payload);
     this.logger.log(`Milestone unlocked: ${engagementId}[${milestoneIndex}]`);
 
     await this.milestones.markUnlocked(String(engagementId), Number(milestoneIndex));
 
-    // Mark the retention schedule as unlocked
-    await this.prisma.retentionSchedule.updateMany({
+    await (tx || this.prisma).retentionSchedule.updateMany({
       where: { engagementId: String(engagementId), milestoneIndex: Number(milestoneIndex) },
       data: { unlocked: true },
     });
 
-    const engagement = await this.prisma.engagement.findUnique({
+    const engagement = await (tx || this.prisma).engagement.findUnique({
       where: { id: String(engagementId) },
     });
     if (engagement) {
@@ -132,7 +227,7 @@ export class EventsService implements OnModuleInit {
     }
   }
 
-  private async handleProofSubmitted(payload: any) {
+  private async handleProofSubmitted(payload: any, tx?: any) {
     const [engagementId, milestoneIndex] = this.destructurePayload(payload);
     this.logger.log(`Proof submitted: ${engagementId}[${milestoneIndex}]`);
 
@@ -140,7 +235,7 @@ export class EventsService implements OnModuleInit {
       String(engagementId), Number(milestoneIndex), '',
     );
 
-    const engagement = await this.prisma.engagement.findUnique({
+    const engagement = await (tx || this.prisma).engagement.findUnique({
       where: { id: String(engagementId) },
     });
     if (engagement) {
@@ -154,7 +249,7 @@ export class EventsService implements OnModuleInit {
     }
   }
 
-  private async handleMilestoneConfirmed(payload: any) {
+  private async handleMilestoneConfirmed(payload: any, tx?: any) {
     const [engagementId, milestoneIndex, paymentAmount] = this.destructurePayload(payload);
     this.logger.log(`Milestone confirmed: ${engagementId}[${milestoneIndex}] — ${paymentAmount} released`);
 
@@ -166,7 +261,7 @@ export class EventsService implements OnModuleInit {
 
     await this.engagements.syncFromChain(String(engagementId));
 
-    const engagement = await this.prisma.engagement.findUnique({
+    const engagement = await (tx || this.prisma).engagement.findUnique({
       where: { id: String(engagementId) },
     });
     if (engagement) {
@@ -178,16 +273,23 @@ export class EventsService implements OnModuleInit {
         `$${usdcAmount} USDC has been released for milestone ${milestoneIndex} on engagement ${engagementId}.`,
         { engagementId, milestoneIndex, amount: usdcAmount },
       );
+
+      // Trigger Outgoing Webhook Event
+      await this.dispatchWebhookIfConfigured(engagement.companyAddress, {
+        event: 'PAYMENT_RELEASED',
+        engagementId: String(engagementId),
+        status: engagement.status,
+      });
     }
   }
 
-  private async handleDisputeRaised(payload: any) {
+  private async handleDisputeRaised(payload: any, tx?: any) {
     const [engagementId, milestoneIndex] = this.destructurePayload(payload);
     this.logger.log(`Dispute raised: ${engagementId}[${milestoneIndex}]`);
 
     await this.milestones.markDisputed(String(engagementId), Number(milestoneIndex));
 
-    const engagement = await this.prisma.engagement.findUnique({
+    const engagement = await (tx || this.prisma).engagement.findUnique({
       where: { id: String(engagementId) },
     });
     if (engagement) {
@@ -200,10 +302,17 @@ export class EventsService implements OnModuleInit {
           { engagementId, milestoneIndex },
         );
       }
+
+      // Trigger Outgoing Webhook Event
+      await this.dispatchWebhookIfConfigured(engagement.companyAddress, {
+        event: 'DISPUTE_RAISED',
+        engagementId: String(engagementId),
+        status: 'DISPUTED',
+      });
     }
   }
 
-  private async handleDisputeResolved(payload: any) {
+  private async handleDisputeResolved(payload: any, tx?: any) {
     const [engagementId, milestoneIndex, approved] = this.destructurePayload(payload);
     this.logger.log(`Dispute resolved: ${engagementId}[${milestoneIndex}] approved=${approved}`);
 
@@ -212,7 +321,7 @@ export class EventsService implements OnModuleInit {
     );
     await this.engagements.syncFromChain(String(engagementId));
 
-    const engagement = await this.prisma.engagement.findUnique({
+    const engagement = await (tx || this.prisma).engagement.findUnique({
       where: { id: String(engagementId) },
     });
     if (engagement) {
@@ -225,22 +334,29 @@ export class EventsService implements OnModuleInit {
           { engagementId, milestoneIndex, approved },
         );
       }
+
+      // Trigger Outgoing Webhook Event
+      await this.dispatchWebhookIfConfigured(engagement.companyAddress, {
+        event: approved ? 'COMPLETED' : 'PAYMENT_RELEASED',
+        engagementId: String(engagementId),
+        status: engagement.status,
+      });
     }
   }
 
-  private async handleReplacementRequested(payload: any) {
+  private async handleReplacementRequested(payload: any, tx?: any) {
     const engagementId = String(Array.isArray(payload) ? payload[0] : payload);
     this.logger.log(`Replacement requested: ${engagementId}`);
 
     const currentLedger = await this.stellar.getLatestLedger();
     await this.milestones.resetForReplacement(engagementId, currentLedger);
 
-    await this.prisma.engagement.update({
+    await (tx || this.prisma).engagement.update({
       where: { id: engagementId },
       data: { status: 'REPLACEMENT_REQUESTED' },
     });
 
-    const engagement = await this.prisma.engagement.findUnique({
+    const engagement = await (tx || this.prisma).engagement.findUnique({
       where: { id: engagementId },
     });
     if (engagement) {
@@ -251,19 +367,26 @@ export class EventsService implements OnModuleInit {
         `The company has requested a replacement candidate for engagement ${engagementId}. Please submit proof for the new placement when ready.`,
         { engagementId },
       );
+
+      // Trigger Outgoing Webhook Event
+      await this.dispatchWebhookIfConfigured(engagement.companyAddress, {
+        event: 'REPLACEMENT_REQUESTED',
+        engagementId: engagementId,
+        status: 'REPLACEMENT_REQUESTED',
+      });
     }
   }
 
-  private async handleEngagementCancelled(payload: any) {
+  private async handleEngagementCancelled(payload: any, tx?: any) {
     const [engagementId] = this.destructurePayload(payload);
     this.logger.log(`Engagement cancelled: ${engagementId}`);
 
-    await this.prisma.engagement.update({
+    await (tx || this.prisma).engagement.update({
       where: { id: String(engagementId) },
       data: { status: 'CANCELLED' },
     });
 
-    const engagement = await this.prisma.engagement.findUnique({
+    const engagement = await (tx || this.prisma).engagement.findUnique({
       where: { id: String(engagementId) },
     });
     if (engagement) {
@@ -274,6 +397,13 @@ export class EventsService implements OnModuleInit {
         `Engagement ${engagementId} has been cancelled by the company. No further payments will be made.`,
         { engagementId },
       );
+
+      // Trigger Outgoing Webhook Event
+      await this.dispatchWebhookIfConfigured(engagement.companyAddress, {
+        event: 'CANCELLED',
+        engagementId: String(engagementId),
+        status: 'CANCELLED',
+      });
     }
   }
 
@@ -305,7 +435,7 @@ export class EventsService implements OnModuleInit {
         ? typeof payload[0] === 'string' ? payload[0] : null
         : typeof payload === 'string' ? payload : null;
 
-      await this.prisma.chainEvent.create({
+      return await this.prisma.chainEvent.create({
         data: {
           eventName,
           ledger: event.ledger ?? 0,
@@ -316,15 +446,53 @@ export class EventsService implements OnModuleInit {
       });
     } catch (error) {
       this.logger.error('Failed to save raw event', error.message);
+      throw error;
     }
+  }
+
+  // ----------------------------------------------------------
+  // PUBLIC — called by ChainEventRetryService
+  // ----------------------------------------------------------
+
+  async processChainEventRecord(chainEvent: any): Promise<void> {
+    const pseudoEvent = {
+      ledger: chainEvent.ledger,
+      txHash: chainEvent.txHash,
+      topic: [chainEvent.eventName],
+      value: chainEvent.payload,
+    };
+    await this.processEvent(pseudoEvent);
   }
 
   // ----------------------------------------------------------
   // READ — for EventsController
   // ----------------------------------------------------------
 
-  async findAll(engagementId?: string, page = 1, limit = 20) {
-    const where = engagementId ? { engagementId } : {};
+  async findAll(
+    engagementId?: string,
+    eventName?: string,
+    processed?: boolean,
+    page = 1,
+    limit = 20,
+    cursor?: string,
+  ) {
+    const where: any = {};
+    if (engagementId) where.engagementId = engagementId;
+    if (eventName) where.eventName = eventName;
+    if (processed !== undefined) where.processed = processed;
+
+    if (cursor) {
+      const events = await this.prisma.chainEvent.findMany({
+        where,
+        cursor: { id: cursor },
+        skip: 1,
+        take: limit + 1,
+        orderBy: { ledger: 'desc' },
+      });
+      const pageResult = cursorPage(events, limit);
+      return { data: pageResult.data, meta: { limit, nextCursor: pageResult.nextCursor } };
+    }
+
     const [events, total] = await this.prisma.$transaction([
       this.prisma.chainEvent.findMany({
         where,

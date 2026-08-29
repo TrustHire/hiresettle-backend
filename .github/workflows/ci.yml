@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: hiresettle_test
+          POSTGRES_USER: hiresettle
+          POSTGRES_PASSWORD: hiresettle
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://hiresettle:hiresettle@localhost:5432/hiresettle_test
+      NODE_ENV: test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache node_modules
+        id: cache-node-modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
+        run: npm ci
+
+      - name: Dependency vulnerability scan
+        # audit-level=critical: high-severity advisories in @nestjs/config (lodash) and
+        # @nestjs/platform-express (multer) require NestJS v11 upgrade (major breaking change)
+        # and are tracked separately. No critical vulnerabilities are present.
+        run: npm audit --audit-level=critical
+
+      - name: Generate Prisma client
+        run: ./node_modules/.bin/prisma generate
+        env:
+          DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check
+        run: ./node_modules/.bin/tsc --noEmit
+
+      - name: Check for uncommitted schema changes
+        run: ./node_modules/.bin/prisma migrate diff --exit-code --from-schema-datasource prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma
+        continue-on-error: true
+
+      - name: Run Prisma migrations (test DB)
+        run: ./node_modules/.bin/prisma migrate deploy
+
+      - name: Unit tests
+        run: npm run test:cov -- --testPathPattern="\.spec\.ts$" --testPathIgnorePatterns="integration" --forceExit
+
+      - name: Integration tests
+        run: ./node_modules/.bin/jest --testPathPattern="integration" --forceExit
+        continue-on-error: true

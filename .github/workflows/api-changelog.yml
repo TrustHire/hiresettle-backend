@@ -1,0 +1,121 @@
+name: API Changelog
+
+# Runs on every PR targeting main. Generates the OpenAPI spec from the PR
+# branch, diffs it against the committed baseline (docs/openapi.json on main),
+# and — if anything changed — appends an entry to API_CHANGELOG.md and
+# replaces docs/openapi.json with the new spec, then commits both back to the
+# PR branch.
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write  # needed to push the changelog commit back to the PR branch
+
+jobs:
+  api-changelog:
+    name: Diff OpenAPI spec and update changelog
+    runs-on: ubuntu-latest
+
+    env:
+      DATABASE_URL: postgresql://dummy:dummy@localhost:5432/dummy
+      NODE_ENV: ci
+      JWT_SECRET: ci-generate-openapi-dummy-secret-32chars!!
+      GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          # Fetch full history so we can read the base spec from main.
+          fetch-depth: 0
+          # Check out the PR head (default for pull_request event), but we
+          # need push access so we use the GitHub token.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache node_modules
+        id: cache-node-modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: ./node_modules/.bin/prisma generate
+
+      # -----------------------------------------------------------------------
+      # Generate the OpenAPI spec from the PR branch source code.
+      # Output: docs/openapi.json (overwrites whatever was in the checkout)
+      # -----------------------------------------------------------------------
+      - name: Generate head OpenAPI spec
+        run: npm run generate:openapi
+
+      # Save the freshly generated spec aside before we restore the base.
+      - name: Stash head spec
+        run: cp docs/openapi.json docs/openapi.head.json
+
+      # -----------------------------------------------------------------------
+      # Restore the committed baseline spec from the main branch.
+      # If docs/openapi.json doesn't exist on main yet (first run), we copy the
+      # head spec to use as the base — the diff will show everything as "added".
+      # -----------------------------------------------------------------------
+      - name: Fetch base spec from main
+        run: |
+          if git show origin/main:docs/openapi.json > docs/openapi.json 2>/dev/null; then
+            echo "Base spec fetched from origin/main"
+          else
+            echo "No base spec found on main — using head spec as base (first run)"
+            cp docs/openapi.head.json docs/openapi.json
+          fi
+
+      # -----------------------------------------------------------------------
+      # Diff the two specs and append to API_CHANGELOG.md.
+      # Exit 0 whether or not there are changes — a "no changes" result is fine.
+      # -----------------------------------------------------------------------
+      - name: Diff specs and update API_CHANGELOG.md
+        run: |
+          npm run diff:openapi -- \
+            --base docs/openapi.json \
+            --head docs/openapi.head.json \
+            --out API_CHANGELOG.md
+
+      # -----------------------------------------------------------------------
+      # Replace the committed baseline with the freshly generated head spec
+      # so future PRs diff against this PR's final shape.
+      # -----------------------------------------------------------------------
+      - name: Promote head spec to baseline
+        run: cp docs/openapi.head.json docs/openapi.json
+
+      # Clean up the temporary file so it is never committed.
+      - name: Remove temporary head spec
+        run: rm -f docs/openapi.head.json
+
+      # -----------------------------------------------------------------------
+      # Commit any changes (updated API_CHANGELOG.md + new docs/openapi.json)
+      # back to the PR branch. Skip if nothing changed.
+      # -----------------------------------------------------------------------
+      - name: Commit changelog and spec updates
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add API_CHANGELOG.md docs/openapi.json
+
+          if git diff --cached --quiet; then
+            echo "Nothing to commit — API spec is unchanged."
+          else
+            git commit -m "chore(api-changelog): update API_CHANGELOG and openapi spec [skip ci]"
+            git push origin HEAD:${{ github.head_ref }}
+          fi

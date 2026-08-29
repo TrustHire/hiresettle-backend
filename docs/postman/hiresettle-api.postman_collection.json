@@ -1,0 +1,1556 @@
+{
+  "info": {
+    "_postman_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "name": "HireSettle API",
+    "description": "HireSettle API Collection for milestone-based recruiter fee escrow on Stellar",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "version": "1.0.0"
+  },
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/health",
+          "host": ["{{baseUrl}}"],
+          "path": ["health"]
+        },
+        "description": "Check API and database health status"
+      },
+      "response": [
+        {
+          "name": "Healthy",
+          "originalRequest": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "cookie": [],
+          "body": "{\"status\":\"ok\",\"info\":{\"database\":{\"status\":\"up\"}},\"error\":{},\"details\":{\"database\":{\"status\":\"up\"}}}"
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Get Challenge Nonce",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/nonce?address=GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOP",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "auth", "nonce"],
+              "query": [
+                {
+                  "key": "address",
+                  "value": "GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOP"
+                }
+              ]
+            },
+            "description": "Get a challenge nonce to sign for authentication"
+          },
+          "response": [
+            {
+              "name": "Nonce Generated",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/v1/auth/nonce?address=GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOP",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["v1", "auth", "nonce"],
+                  "query": [
+                    {
+                      "key": "address",
+                      "value": "GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOP"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "cookie": [],
+              "body": "{\"nonce\":\"example-nonce-1234\",\"address\":\"GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOP\"}"
+            }
+          ]
+        },
+        {
+          "name": "Register New User",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"StrongPassword123!\",\n  \"stellarAddress\": \"GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOP\",\n  \"name\": \"Ada Lovelace\",\n  \"company\": \"HireSettle Inc.\",\n  \"role\": \"COMPANY\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/register",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "auth", "register"]
+            },
+            "description": "Register a new user with email/password authentication"
+          },
+          "response": [
+            {
+              "name": "User Registered",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"StrongPassword123!\",\n  \"stellarAddress\": \"GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOP\",\n  \"name\": \"Ada Lovelace\",\n  \"company\": \"HireSettle Inc.\",\n  \"role\": \"COMPANY\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/auth/register",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["v1", "auth", "register"]
+                }
+              },
+              "status": "Created",
+              "code": 201,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "cookie": [],
+              "body": "{\"accessToken\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...\",\"refreshToken\":\"refresh-token-1234...\",\"user\":{\"id\":\"user-1\",\"email\":\"user@example.com\",\"name\":\"Ada Lovelace\",\"company\":\"HireSettle Inc.\",\"role\":\"COMPANY\"}}"
+            }
+          ]
+        },
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"StrongPassword123!\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "auth", "login"]
+            },
+            "description": "Log in with email and password"
+          },
+          "response": [
+            {
+              "name": "Login Successful",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"StrongPassword123!\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/auth/login",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["v1", "auth", "login"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "cookie": [],
+              "body": "{\"accessToken\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...\",\"refreshToken\":\"refresh-token-1234...\",\"user\":{\"id\":\"user-1\",\"email\":\"user@example.com\",\"name\":\"Ada Lovelace\",\"company\":\"HireSettle Inc.\",\"role\":\"COMPANY\"}}"
+            }
+          ]
+        },
+        {
+          "name": "Refresh Token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/refresh",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "auth", "refresh"]
+            },
+            "description": "Refresh access token using a valid refresh token"
+          },
+          "response": [
+            {
+              "name": "Token Refreshed",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/auth/refresh",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["v1", "auth", "refresh"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "cookie": [],
+              "body": "{\"accessToken\":\"new-access-token...\",\"refreshToken\":\"new-refresh-token...\"}"
+            }
+          ]
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/logout",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "auth", "logout"]
+            },
+            "description": "Log out by invalidating the refresh token"
+          },
+          "response": [
+            {
+              "name": "Logged Out",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/auth/logout",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["v1", "auth", "logout"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "cookie": [],
+              "body": "{\"message\":\"Logged out successfully\"}"
+            }
+          ]
+        },
+        {
+          "name": "Update Profile",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Updated Name\",\n  \"company\": \"Updated Company\",\n  \"webhookUrl\": \"https://example.com/webhook\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "auth", "me"]
+            },
+            "description": "Update authenticated user's profile information"
+          },
+          "response": [
+            {
+              "name": "Profile Updated",
+              "originalRequest": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Updated Name\",\n  \"company\": \"Updated Company\",\n  \"webhookUrl\": \"https://example.com/webhook\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/auth/me",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["v1", "auth", "me"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "cookie": [],
+              "body": "{\"id\":\"user-1\",\"email\":\"user@example.com\",\"name\":\"Updated Name\",\"company\":\"Updated Company\",\"webhookUrl\":\"https://example.com/webhook\",\"role\":\"COMPANY\"}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Engagements",
+      "item": [
+        {
+          "name": "Create Engagement",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"engagementId\": \"ENG-2026-001\",\n  \"companyAddress\": \"GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOP\",\n  \"recruiterAddress\": \"GHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPABCDEFG\",\n  \"arbiterAddress\": \"GQRSTUVWXYZABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\",\n  \"tokenAddress\": \"CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA\",\n  \"totalAmount\": \"5000000000\",\n  \"jobTitle\": \"Senior Software Engineer\",\n  \"jobDescription\": \"Looking for a senior backend engineer with NestJS experience\",\n  \"salaryRange\": \"$120k - $160k\",\n  \"location\": \"Remote\",\n  \"milestones\": [\n    {\"name\": \"Candidate Placed\", \"paymentPercent\": 30, \"kind\": \"PLACEMENT\"},\n    {\"name\": \"30 Days Retention\", \"paymentPercent\": 35, \"kind\": \"RETENTION\"},\n    {\"name\": \"90 Days Retention\", \"paymentPercent\": 35, \"kind\": \"RETENTION\"}\n  ],\n  \"retentionDays\": [30, 90]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/engagements",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "engagements"]
+            },
+            "description": "Create a new engagement (COMPANY role only)"
+          },
+          "response": [
+            {
+              "name": "Engagement Created",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"engagementId\": \"ENG-2026-001\",\n  \"companyAddress\": \"GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOP\",\n  \"recruiterAddress\": \"GHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPABCDEFG\",\n  \"arbiterAddress\": \"GQRSTUVWXYZABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP\",\n  \"tokenAddress\": \"CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA\",\n  \"totalAmount\": \"5000000000\",\n  \"jobTitle\": \"Senior Software Engineer\",\n  \"jobDescription\": \"Looking for a senior backend engineer with NestJS experience\",\n  \"salaryRange\": \"$120k - $160k\",\n  \"location\": \"Remote\",\n  \"milestones\": [\n    {\"name\": \"Candidate Placed\", \"paymentPercent\": 30, \"kind\": \"PLACEMENT\"},\n    {\"name\": \"30 Days Retention\", \"paymentPercent\": 35, \"kind\": \"RETENTION\"},\n    {\"name\": \"90 Days Retention\", \"paymentPercent\": 35, \"kind\": \"RETENTION\"}\n  ],\n  \"retentionDays\": [30, 90]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/engagements",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["v1", "engagements"]
+                }
+              },
+              "status": "Created",
+              "code": 201,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "cookie": [],
+              "body": "{\"id\":\"engagement-1\",\"engagementId\":\"ENG-2026-001\",\"status\":\"ACTIVE\",\"jobTitle\":\"Senior Software Engineer\",\"createdAt\":\"2026-06-27T19:30:00.000Z\"}"
+            }
+          ]
+        },
+        {
+          "name": "List Engagements",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/engagements?page=1&limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "engagements"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "companyAddress",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "recruiterAddress",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "status",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "search",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "List engagements with optional filters and pagination"
+          },
+          "response": [
+            {
+              "name": "Engagements List",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/v1/engagements?page=1&limit=20",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["v1", "engagements"],
+                  "query": [
+                    {
+                      "key": "page",
+                      "value": "1"
+                    },
+                    {
+                      "key": "limit",
+                      "value": "20"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "cookie": [],
+              "body": "{\"data\":[{\"id\":\"engagement-1\",\"engagementId\":\"ENG-2026-001\",\"status\":\"ACTIVE\",\"jobTitle\":\"Senior Software Engineer\",\"createdAt\":\"2026-06-27T19:30:00.000Z\"}],\"meta\":{\"page\":1,\"limit\":20,\"total\":1,\"totalPages\":1}}"
+            }
+          ]
+        },
+        {
+          "name": "Get Engagement",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/engagements/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "engagements", ":id"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "engagement-1"
+                }
+              ]
+            },
+            "description": "Get a single engagement with full details including milestones and events"
+          },
+          "response": [
+            {
+              "name": "Engagement Details",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/v1/engagements/:id",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["v1", "engagements", ":id"],
+                  "variable": [
+                    {
+                      "key": "id",
+                      "value": "engagement-1"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "cookie": [],
+              "body": "{\"id\":\"engagement-1\",\"engagementId\":\"ENG-2026-001\",\"status\":\"ACTIVE\",\"jobTitle\":\"Senior Software Engineer\",\"milestones\":[{\"index\":0,\"name\":\"Candidate Placed\",\"status\":\"PENDING\"},{\"index\":1,\"name\":\"30 Days Retention\",\"status\":\"LOCKED\"},{\"index\":2,\"name\":\"90 Days Retention\",\"status\":\"LOCKED\"}]}"
+            }
+          ]
+        },
+        {
+          "name": "Sync Engagement",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/engagements/:id/sync",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "engagements", ":id", "sync"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "engagement-1"
+                }
+              ]
+            },
+            "description": "Force sync an engagement's status from the Stellar chain"
+          },
+          "response": [
+            {
+              "name": "Synced Successfully",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/v1/engagements/:id/sync",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["v1", "engagements", ":id", "sync"],
+                  "variable": [
+                    {
+                      "key": "id",
+                      "value": "engagement-1"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "cookie": [],
+              "body": "{\"message\":\"Engagement synced successfully\",\"engagement\":{\"id\":\"engagement-1\",\"status\":\"ACTIVE\"}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Milestones",
+      "item": [
+        {
+          "name": "List Milestones",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/engagements/:engagementId/milestones",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "engagements", ":engagementId", "milestones"],
+              "variable": [
+                {
+                  "key": "engagementId",
+                  "value": "engagement-1"
+                }
+              ]
+            },
+            "description": "List all milestones for a specific engagement"
+          },
+          "response": [
+            {
+              "name": "Milestones List",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/v1/engagements/:engagementId/milestones",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["v1", "engagements", ":engagementId", "milestones"],
+                  "variable": [
+                    {
+                      "key": "engagementId",
+                      "value": "engagement-1"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "cookie": [],
+              "body": "[{\"index\":0,\"name\":\"Candidate Placed\",\"kind\":\"PLACEMENT\",\"status\":\"PENDING\"},{\"index\":1,\"name\":\"30 Days Retention\",\"kind\":\"RETENTION\",\"status\":\"LOCKED\"},{\"index\":2,\"name\":\"90 Days Retention\",\"kind\":\"RETENTION\",\"status\":\"LOCKED\"}]"
+            }
+          ]
+        },
+        {
+          "name": "Get Milestone",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/engagements/:engagementId/milestones/:index",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "engagements", ":engagementId", "milestones", ":index"],
+              "variable": [
+                {
+                  "key": "engagementId",
+                  "value": "engagement-1"
+                },
+                {
+                  "key": "index",
+                  "value": "1"
+                }
+              ]
+            },
+            "description": "Get a single milestone by index"
+          },
+          "response": [
+            {
+              "name": "Milestone Details",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/v1/engagements/:engagementId/milestones/:index",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["v1", "engagements", ":engagementId", "milestones", ":index"],
+                  "variable": [
+                    {
+                      "key": "engagementId",
+                      "value": "engagement-1"
+                    },
+                    {
+                      "key": "index",
+                      "value": "1"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "cookie": [],
+              "body": "{\"index\":1,\"name\":\"30 Days Retention\",\"kind\":\"RETENTION\",\"status\":\"LOCKED\"}"
+            }
+          ]
+        },
+        {
+          "name": "Get Retention Timer",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/engagements/:engagementId/milestones/:index/timer",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "engagements", ":engagementId", "milestones", ":index", "timer"],
+              "variable": [
+                {
+                  "key": "engagementId",
+                  "value": "engagement-1"
+                },
+                {
+                  "key": "index",
+                  "value": "1"
+                }
+              ]
+            },
+            "description": "Get retention countdown timer details for a LOCKED milestone"
+          },
+          "response": [
+            {
+              "name": "Timer Details",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/v1/engagements/:engagementId/milestones/:index/timer",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["v1", "engagements", ":engagementId", "milestones", ":index", "timer"],
+                  "variable": [
+                    {
+                      "key": "engagementId",
+                      "value": "engagement-1"
+                    },
+                    {
+                      "key": "index",
+                      "value": "1"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "cookie": [],
+              "body": "{\"daysRemaining\":27,\"ledgersRemaining\":466560,\"unlockable\":false,\"estimatedUnlockAt\":\"2026-07-27T19:30:00.000Z\"}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Events",
+      "item": [
+        {
+          "name": "List Events",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/events?page=1&limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "events"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "engagementId",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "List on-chain Stellar events with optional filters"
+          },
+          "response": [
+            {
+              "name": "Events List",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/v1/events?page=1&limit=20",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["v1", "events"],
+                  "query": [
+                    {
+                      "key": "page",
+                      "value": "1"
+                    },
+                    {
+                      "key": "limit",
+                      "value": "20"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "cookie": [],
+              "body": "{\"data\":[{\"id\":\"event-1\",\"type\":\"MILESTONE_COMPLETED\",\"engagementId\":\"ENG-2026-001\",\"createdAt\":\"2026-06-27T19:30:00.000Z\"}],\"meta\":{\"page\":1,\"limit\":20,\"total\":1}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Notifications",
+      "item": [
+        {
+          "name": "List Notifications",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/notifications?page=1&limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "notifications"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "unreadOnly",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Get notifications for the authenticated user"
+          },
+          "response": [
+            {
+              "name": "Notifications List",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/v1/notifications?page=1&limit=20",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["v1", "notifications"],
+                  "query": [
+                    {
+                      "key": "page",
+                      "value": "1"
+                    },
+                    {
+                      "key": "limit",
+                      "value": "20"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "cookie": [],
+              "body": "{\"data\":[{\"id\":\"notification-1\",\"type\":\"RETENTION_WINDOW_APPROACHING\",\"message\":\"30-day retention milestone unlocks soon\",\"read\":false,\"createdAt\":\"2026-06-27T19:30:00.000Z\"}],\"meta\":{\"page\":1,\"limit\":20,\"total\":1}}"
+            }
+          ]
+        },
+        {
+          "name": "Mark as Read",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/notifications/:id/read",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "notifications", ":id", "read"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "notification-1"
+                }
+              ]
+            },
+            "description": "Mark a single notification as read"
+          },
+          "response": [
+            {
+              "name": "Marked as Read",
+              "originalRequest": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/v1/notifications/:id/read",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["v1", "notifications", ":id", "read"],
+                  "variable": [
+                    {
+                      "key": "id",
+                      "value": "notification-1"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "cookie": [],
+              "body": "{\"message\":\"Notification marked as read\"}"
+            }
+          ]
+        },
+        {
+          "name": "Mark All as Read",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/notifications/read-all",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "notifications", "read-all"]
+            },
+            "description": "Mark all notifications as read"
+          },
+          "response": [
+            {
+              "name": "All Marked as Read",
+              "originalRequest": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/v1/notifications/read-all",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["v1", "notifications", "read-all"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "cookie": [],
+              "body": "{\"message\":\"All notifications marked as read\"}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "Get Public Profile",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/users/:stellarAddress",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "users", ":stellarAddress"],
+              "variable": [
+                {
+                  "key": "stellarAddress",
+                  "value": "GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOP"
+                }
+              ]
+            },
+            "description": "Get a user's public profile by Stellar address"
+          },
+          "response": [
+            {
+              "name": "Public Profile",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/v1/users/:stellarAddress",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["v1", "users", ":stellarAddress"],
+                  "variable": [
+                    {
+                      "key": "stellarAddress",
+                      "value": "GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOP"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "cookie": [],
+              "body": "{\"name\":\"Ada Lovelace\",\"company\":\"HireSettle Inc.\",\"role\":\"COMPANY\"}"
+            }
+          ]
+        },
+        {
+          "name": "Get Notification Preferences",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/users/me/notification-preferences",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "users", "me", "notification-preferences"]
+            },
+            "description": "Get authenticated user's notification preferences"
+          },
+          "response": [
+            {
+              "name": "Preferences",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/v1/users/me/notification-preferences",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["v1", "users", "me", "notification-preferences"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "cookie": [],
+              "body": "{\"preferences\":[{\"type\":\"MILESTONE_UNLOCKED\",\"emailEnabled\":true},{\"type\":\"RETENTION_WINDOW_APPROACHING\",\"emailEnabled\":true}]}"
+            }
+          ]
+        },
+        {
+          "name": "Update Notification Preferences",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"preferences\": [\n    {\"type\":\"MILESTONE_UNLOCKED\",\"emailEnabled\":true},\n    {\"type\":\"RETENTION_WINDOW_APPROACHING\",\"emailEnabled\":false}\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/users/me/notification-preferences",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "users", "me", "notification-preferences"]
+            },
+            "description": "Update authenticated user's notification preferences"
+          },
+          "response": [
+            {
+              "name": "Preferences Updated",
+              "originalRequest": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"preferences\": [\n    {\"type\":\"MILESTONE_UNLOCKED\",\"emailEnabled\":true},\n    {\"type\":\"RETENTION_WINDOW_APPROACHING\",\"emailEnabled\":false}\n  ]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/v1/users/me/notification-preferences",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["v1", "users", "me", "notification-preferences"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "cookie": [],
+              "body": "{\"preferences\":[{\"type\":\"MILESTONE_UNLOCKED\",\"emailEnabled\":true},{\"type\":\"RETENTION_WINDOW_APPROACHING\",\"emailEnabled\":false}]}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Admin",
+      "item": [
+        {
+          "name": "List Users",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/admin/users?page=1&limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "admin", "users"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "search",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "role",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "List users (ADMIN role only)"
+          },
+          "response": [
+            {
+              "name": "Users List",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/v1/admin/users?page=1&limit=20",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["v1", "admin", "users"],
+                  "query": [
+                    {
+                      "key": "page",
+                      "value": "1"
+                    },
+                    {
+                      "key": "limit",
+                      "value": "20"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "cookie": [],
+              "body": "{\"data\":[{\"id\":\"user-1\",\"email\":\"user@example.com\",\"name\":\"Ada Lovelace\",\"role\":\"COMPANY\",\"active\":true}],\"meta\":{\"page\":1,\"limit\":20,\"total\":1}}"
+            }
+          ]
+        },
+        {
+          "name": "Deactivate User",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/admin/users/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "admin", "users", ":id"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "user-1"
+                }
+              ]
+            },
+            "description": "Deactivate a user (ADMIN role only)"
+          },
+          "response": [
+            {
+              "name": "User Deactivated",
+              "originalRequest": {
+                "method": "DELETE",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/v1/admin/users/:id",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["v1", "admin", "users", ":id"],
+                  "variable": [
+                    {
+                      "key": "id",
+                      "value": "user-1"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "cookie": [],
+              "body": "{\"message\":\"User deactivated successfully\"}"
+            }
+          ]
+        },
+        {
+          "name": "Reactivate User",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/admin/users/:id/reactivate",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "admin", "users", ":id", "reactivate"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "user-1"
+                }
+              ]
+            },
+            "description": "Reactivate a deactivated user (ADMIN role only)"
+          },
+          "response": [
+            {
+              "name": "User Reactivated",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/v1/admin/users/:id/reactivate",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["v1", "admin", "users", ":id", "reactivate"],
+                  "variable": [
+                    {
+                      "key": "id",
+                      "value": "user-1"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "cookie": [],
+              "body": "{\"message\":\"User reactivated successfully\"}"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000"
+    },
+    {
+      "key": "accessToken",
+      "value": ""
+    },
+    {
+      "key": "refreshToken",
+      "value": ""
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Auto-refresh access token when expired",
+          "const accessToken = pm.collectionVariables.get('accessToken');",
+          "const refreshToken = pm.collectionVariables.get('refreshToken');",
+          "",
+          "if (accessToken) {",
+          "  try {",
+          "    const payload = JSON.parse(atob(accessToken.split('.')[1]));",
+          "    const isExpired = payload.exp * 1000 < Date.now();",
+          "    if (isExpired && refreshToken) {",
+          "      pm.sendRequest({",
+          "        url: pm.collectionVariables.get('baseUrl') + '/v1/auth/refresh',",
+          "        method: 'POST',",
+          "        header: { 'Content-Type': 'application/json' },",
+          "        body: { mode: 'raw', raw: JSON.stringify({ refreshToken }) }",
+          "      }, function (err, res) {",
+          "        if (!err && res.code === 200) {",
+          "          const json = res.json();",
+          "          pm.collectionVariables.set('accessToken', json.accessToken);",
+          "          if (json.refreshToken) {",
+          "            pm.collectionVariables.set('refreshToken', json.refreshToken);",
+          "          }",
+          "        }",
+          "      });",
+          "    }",
+          "  } catch (e) {",
+          "    console.log('Error parsing access token:', e);",
+          "  }",
+          "}"
+        ]
+      }
+    }
+  ]
+}
