@@ -1,9 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { StellarService } from '../../common/stellar/stellar.service';
-import { NotificationsService } from '../notifications/notifications.service';
-import { NotificationType } from '@prisma/client';
+import { Injectable, Logger } from "@nestjs/common";
+import { Cron, CronExpression } from "@nestjs/schedule";
+import { PrismaService } from "../../common/prisma/prisma.service";
+import { StellarService } from "../../common/stellar/stellar.service";
+import { NotificationsService } from "../notifications/notifications.service";
+import { NotificationType } from "@prisma/client";
 
 /**
  * RetentionSchedulerService
@@ -43,6 +43,17 @@ export class RetentionSchedulerService {
   // APPROACHING NOTIFICATION — runs every hour
   // ----------------------------------------------------------
 
+  private isWithinLocalHours(userTimezone: string | null | undefined) {
+    const tz = userTimezone || "UTC";
+    const localHour = new Date().toLocaleString("en-US", {
+      timeZone: tz,
+      hour: "numeric",
+      hour12: false,
+    });
+    const hour = Number(localHour);
+    return hour >= 9 && hour <= 18;
+  }
+
   @Cron(CronExpression.EVERY_HOUR)
   async sendApproachingNotifications() {
     const now = new Date();
@@ -57,7 +68,9 @@ export class RetentionSchedulerService {
 
     if (!dueSoon.length) return;
 
-    this.logger.log(`Sending ${dueSoon.length} retention-approaching notification(s)`);
+    this.logger.log(
+      `Sending ${dueSoon.length} retention-approaching notification(s)`,
+    );
 
     for (const schedule of dueSoon) {
       try {
@@ -75,14 +88,23 @@ export class RetentionSchedulerService {
         const milestone = engagement.milestones[0];
         const daysLabel = milestone?.retentionDays
           ? `${milestone.retentionDays}-day`
-          : 'retention';
+          : "retention";
 
         const message = `The ${daysLabel} retention window for engagement ${engagement.id} (${engagement.jobTitle}) closes in approximately 3 days. Be ready to confirm when the milestone unlocks.`;
 
-        // Notify both company and recruiter
-        for (const address of [engagement.companyAddress, engagement.recruiterAddress]) {
+        const users = await this.prisma.user.findMany({
+          where: {
+            stellarAddress: {
+              in: [engagement.companyAddress, engagement.recruiterAddress],
+            },
+          },
+          select: { stellarAddress: true, timezone: true },
+        });
+
+        for (const user of users) {
+          if (!this.isWithinLocalHours(user.timezone)) continue;
           await this.notifications.notifyUser(
-            address,
+            user.stellarAddress,
             NotificationType.RETENTION_WINDOW_APPROACHING,
             `${daysLabel} retention window closing soon`,
             message,
@@ -124,7 +146,9 @@ export class RetentionSchedulerService {
 
     if (!dueForUnlock.length) return;
 
-    this.logger.log(`Checking ${dueForUnlock.length} milestone(s) for on-chain unlock`);
+    this.logger.log(
+      `Checking ${dueForUnlock.length} milestone(s) for on-chain unlock`,
+    );
 
     for (const schedule of dueForUnlock) {
       try {
@@ -145,9 +169,9 @@ export class RetentionSchedulerService {
           where: {
             engagementId: schedule.engagementId,
             milestoneIndex: schedule.milestoneIndex,
-            status: 'LOCKED',
+            status: "LOCKED",
           },
-          data: { status: 'PENDING' },
+          data: { status: "PENDING" },
         });
 
         await this.prisma.retentionSchedule.update({
@@ -158,14 +182,16 @@ export class RetentionSchedulerService {
         // Notify recruiter — they can now submit proof
         const engagement = await this.prisma.engagement.findUnique({
           where: { id: schedule.engagementId },
-          include: { milestones: { where: { milestoneIndex: schedule.milestoneIndex } } },
+          include: {
+            milestones: { where: { milestoneIndex: schedule.milestoneIndex } },
+          },
         });
 
         if (engagement) {
           const milestone = engagement.milestones[0];
           const daysLabel = milestone?.retentionDays
             ? `${milestone.retentionDays}-day`
-            : 'Retention';
+            : "Retention";
 
           await this.notifications.notifyUser(
             engagement.recruiterAddress,

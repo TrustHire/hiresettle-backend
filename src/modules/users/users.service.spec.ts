@@ -95,7 +95,7 @@ describe('UsersService', () => {
           stellarAddress: true,
           avatarUrl: true,
           role: true,
-          slackWebhookUrl: true,
+          locale: true,
         },
       });
     });
@@ -145,9 +145,32 @@ describe('UsersService', () => {
           stellarAddress: true,
           avatarUrl: true,
           role: true,
-          slackWebhookUrl: true,
+          locale: true,
         },
       });
+    });
+
+    it('updates the locale for localized email templates', async () => {
+      const mockUser = {
+        name: 'Ada Lovelace',
+        email: 'ada@example.com',
+        company: 'HireSettle Inc.',
+        stellarAddress:
+          'GABC123DEFGHIJKLMNOPQRSTUVWXYZ234567GABC123DEFGHIJKLMNOPQR',
+        avatarUrl: null,
+        role: UserRole.COMPANY,
+        locale: 'es',
+      };
+      mockPrisma.user.update.mockResolvedValue(mockUser);
+
+      const result = await service.updateProfile(userId, { locale: 'es' });
+
+      expect(mockPrisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: { locale: 'es' },
+        }),
+      );
+      expect(result.locale).toBe('es');
     });
 
     it('throws BadRequestException when stellarAddress is provided', async () => {

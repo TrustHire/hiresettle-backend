@@ -18,7 +18,7 @@ erDiagram
         UserRole role
         string webhookUrl
         string webhookSecret
-        string slackWebhookUrl
+        string locale
         datetime deactivatedAt
         datetime deletedAt
         datetime createdAt
@@ -165,7 +165,7 @@ Represents every authenticated platform user, including companies, recruiters, a
 | company | Company name (for company users) |
 | webhookUrl | Optional webhook endpoint |
 | avatarUrl | User avatar |
-| slackWebhookUrl | Slack incoming-webhook URL for notification alerts (#277) |
+| locale | BCP-47 tag for localized email templates (default `en`) |
 | deactivatedAt | Soft delete timestamp |
 | digestEnabled | Weekly digest email opt-in (#276) |
 

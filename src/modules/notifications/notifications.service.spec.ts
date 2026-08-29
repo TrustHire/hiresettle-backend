@@ -4,7 +4,7 @@ import { getQueueToken } from '@nestjs/bullmq';
 import { NotificationsService } from './notifications.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { ConfigService } from '@nestjs/config';
-import { SlackNotificationsService } from './slack-notifications.service';
+import { EmailTemplateService } from '../../common/email/email-template.service';
 import * as nodemailer from 'nodemailer';
 import { NotificationType } from '@prisma/client';
 
@@ -19,8 +19,7 @@ describe('NotificationsService', () => {
   let service: NotificationsService;
   let prisma: PrismaService;
   let config: ConfigService;
-  let slackNotifications: SlackNotificationsService;
-  let mockSlackQueue: { add: jest.Mock };
+  let emailTemplates: EmailTemplateService;
   let mockNodemailerSendMail: jest.Mock;
 
   beforeEach(async () => {
@@ -63,12 +62,8 @@ describe('NotificationsService', () => {
           },
         },
         {
-          provide: SlackNotificationsService,
-          useValue: { send: jest.fn().mockResolvedValue(undefined) },
-        },
-        {
-          provide: getQueueToken('slack'),
-          useValue: { add: jest.fn().mockResolvedValue(undefined) },
+          provide: EmailTemplateService,
+          useValue: { render: jest.fn(() => '<p>rendered html</p>') },
         },
       ],
     }).compile();
@@ -76,8 +71,7 @@ describe('NotificationsService', () => {
     service = module.get<NotificationsService>(NotificationsService);
     prisma = module.get<PrismaService>(PrismaService);
     config = module.get<ConfigService>(ConfigService);
-    slackNotifications = module.get<SlackNotificationsService>(SlackNotificationsService);
-    mockSlackQueue = module.get(getQueueToken('slack'));
+    emailTemplates = module.get<EmailTemplateService>(EmailTemplateService);
     mockNodemailerSendMail = (nodemailer.createTransport as jest.Mock)().sendMail;
   });
 
@@ -119,18 +113,22 @@ describe('NotificationsService', () => {
       expect(prisma.notification.create).toHaveBeenCalledWith({
         data: { userId, type: notificationType, title, message, data },
       });
-      expect(mockNodemailerSendMail).toHaveBeenCalledWith({
-        from: 'test@example.com',
-        to: email,
-        subject: '💰 HireSettle — Test Notification',
-        template: 'payment_released',
-        context: {
+      expect(emailTemplates.render).toHaveBeenCalledWith(
+        'payment_released',
+        'en',
+        expect.objectContaining({
           subject: expect.any(String),
           message,
           ctaLink: undefined,
           year: expect.any(Number),
           ...data,
-        },
+        }),
+      );
+      expect(mockNodemailerSendMail).toHaveBeenCalledWith({
+        from: 'test@example.com',
+        to: email,
+        subject: '💰 HireSettle — Test Notification',
+        html: '<p>rendered html</p>',
       });
       expect(prisma.notification.update).toHaveBeenCalledWith({
         where: { id: 'notification_id' },
@@ -229,74 +227,21 @@ describe('NotificationsService', () => {
       }));
     });
 
-    it('should enqueue a Slack job for key types when the user has a webhook', async () => {
+    it('should pass the user locale to the template renderer', async () => {
       (prisma.user.findUnique as jest.Mock).mockResolvedValue({
         id: userId,
         stellarAddress,
         email,
-        slackWebhookUrl: 'https://hooks.slack.com/services/<team-id>/<webhook-id>/<token>',
+        locale: 'es',
       });
-      const notificationType = NotificationType.DISPUTE_RAISED;
+      const notificationType = NotificationType.PAYMENT_RELEASED;
 
       await service.notifyUser(stellarAddress, notificationType, title, message, data);
 
-      expect(mockSlackQueue.add).toHaveBeenCalledWith('send', {
-        webhookUrl: 'https://hooks.slack.com/services/<team-id>/<webhook-id>/<token>',
-        type: notificationType,
-        title,
-        message,
-        data,
-      });
-    });
-
-    it('should not enqueue Slack for non-key types', async () => {
-      (prisma.user.findUnique as jest.Mock).mockResolvedValue({
-        id: userId,
-        stellarAddress,
-        email,
-        slackWebhookUrl: 'https://hooks.slack.com/services/<team-id>/<webhook-id>/<token>',
-      });
-
-      await service.notifyUser(stellarAddress, NotificationType.MILESTONE_UNLOCKED, title, message, data);
-
-      expect(mockSlackQueue.add).not.toHaveBeenCalled();
-      expect(slackNotifications.send).not.toHaveBeenCalled();
-    });
-
-    it('should not enqueue Slack when no webhook is configured', async () => {
-      const notificationType = NotificationType.DISPUTE_RAISED;
-
-      await service.notifyUser(stellarAddress, notificationType, title, message, data);
-
-      expect(mockSlackQueue.add).not.toHaveBeenCalled();
-      expect(slackNotifications.send).not.toHaveBeenCalled();
-    });
-
-    it('should fall back to a direct send when the Slack queue is unavailable', async () => {
-      const directModule = await Test.createTestingModule({
-        providers: [
-          NotificationsService,
-          { provide: PrismaService, useValue: prisma },
-          { provide: ConfigService, useValue: config },
-          { provide: SlackNotificationsService, useValue: slackNotifications },
-        ],
-      }).compile();
-      const directService = directModule.get<NotificationsService>(NotificationsService);
-      (prisma.user.findUnique as jest.Mock).mockResolvedValue({
-        id: userId,
-        stellarAddress,
-        email,
-        slackWebhookUrl: 'https://hooks.slack.com/services/<team-id>/<webhook-id>/<token>',
-      });
-
-      await directService.notifyUser(stellarAddress, NotificationType.DISPUTE_RAISED, title, message, data);
-
-      expect(slackNotifications.send).toHaveBeenCalledWith(
-        NotificationType.DISPUTE_RAISED,
-        title,
-        message,
-        data,
-        'https://hooks.slack.com/services/<team-id>/<webhook-id>/<token>',
+      expect(emailTemplates.render).toHaveBeenCalledWith(
+        'payment_released',
+        'es',
+        expect.anything(),
       );
     });
 
