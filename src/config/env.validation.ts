@@ -37,6 +37,9 @@ export const envValidationSchema = Joi.object({
   // Stellar backend account balance alert
   STELLAR_BALANCE_ALERT_INTERVAL_MS: Joi.number().integer().min(60000).default(300000),
   STELLAR_BALANCE_ALERT_THRESHOLD_STROOPS: Joi.number().integer().min(0).default(10000000),
+
+  // Placement milestone due-soon reminder (#260)
+  PLACEMENT_MILESTONE_REMINDER_DAYS: Joi.number().integer().min(1).max(365).default(7),
   
   // Database connection pooling
   DATABASE_POOL_MIN: Joi.number().integer().min(1).max(20).default(2),

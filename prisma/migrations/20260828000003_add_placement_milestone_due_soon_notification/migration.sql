@@ -1,0 +1,2 @@
+-- Migration: add PLACEMENT_MILESTONE_DUE_SOON to NotificationType enum (#260)
+ALTER TYPE "NotificationType" ADD VALUE IF NOT EXISTS 'PLACEMENT_MILESTONE_DUE_SOON';

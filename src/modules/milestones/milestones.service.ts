@@ -601,6 +601,38 @@ export class MilestonesService {
   // ADMIN OVERRIDES
   // ----------------------------------------------------------
 
+  async setPlacementDueDate(
+    engagementId: string,
+    milestoneIndex: number,
+    placementDueAt: string | null,
+    user: any,
+  ) {
+    const milestone = await this.prisma.milestone.findUnique({
+      where: { engagementId_milestoneIndex: { engagementId, milestoneIndex } },
+      include: { engagement: true },
+    });
+    if (!milestone) {
+      throw new NotFoundException(
+        `Milestone ${milestoneIndex} not found on engagement ${engagementId}`,
+      );
+    }
+    this.checkPartyAccess((milestone as any).engagement, user);
+
+    const updated = await this.prisma.milestone.update({
+      where: { id: milestone.id },
+      data: {
+        placementDueAt: placementDueAt ? new Date(placementDueAt) : null,
+        // Reset the reminder flag when the due date is changed
+        reminderSent: false,
+      },
+    });
+
+    this.logger.log(
+      `placementDueAt set to ${placementDueAt ?? 'null'} for milestone ${milestone.id}`,
+    );
+    return updated;
+  }
+
   async uploadEvidence(
     engagementId: string,
     milestoneIndex: number,

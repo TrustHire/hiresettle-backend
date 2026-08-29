@@ -48,6 +48,7 @@ enum NotificationType {
   ENGAGEMENT_CANCELLED
   PAYMENT_RELEASED
   RETENTION_WINDOW_APPROACHING
+  PLACEMENT_MILESTONE_DUE_SOON
   ARBITER_ASSIGNED
   ARBITER_REASSIGNED
   ARBITER_RECUSAL_REQUESTED
@@ -203,6 +204,7 @@ model Engagement {
   txHash           String?           // on-chain creation tx hash
   createdLedger    Int?              // ledger sequence at creation
   templateVersionId String?          // specific EngagementTemplateVersion used to create this engagement, if any
+  tags             String[]          @default([])  // free-form labels for dashboard filtering (#252)
   archivedAt       DateTime?         // soft-archive timestamp — excluded from default list views
   requiredApprovals Int              @default(1) // number of distinct approvals required before a milestone can be confirmed
   createdAt        DateTime          @default(now())
@@ -311,6 +313,8 @@ model Milestone {
   proofHash        String?
   disputeReason    String?
   approachingNotificationSent Boolean @default(false)
+  placementDueAt   DateTime?      // optional expected proof-submission date for PLACEMENT milestones (#260)
+  reminderSent     Boolean        @default(false) // true once the due-soon reminder has been sent (#260)
   status           MilestoneStatus @default(PENDING)
   paymentReleased  BigInt?
   confirmedAt      DateTime?
@@ -616,6 +620,22 @@ model SecurityEvent {
   @@index([action])
   @@index([createdAt])
   @@map("security_events")
+}
+
+// Persisted named filter presets for GET /engagements, scoped per user (#253).
+model SavedFilter {
+  id        String   @id @default(uuid())
+  userId    String
+  name      String
+  filters   Json     // serialised query parameters (e.g. { status, tags, search, ... })
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, name])
+  @@index([userId])
+  @@map("saved_filters")
 }
 
 // Caches responses for requests submitted with an Idempotency-Key header so
