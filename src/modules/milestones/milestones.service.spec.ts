@@ -32,6 +32,9 @@ const makeMockPrisma = () => ({
     count: jest.fn(),
     deleteMany: jest.fn(),
   },
+  refund: {
+    upsert: jest.fn(),
+  },
   $transaction: jest.fn((fn) => (typeof fn === 'function' ? fn(mockPrisma) : Promise.all(fn))),
 });
 
@@ -288,10 +291,20 @@ describe('MilestonesService', () => {
       });
       mockPrisma.engagement.findUnique.mockResolvedValue(baseEngagement);
       mockPrisma.notification.create.mockResolvedValue({});
+      mockPrisma.refund.upsert.mockResolvedValue({
+        id: 'refund-1',
+        milestoneId: disputedMilestone.id,
+        amount: BigInt(disputedMilestone.amount),
+        status: 'PENDING',
+      });
 
       await service.resolveDisputeFlow('ENG-001', 0, 'REFUND');
 
       expect(mockStellar.resolveMilestoneDispute).toHaveBeenCalledWith('ENG-001', 0, false);
+      expect(mockPrisma.refund.upsert).toHaveBeenCalledWith(expect.objectContaining({
+        where: { milestoneId: disputedMilestone.id },
+        create: expect.objectContaining({ status: 'PENDING' }),
+      }));
     });
 
     it('throws UnprocessableEntityException when milestone is not DISPUTED', async () => {
