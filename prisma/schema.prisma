@@ -527,6 +527,7 @@ model EngagementTemplate {
   archived        Boolean  @default(false)
   usageCount      Int      @default(0)
   lastUsedAt      DateTime?
+  isPublic        Boolean  @default(false)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -534,6 +535,7 @@ model EngagementTemplate {
   versions EngagementTemplateVersion[]
 
   @@index([companyId])
+  @@index([isPublic])
   @@map("engagement_templates")
 }
 
