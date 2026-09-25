@@ -245,6 +245,30 @@ Metrics: `http://localhost:3000/metrics`
 
 ---
 
+## Testnet Friendbot Helper (dev only)
+
+Generate and fund a throwaway testnet account for local development:
+
+```bash
+# CLI
+npm run friendbot:fund
+
+# HTTP (app running locally)
+curl -X POST http://localhost:3000/dev/friendbot/fund
+```
+
+Both return `{ "publicKey", "secretKey", "balance" }` (balance in XLM, typically 10000).
+The helper refuses to run (`403 Forbidden`) when `STELLAR_NETWORK=mainnet` or
+`NODE_ENV=production`, and the `/dev` routes are not registered in those environments.
+Set `STELLAR_FRIENDBOT_URL` to point at a custom Friendbot (e.g. a local quickstart node).
+
+## Fee Sponsorship
+
+Set `ENABLE_FEE_SPONSORSHIP=true` to have the platform pay fees for user-signed
+transactions submitted via `POST /stellar/tx/sponsored` (wrapped in a fee-bump signed by
+`STELLAR_FEE_SPONSOR_SECRET`). Daily spend is capped by `FEE_SPONSORSHIP_DAILY_CAP_XLM`
+(default 100) and each sponsored fee is recorded with its `companyId` in `sponsored_fees`.
+
 ## Running Tests
 
 ```bash
