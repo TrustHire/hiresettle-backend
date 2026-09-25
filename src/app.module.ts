@@ -36,6 +36,7 @@ import { GraphqlModule } from './graphql/graphql.module';
 import stellarConfig from './config/stellar.config';
 import { MaintenanceModeModule } from './common/maintenance/maintenance-mode.module';
 import { FeatureFlagsModule } from './modules/feature-flags/feature-flags.module';
+import { DevModule } from './modules/dev/dev.module';
 
 @Module({
   imports: [
@@ -69,6 +70,7 @@ import { FeatureFlagsModule } from './modules/feature-flags/feature-flags.module
     PasswordPolicyModule,
     CommonStellarModule,
     StellarModule,
+    ...(process.env.NODE_ENV === 'production' || process.env.STELLAR_NETWORK === 'mainnet' ? [] : [DevModule]),
     AuthModule,
     EngagementsModule,
     EngagementTemplatesModule,

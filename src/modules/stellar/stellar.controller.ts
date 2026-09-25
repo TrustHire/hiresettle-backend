@@ -1,12 +1,20 @@
-import { Controller, Get, Param, Query, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 import { StellarService } from '../../common/stellar/stellar.service';
-import { ApiTags, ApiOperation, ApiQuery, ApiResponse } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiQuery, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { CacheInterceptor, CacheTTL } from '@nestjs/cache-manager';
+import { StellarTxStatusService } from './stellar-tx-status.service';
+import { FeeSponsorshipService } from './fee-sponsorship.service';
+import { SponsoredSubmitDto } from './dto/sponsored-submit.dto';
+import { JwtOrApiKeyGuard } from '../../common/guards/jwt-or-api-key.guard';
 
 @ApiTags('stellar')
 @Controller('stellar')
 export class StellarController {
-  constructor(private readonly stellarService: StellarService) {}
+  constructor(
+    private readonly stellarService: StellarService,
+    private readonly txStatus: StellarTxStatusService,
+    private readonly feeSponsorship: FeeSponsorshipService,
+  ) {}
 
   @Get('balance/:address')
   @ApiOperation({ summary: 'Get token balance for a Stellar address' })
@@ -27,5 +35,21 @@ export class StellarController {
   @ApiResponse({ status: 200, description: 'Fee estimate retrieved successfully' })
   async getFeeEstimate() {
     return this.stellarService.getFeeEstimate();
+  }
+
+  @Get('tx/:hash')
+  @ApiOperation({ summary: 'Get Stellar transaction status with decoded result codes' })
+  @ApiResponse({ status: 200, description: 'Transaction status (pending | success | failed)' })
+  @ApiResponse({ status: 404, description: 'Transaction not found on Horizon' })
+  async getTxStatus(@Param('hash') hash: string) {
+    return this.txStatus.getStatus(hash);
+  }
+
+  @Post('tx/sponsored')
+  @UseGuards(JwtOrApiKeyGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Submit a user-signed tx, fee-bumped by the platform when ENABLE_FEE_SPONSORSHIP=true' })
+  async submitSponsored(@Body() dto: SponsoredSubmitDto) {
+    return this.feeSponsorship.submit(dto.xdr, dto.companyId);
   }
 }

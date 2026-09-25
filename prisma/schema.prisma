@@ -800,3 +800,18 @@ model FeatureFlag {
 
   @@map("feature_flags")
 }
+
+// Platform-sponsored Stellar fees (fee-bump transactions) — billing audit trail (#386)
+model SponsoredFee {
+  id          String   @id @default(uuid())
+  companyId   String
+  txHash      String   @unique   // fee-bump transaction hash
+  innerTxHash String              // wrapped user-signed transaction hash
+  feeStroops  BigInt
+  feeSource   String              // platform fee account
+  createdAt   DateTime @default(now())
+
+  @@index([companyId])
+  @@index([createdAt])
+  @@map("sponsored_fees")
+}

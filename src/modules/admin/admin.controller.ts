@@ -13,6 +13,7 @@ import {
   HttpStatus,
   Res,
   Req,
+  BadRequestException,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -30,6 +31,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { AdminUsersService } from './admin-users.service';
 import { AdminDeadLetterService } from './admin-dead-letter.service';
 import { AdminReportsService } from './admin-reports.service';
+import { AdminDisputeStatsService } from './admin-dispute-stats.service';
 import { StellarMergeDetectorService } from './stellar-merge-detector.service';
 import { AdminAuditLogsService } from './admin-audit-logs.service';
 import { AdminWebhooksService } from './admin-webhooks.service';
@@ -68,7 +70,22 @@ export class AdminController {
     private readonly authService: AuthService,
     private readonly apiKeys: ApiKeysService,
     private readonly prisma: PrismaService,
+    private readonly disputeStats: AdminDisputeStatsService,
   ) {}
+
+  @Get('disputes/stats')
+  @ApiOperation({ summary: 'Dispute statistics: counts, resolution time, outcomes, arbiters (admin only)' })
+  @ApiQuery({ name: 'startDate', required: false, description: 'ISO date — include disputes opened on/after' })
+  @ApiQuery({ name: 'endDate', required: false, description: 'ISO date — include disputes opened on/before' })
+  getDisputeStats(@Query('startDate') startDate?: string, @Query('endDate') endDate?: string) {
+    const parse = (v?: string) => {
+      if (!v) return undefined;
+      const d = new Date(v);
+      if (isNaN(d.getTime())) throw new BadRequestException(`Invalid date: ${v}`);
+      return d;
+    };
+    return this.disputeStats.getStats(parse(startDate), parse(endDate));
+  }
 
   @Get('maintenance-mode')
   @ApiOperation({ summary: 'Get API maintenance mode status (admin only)' })

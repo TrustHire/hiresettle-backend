@@ -12,6 +12,7 @@ import { UsersModule } from '../users/users.module';
 import { WebhooksModule } from '../webhooks/webhooks.module';
 import { AuthModule } from '../auth/auth.module';
 import { MaintenanceModeModule } from '../../common/maintenance/maintenance-mode.module';
+import { AdminDisputeStatsService } from './admin-dispute-stats.service';
 import { StellarBalanceAlertService } from './stellar-balance-alert.service';
 
 @Module({
@@ -25,6 +26,7 @@ import { StellarBalanceAlertService } from './stellar-balance-alert.service';
     AdminAuditLogsService,
     AdminWebhooksService,
     StellarBalanceAlertService,
+    AdminDisputeStatsService,
   ],
   exports: [AdminUsersService],
 })
