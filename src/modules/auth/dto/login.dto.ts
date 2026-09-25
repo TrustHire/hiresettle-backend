@@ -15,4 +15,9 @@ export class LoginDto {
   @IsString()
   @Length(6, 6)
   totpCode?: string;
+
+  @ApiProperty({ description: 'Single-use backup recovery code (accepted instead of totpCode)', required: false })
+  @IsOptional()
+  @IsString()
+  recoveryCode?: string;
 }

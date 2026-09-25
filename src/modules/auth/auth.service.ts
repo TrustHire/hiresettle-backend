@@ -176,16 +176,24 @@ export class AuthService {
 
     // Check if 2FA is enabled
     if (user.totpEnabled) {
-      if (!dto.totpCode) {
+      if (!dto.totpCode && !dto.recoveryCode) {
         throw new UnauthorizedException(
-          "TOTP code required for 2FA-enabled account",
+          "TOTP code or recovery code required for 2FA-enabled account",
         );
       }
 
-      const isValid = this.verifyTotpCode(user.totpSecret!, dto.totpCode);
-      if (!isValid) {
-        await this.handleFailedLogin(user.id, meta);
-        throw new UnauthorizedException("Invalid TOTP code");
+      if (dto.recoveryCode) {
+        const consumed = await this.consumeRecoveryCode(user.id, dto.recoveryCode);
+        if (!consumed) {
+          await this.handleFailedLogin(user.id, meta);
+          throw new UnauthorizedException("Invalid or already-used recovery code");
+        }
+      } else {
+        const isValid = this.verifyTotpCode(user.totpSecret!, dto.totpCode!);
+        if (!isValid) {
+          await this.handleFailedLogin(user.id, meta);
+          throw new UnauthorizedException("Invalid TOTP code");
+        }
       }
     }
 
@@ -650,8 +658,10 @@ export class AuthService {
       data: { totpEnabled: true },
     });
 
+    const recoveryCodes = await this.createRecoveryCodes(userId);
+
     this.logger.log(`2FA enabled for user: ${user.email || userId}`);
-    return { enabled: true };
+    return { enabled: true, recoveryCodes };
   }
 
   async disableTotp(userId: string, code: string) {
@@ -679,6 +689,73 @@ export class AuthService {
 
     this.logger.log(`2FA disabled for user: ${user.email || userId}`);
     return { disabled: true };
+  }
+
+  /**
+   * Regenerate backup recovery codes for a 2FA-enabled account.
+   * Requires a valid TOTP code to prevent misuse.
+   * All previous codes are invalidated before new ones are issued.
+   */
+  async regenerateRecoveryCodes(userId: string, totpCode: string): Promise<{ recoveryCodes: string[] }> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new BadRequestException("User not found");
+    if (!user.totpEnabled) throw new BadRequestException("2FA is not enabled");
+
+    const isValid = this.verifyTotpCode(user.totpSecret!, totpCode);
+    if (!isValid) throw new UnauthorizedException("Invalid TOTP code");
+
+    const recoveryCodes = await this.createRecoveryCodes(userId);
+    this.logger.log(`Recovery codes regenerated for user: ${user.email || userId}`);
+    return { recoveryCodes };
+  }
+
+  /** Generate 10 fresh codes, delete all previous ones, store hashes, return plain-text. */
+  private async createRecoveryCodes(userId: string): Promise<string[]> {
+    const RECOVERY_CODE_COUNT = 10;
+    const codes: string[] = [];
+
+    for (let i = 0; i < RECOVERY_CODE_COUNT; i++) {
+      // Format: XXXXX-XXXXX (10 hex chars split by a dash — easy to type)
+      const raw = randomBytes(5).toString("hex").toUpperCase() +
+                  "-" +
+                  randomBytes(5).toString("hex").toUpperCase();
+      codes.push(raw);
+    }
+
+    const codeHashes = codes.map((c) => ({
+      userId,
+      codeHash: createHash("sha256").update(c).digest("hex"),
+    }));
+
+    await this.prisma.$transaction([
+      // Invalidate all existing codes for this user
+      this.prisma.recoveryCode.deleteMany({ where: { userId } }),
+      // Insert the new hashed codes
+      this.prisma.recoveryCode.createMany({ data: codeHashes }),
+    ]);
+
+    return codes;
+  }
+
+  /**
+   * Look up a recovery code by hash, mark it as used if found and unused.
+   * Returns true if the code was valid and consumed, false otherwise.
+   */
+  private async consumeRecoveryCode(userId: string, rawCode: string): Promise<boolean> {
+    const codeHash = createHash("sha256").update(rawCode.trim().toUpperCase()).digest("hex");
+
+    const record = await this.prisma.recoveryCode.findFirst({
+      where: { userId, codeHash, usedAt: null },
+    });
+
+    if (!record) return false;
+
+    await this.prisma.recoveryCode.update({
+      where: { id: record.id },
+      data: { usedAt: new Date() },
+    });
+
+    return true;
   }
 
   private verifyTotpCode(secret: string, code: string): boolean {

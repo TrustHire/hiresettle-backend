@@ -169,6 +169,7 @@ model User {
   recruiterFavorites   FavoriteRecruiter[]      @relation("RecruiterFavorites")
   companyMembers       CompanyMember[]          @relation("CompanyOwner")
   memberOfCompanies    CompanyMember[]          @relation("MemberUser")
+  recoveryCodes        RecoveryCode[]
 
   @@index([role, deactivatedAt])
   @@index([deletedAt, anonymizedAt]) // Used by PiiAnonymizationSchedulerService
@@ -799,4 +800,18 @@ model FeatureFlag {
   updatedAt   DateTime @updatedAt
 
   @@map("feature_flags")
+}
+
+// Single-use backup codes issued when 2FA is first enabled (or regenerated).
+// The raw code is shown once and never stored; only the SHA-256 hash is kept.
+model RecoveryCode {
+  id        String    @id @default(uuid())
+  userId    String
+  codeHash  String    // SHA-256 of the raw recovery code
+  usedAt    DateTime? // set when the code is consumed; null = still valid
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("recovery_codes")
 }

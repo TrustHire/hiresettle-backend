@@ -59,6 +59,12 @@ const makeMockPrisma = () => ({
     update: jest.fn(),
     updateMany: jest.fn(),
   },
+  recoveryCode: {
+    createMany: jest.fn().mockResolvedValue({ count: 10 }),
+    deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+    findFirst: jest.fn(),
+    update: jest.fn(),
+  },
   $transaction: jest.fn(),
 });
 
@@ -571,12 +577,15 @@ describe('AuthService', () => {
   // ── enableTotp ───────────────────────────────────────────────────────────
 
   describe('enableTotp()', () => {
-    it('enables 2FA with valid TOTP code', async () => {
+    it('enables 2FA with valid TOTP code and returns recovery codes', async () => {
       const user = makeUser({ totpSecret: 'JBSWY3DPEHPK3PXP', totpEnabled: false });
       mockPrisma.user.findUnique.mockResolvedValue(user);
       mockPrisma.user.update.mockResolvedValue({ ...user, totpEnabled: true });
 
       jest.spyOn(service as any, 'verifyTotpCode').mockReturnValue(true);
+
+      // $transaction is called inside createRecoveryCodes — return array results
+      mockPrisma.$transaction.mockResolvedValue([{ count: 0 }, { count: 10 }]);
 
       const result = await service.enableTotp('user-1', '123456');
 
@@ -584,7 +593,12 @@ describe('AuthService', () => {
         where: { id: 'user-1' },
         data: { totpEnabled: true },
       });
-      expect(result).toEqual({ enabled: true });
+      expect(result.enabled).toBe(true);
+      expect(result.recoveryCodes).toHaveLength(10);
+      // Each code should match the XXXXX-XXXXX hex format
+      result.recoveryCodes.forEach((code: string) => {
+        expect(code).toMatch(/^[0-9A-F]{10}-[0-9A-F]{10}$/);
+      });
     });
 
     it('throws BadRequestException when TOTP secret not found', async () => {
@@ -651,6 +665,190 @@ describe('AuthService', () => {
 
       await expect(service.disableTotp('user-1', '000000')).rejects.toThrow(
         UnauthorizedException,
+      );
+    });
+  });
+
+  // ── login() with 2FA recovery code ────────────────────────────────────────
+
+  describe('login() — 2FA recovery code path', () => {
+    const password = 'S3cret!';
+    let userWithHash: any;
+
+    beforeEach(async () => {
+      // Build a real scrypt hash so the password check passes
+      const registeredUser = makeUser({ email: 'alice@example.com' });
+      mockPrisma.user.create.mockResolvedValue(registeredUser);
+      mockPrisma.refreshToken.create.mockResolvedValue({});
+      await service.register({ email: 'alice@example.com', password } as any);
+      const hash = (mockPrisma.user.create.mock.calls[0][0] as any).data.passwordHash;
+      userWithHash = makeUser({ email: 'alice@example.com', passwordHash: hash });
+      jest.clearAllMocks();
+      mockPrisma.$transaction.mockImplementation((fn: any) => {
+        if (typeof fn === 'function') return fn(mockPrisma);
+        return Promise.all(fn);
+      });
+      mockJwt.sign.mockReturnValue('access_token');
+      mockJwt.signAsync.mockResolvedValue('refresh_token');
+    });
+
+    it('succeeds with a valid unused recovery code when 2FA is enabled', async () => {
+      const user2fa = { ...userWithHash, totpEnabled: true, totpSecret: 'SECRET' };
+      mockPrisma.user.findUnique.mockResolvedValue(user2fa);
+      mockPrisma.user.update.mockResolvedValue(user2fa);
+      mockPrisma.refreshToken.create.mockResolvedValue({});
+
+      // Spy on the private consumeRecoveryCode to return true
+      jest.spyOn(service as any, 'consumeRecoveryCode').mockResolvedValue(true);
+
+      const result = await service.login({
+        email: 'alice@example.com',
+        password,
+        recoveryCode: 'AABB11CCDD-EEFF223344',
+      } as any);
+
+      expect((service as any).consumeRecoveryCode).toHaveBeenCalledWith(
+        user2fa.id,
+        'AABB11CCDD-EEFF223344',
+      );
+      expect(result).toMatchObject({ accessToken: 'access_token' });
+    });
+
+    it('throws UnauthorizedException when recovery code is invalid or already used', async () => {
+      const user2fa = { ...userWithHash, totpEnabled: true, totpSecret: 'SECRET' };
+      mockPrisma.user.findUnique.mockResolvedValue(user2fa);
+      mockPrisma.user.update.mockResolvedValue(user2fa);
+
+      jest.spyOn(service as any, 'consumeRecoveryCode').mockResolvedValue(false);
+
+      await expect(
+        service.login({
+          email: 'alice@example.com',
+          password,
+          recoveryCode: 'INVALID-CODE',
+        } as any),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('throws UnauthorizedException when neither totpCode nor recoveryCode is provided', async () => {
+      const user2fa = { ...userWithHash, totpEnabled: true, totpSecret: 'SECRET' };
+      mockPrisma.user.findUnique.mockResolvedValue(user2fa);
+
+      await expect(
+        service.login({ email: 'alice@example.com', password } as any),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+  });
+
+  // ── regenerateRecoveryCodes ───────────────────────────────────────────────
+
+  describe('regenerateRecoveryCodes()', () => {
+    it('returns 10 fresh codes when TOTP is valid', async () => {
+      const user = makeUser({ totpEnabled: true, totpSecret: 'JBSWY3DPEHPK3PXP' });
+      mockPrisma.user.findUnique.mockResolvedValue(user);
+      jest.spyOn(service as any, 'verifyTotpCode').mockReturnValue(true);
+      mockPrisma.$transaction.mockResolvedValue([{ count: 10 }, { count: 10 }]);
+
+      const result = await service.regenerateRecoveryCodes('user-1', '123456');
+
+      expect(result.recoveryCodes).toHaveLength(10);
+      result.recoveryCodes.forEach((code: string) => {
+        expect(code).toMatch(/^[0-9A-F]{10}-[0-9A-F]{10}$/);
+      });
+    });
+
+    it('all generated codes are unique', async () => {
+      const user = makeUser({ totpEnabled: true, totpSecret: 'JBSWY3DPEHPK3PXP' });
+      mockPrisma.user.findUnique.mockResolvedValue(user);
+      jest.spyOn(service as any, 'verifyTotpCode').mockReturnValue(true);
+      mockPrisma.$transaction.mockResolvedValue([{ count: 0 }, { count: 10 }]);
+
+      const result = await service.regenerateRecoveryCodes('user-1', '123456');
+      const unique = new Set(result.recoveryCodes);
+      expect(unique.size).toBe(10);
+    });
+
+    it('throws BadRequestException when 2FA is not enabled', async () => {
+      const user = makeUser({ totpEnabled: false });
+      mockPrisma.user.findUnique.mockResolvedValue(user);
+
+      await expect(
+        service.regenerateRecoveryCodes('user-1', '123456'),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws UnauthorizedException when TOTP code is invalid', async () => {
+      const user = makeUser({ totpEnabled: true, totpSecret: 'JBSWY3DPEHPK3PXP' });
+      mockPrisma.user.findUnique.mockResolvedValue(user);
+      jest.spyOn(service as any, 'verifyTotpCode').mockReturnValue(false);
+
+      await expect(
+        service.regenerateRecoveryCodes('user-1', '000000'),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('throws BadRequestException when user is not found', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.regenerateRecoveryCodes('ghost', '123456'),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('calls $transaction to delete old codes and insert new ones', async () => {
+      const user = makeUser({ totpEnabled: true, totpSecret: 'JBSWY3DPEHPK3PXP' });
+      mockPrisma.user.findUnique.mockResolvedValue(user);
+      jest.spyOn(service as any, 'verifyTotpCode').mockReturnValue(true);
+      mockPrisma.$transaction.mockResolvedValue([{ count: 5 }, { count: 10 }]);
+
+      await service.regenerateRecoveryCodes('user-1', '123456');
+
+      expect(mockPrisma.$transaction).toHaveBeenCalled();
+    });
+  });
+
+  // ── consumeRecoveryCode (private) ─────────────────────────────────────────
+
+  describe('consumeRecoveryCode() (private)', () => {
+    it('returns true and marks the code used when valid', async () => {
+      const record = { id: 'rc-1', userId: 'user-1', codeHash: 'some-hash', usedAt: null };
+      mockPrisma.recoveryCode.findFirst.mockResolvedValue(record);
+      mockPrisma.recoveryCode.update.mockResolvedValue({ ...record, usedAt: new Date() });
+
+      const result = await (service as any).consumeRecoveryCode('user-1', 'AABB11CCDD-EEFF223344');
+
+      expect(mockPrisma.recoveryCode.update).toHaveBeenCalledWith({
+        where: { id: 'rc-1' },
+        data: { usedAt: expect.any(Date) },
+      });
+      expect(result).toBe(true);
+    });
+
+    it('returns false when no matching unused code exists', async () => {
+      mockPrisma.recoveryCode.findFirst.mockResolvedValue(null);
+
+      const result = await (service as any).consumeRecoveryCode('user-1', 'BADCODE');
+
+      expect(result).toBe(false);
+      expect(mockPrisma.recoveryCode.update).not.toHaveBeenCalled();
+    });
+
+    it('hashes the code before lookup (case-insensitive normalisation)', async () => {
+      mockPrisma.recoveryCode.findFirst.mockResolvedValue(null);
+
+      // Call with lowercase code
+      await (service as any).consumeRecoveryCode('user-1', 'aabb11ccdd-eeff223344');
+
+      // findFirst should be called with the SHA-256 hash of the uppercased code
+      const { createHash } = await import('crypto');
+      const expected = createHash('sha256')
+        .update('AABB11CCDD-EEFF223344')
+        .digest('hex');
+
+      expect(mockPrisma.recoveryCode.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ codeHash: expected }),
+        }),
       );
     });
   });

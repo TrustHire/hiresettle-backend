@@ -12,7 +12,7 @@ import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { RevokeSessionDto } from './dto/revoke-session.dto';
-import { EnableTotpDto, DisableTotpDto } from './dto/totp.dto';
+import { EnableTotpDto, DisableTotpDto, RegenerateRecoveryCodesDto } from './dto/totp.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { RateLimit } from '../../common/decorators/throttle.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -255,5 +255,30 @@ export class AuthController {
   @ApiResponse({ status: 400, description: 'Invalid request or TOTP code' })
   async disableTotp(@Request() req: any, @Body() dto: DisableTotpDto) {
     return this.authService.disableTotp(req.user.id, dto.code);
+  }
+
+  @Post('2fa/recovery-codes')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Regenerate 2FA backup recovery codes',
+    description:
+      'Invalidates all existing recovery codes and issues 10 fresh single-use codes. Requires a valid TOTP code. Codes are shown once — store them safely.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'New recovery codes issued',
+    schema: {
+      example: { recoveryCodes: ['AABB11-CC2233', '...'] },
+    },
+  })
+  @ApiResponse({ status: 400, description: '2FA not enabled' })
+  @ApiResponse({ status: 401, description: 'Unauthorized or invalid TOTP code' })
+  async regenerateRecoveryCodes(
+    @Request() req: any,
+    @Body() dto: RegenerateRecoveryCodesDto,
+  ) {
+    return this.authService.regenerateRecoveryCodes(req.user.id, dto.code);
   }
 }
