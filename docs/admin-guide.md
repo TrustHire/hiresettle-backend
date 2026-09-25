@@ -16,21 +16,23 @@ ADMIN_API_KEY=hs_... npm run admin:cli -- webhook resend <delivery-id>
 
 ## Admin-only endpoints
 
-| Method | Path | Purpose | Required role |
-| --- | --- | --- | --- |
-| `GET` | `/api/v1/admin/users` | List and search users. | `ADMIN` |
-| `DELETE` | `/api/v1/admin/users/:id` | Soft-deactivate a user. | `ADMIN` |
-| `POST` | `/api/v1/admin/users/:id/reactivate` | Reactivate a deactivated user. | `ADMIN` |
-| `PATCH` | `/api/v1/admin/engagements/:id/arbiter` | Assign or reassign an engagement arbiter. | `ADMIN` |
-| `GET` | `/api/v1/admin/arbiters` | List active arbiters. | `ADMIN` |
-| `GET` | `/api/v1/admin/metrics` | Retrieve cached platform dashboard metrics. | `ADMIN` |
-| `GET` | `/api/v1/admin/dead-letter-events` | List event-processing failures held in the dead-letter queue. | `ADMIN` |
-| `POST` | `/api/v1/admin/dead-letter-events/:id/requeue` | Return a dead-letter event to the processing queue for retry. | `ADMIN` |
-| `POST` | `/api/v1/admin/cache/flush` | Flush application cache entries. | `ADMIN` |
-| `GET` | `/api/v1/events` | List indexed on-chain events, with optional filters. | `ADMIN` |
-| `POST` | `/api/v1/events/process-unprocessed` | Trigger processing for unprocessed chain events. | `ADMIN` |
-| `PATCH` | `/api/v1/engagements/:id/status` | Force an engagement status update; an audit-log record is written with the administrator and reason. | `ADMIN` |
-| `PATCH` | `/api/v1/engagements/:engagementId/milestones/:index/status` | Force a milestone status update; an audit-log record is written with the administrator and reason. | `ADMIN` |
+| Method   | Path                                                         | Purpose                                                                                              | Required role |
+| -------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- | ------------- |
+| `GET`    | `/api/v1/admin/users`                                        | List and search users.                                                                               | `ADMIN`       |
+| `DELETE` | `/api/v1/admin/users/:id`                                    | Soft-deactivate a user.                                                                              | `ADMIN`       |
+| `POST`   | `/api/v1/admin/users/:id/reactivate`                         | Reactivate a deactivated user.                                                                       | `ADMIN`       |
+| `PATCH`  | `/api/v1/admin/engagements/:id/arbiter`                      | Assign or reassign an engagement arbiter.                                                            | `ADMIN`       |
+| `GET`    | `/api/v1/admin/arbiters`                                     | List active arbiters.                                                                                | `ADMIN`       |
+| `GET`    | `/api/v1/admin/metrics`                                      | Retrieve cached platform dashboard metrics.                                                          | `ADMIN`       |
+| `GET`    | `/api/v1/admin/dead-letter-events`                           | List event-processing failures held in the dead-letter queue.                                        | `ADMIN`       |
+| `POST`   | `/api/v1/admin/dead-letter-events/:id/requeue`               | Return a dead-letter event to the processing queue for retry.                                        | `ADMIN`       |
+| `POST`   | `/api/v1/admin/cache/flush`                                  | Flush application cache entries.                                                                     | `ADMIN`       |
+| `GET`    | `/api/v1/admin/maintenance-mode`                             | Get maintenance (read-only) mode status. See [Maintenance Mode](./maintenance-mode.md).              | `ADMIN`       |
+| `PUT`    | `/api/v1/admin/maintenance-mode`                             | Enable or disable maintenance mode. Decorated with `@AllowDuringMaintenance()`.                      | `ADMIN`       |
+| `GET`    | `/api/v1/events`                                             | List indexed on-chain events, with optional filters.                                                 | `ADMIN`       |
+| `POST`   | `/api/v1/events/process-unprocessed`                         | Trigger processing for unprocessed chain events.                                                     | `ADMIN`       |
+| `PATCH`  | `/api/v1/engagements/:id/status`                             | Force an engagement status update; an audit-log record is written with the administrator and reason. | `ADMIN`       |
+| `PATCH`  | `/api/v1/engagements/:engagementId/milestones/:index/status` | Force a milestone status update; an audit-log record is written with the administrator and reason.   | `ADMIN`       |
 
 Audit logs are created by the two status-override operations. The application
 does not currently expose a separate audit-log read endpoint.
