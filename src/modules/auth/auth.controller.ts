@@ -16,6 +16,7 @@ import { EnableTotpDto, DisableTotpDto } from './dto/totp.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { RateLimit } from '../../common/decorators/throttle.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { LoginHistoryDto } from './dto/login-history.dto';
 
 function requestMeta(req: ExpressRequest): RequestMeta {
   return { ip: req.ip, userAgent: req.headers['user-agent'] };
@@ -255,5 +256,50 @@ export class AuthController {
   @ApiResponse({ status: 400, description: 'Invalid request or TOTP code' })
   async disableTotp(@Request() req: any, @Body() dto: DisableTotpDto) {
     return this.authService.disableTotp(req.user.id, dto.code);
+  }
+
+  // ── Issue #355 ────────────────────────────────────────────────────────────
+
+  @Get('login-history')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({
+    summary: 'Get own login/security-event history (last 90 days, paginated)',
+    description:
+      'Returns time, IP, user-agent, action type, and success/failure for each ' +
+      'security event in the last 90 days. Users can only see their own events.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Paginated login history',
+    schema: {
+      properties: {
+        data: {
+          type: 'array',
+          items: {
+            properties: {
+              id: { type: 'string' },
+              action: { type: 'string' },
+              success: { type: 'boolean' },
+              ip: { type: 'string', nullable: true },
+              userAgent: { type: 'string', nullable: true },
+              createdAt: { type: 'string', format: 'date-time' },
+            },
+          },
+        },
+        meta: {
+          properties: {
+            total: { type: 'number' },
+            page: { type: 'number' },
+            limit: { type: 'number' },
+            windowDays: { type: 'number' },
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  getLoginHistory(@Request() req: any, @Query() dto: LoginHistoryDto) {
+    return this.authService.getLoginHistory(req.user.id, dto.page, dto.limit);
   }
 }

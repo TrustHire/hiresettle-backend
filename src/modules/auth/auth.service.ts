@@ -507,6 +507,68 @@ export class AuthService {
     return webhookSecret ? { ...safeUser, webhookSecret } : safeUser;
   }
 
+  /**
+   * Returns the authenticated user's own security events from the last 90 days.
+   * Covers all event types (login success/failure, logout, password reset, etc.)
+   * so the user can review recent account activity.
+   */
+  async getLoginHistory(
+    userId: string,
+    page: number = 1,
+    limit: number = 20,
+  ) {
+    const HISTORY_WINDOW_DAYS = 90;
+    const from = new Date(
+      Date.now() - HISTORY_WINDOW_DAYS * 24 * 60 * 60 * 1000,
+    );
+
+    const [data, total] = await this.prisma.$transaction([
+      this.prisma.securityEvent.findMany({
+        where: {
+          userId,
+          createdAt: { gte: from },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+        select: {
+          id: true,
+          action: true,
+          ip: true,
+          userAgent: true,
+          createdAt: true,
+        },
+      }),
+      this.prisma.securityEvent.count({
+        where: {
+          userId,
+          createdAt: { gte: from },
+        },
+      }),
+    ]);
+
+    // Derive success/failure flag from the action name so clients don't need
+    // to interpret SecurityEventAction values themselves.
+    const events = data.map((e) => ({
+      id: e.id,
+      action: e.action,
+      success: e.action !== SecurityEventAction.LOGIN_FAILURE,
+      ip: e.ip ?? null,
+      userAgent: e.userAgent ?? null,
+      createdAt: e.createdAt,
+    }));
+
+    return {
+      data: events,
+      meta: {
+        total,
+        page,
+        limit,
+        windowDays: HISTORY_WINDOW_DAYS,
+      },
+    };
+  }
+
   async getSessions(userId: string) {
     const now = new Date();
     const sessions = await this.prisma.refreshToken.findMany({
