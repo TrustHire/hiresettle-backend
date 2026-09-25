@@ -7,6 +7,7 @@ This directory contains the technical documentation for the HireSettle backend.
 | Document | Description |
 |----------|-------------|
 | [Admin Guide](./admin-guide.md) | Admin-only API endpoints, required role, and admin user management. |
+| [Admin CLI](./cli.md) | Every CLI command, its arguments, examples, and required environment variables. |
 | [Alerts](./alerts.md) | Prometheus alerting rules for latency, error rate, queue depth, and pool exhaustion. |
 | [Architecture](./architecture.md) | System diagram, NestJS module layout, and external service interactions. |
 | [Billing](./billing.md) | Company billing routes, fee summaries, and CSV export. |
@@ -17,7 +18,9 @@ This directory contains the technical documentation for the HireSettle backend.
 | [Deployment](./deployment.md) | Production deployment, build process, and migration ordering. |
 | [Environment Variables](./environment-variables.md) | Complete reference for every environment variable, validation rules, and defaults. |
 | [Error Codes](./error-codes.md) | API error response envelope shape, status codes, and handling guidance. |
+| [Feature Flags](./feature-flags.md) | How to create, toggle, and check feature flags in code, plus admin API reference and naming conventions. |
 | [Glossary](./glossary.md) | Domain-specific terms: Engagement, Milestone, Escrow, Arbiter, Soroban, and more. |
+| [GraphQL API](./graphql.md) | GraphQL endpoint location, authentication, all available queries with examples, and REST features not yet in GraphQL. |
 | [Incident Response](./incident-response.md) | Incident severity levels, triage process, escalation path, and postmortem template. |
 | [Load Testing](./load-testing.md) | k6 load and stress test suite, SLO targets, and how to interpret results. |
 | [Monitoring](./monitoring.md) | Prometheus metrics emitted by the backend, labels, and example Grafana/PromQL queries. |
@@ -25,6 +28,7 @@ This directory contains the technical documentation for the HireSettle backend.
 | [Notifications Guide](./notifications-guide.md) | How in-app, email, and SSE notifications are delivered and configured. |
 | [OpenAPI Guide](./openapi-guide.md) | Swagger UI access, OpenAPI decorator conventions, and schema generation. |
 | [Performance](./performance.md) | k6 performance test scenarios, p95 SLO target, and how to add new scenarios. |
+| [Queues](./queues.md) | BullMQ queue names, producers, processors, retry settings, Bull Board access, and dead-letter event requeueing. |
 | [Rate Limiting](./rate-limiting.md) | Default throttle limits, per-route overrides, and Retry-After headers. |
 | [Runbook](./runbook.md) | On-call runbook with step-by-step resolution for each Prometheus alert. |
 | [S3 Cleanup](./s3-cleanup.md) | Presigned URL configuration and the orphaned S3 object cleanup job. |
