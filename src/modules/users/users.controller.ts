@@ -10,6 +10,7 @@ import {
   Patch,
   Post,
   Put,
+  Query,
   UploadedFile,
   UseGuards,
   UseInterceptors,
@@ -19,6 +20,7 @@ import {
   ApiBearerAuth,
   ApiOperation,
   ApiParam,
+  ApiQuery,
   ApiTags,
   ApiResponse,
   ApiConsumes,
@@ -41,6 +43,7 @@ import { SetSlackWebhookDto } from "./dto/set-slack-webhook.dto";
 import { SetDiscordWebhookDto } from "./dto/set-discord-webhook.dto";
 import { AvatarUploadDto } from "./dto/avatar-upload.dto";
 import { UserDataExportDto } from "./dto/user-data-export.dto";
+import { RequestEmailChangeDto } from "./dto/request-email-change.dto";
 import { UsersService } from "./users.service";
 import { GdprService } from "./gdpr.service";
 import { UserRole } from "@prisma/client";
@@ -307,6 +310,49 @@ export class UsersController {
       userId,
       dto.allowedCustomFields,
     );
+  }
+
+  // ── Issue #356 ─────────────────────────────────────────────────────────────
+
+  @Post("me/email")
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @RateLimit(5, 60)
+  @ApiOperation({
+    summary: "Request an email address change (#356)",
+    description:
+      "Sends a confirmation link to the new address. The email only changes after the link is clicked. " +
+      "The old address receives a notification. Token expires after 24 h.",
+  })
+  @ApiResponse({ status: 200, description: "Confirmation email sent to new address" })
+  @ApiResponse({ status: 400, description: "New email is same as current or invalid" })
+  @ApiResponse({ status: 401, description: "Unauthorized" })
+  @ApiResponse({ status: 409, description: "Email already registered" })
+  @ApiResponse({ status: 429, description: "Too many requests" })
+  requestEmailChange(
+    @CurrentUser("id") userId: string,
+    @Body() dto: RequestEmailChangeDto,
+  ) {
+    return this.usersService.requestEmailChange(userId, dto.newEmail);
+  }
+
+  @Get("me/email/confirm")
+  @ApiOperation({
+    summary: "Confirm email address change via token (#356)",
+    description:
+      "Validates the token from the confirmation email and switches the account email " +
+      "to the new address. No authentication header required — the token is the credential.",
+  })
+  @ApiQuery({ name: "token", required: true, description: "HMAC token from the confirmation email" })
+  @ApiResponse({ status: 200, description: "Email updated successfully" })
+  @ApiResponse({ status: 400, description: "Invalid or expired token" })
+  @ApiResponse({ status: 409, description: "Email address no longer available" })
+  confirmEmailChange(@Query("token") token: string) {
+    if (!token) {
+      throw new BadRequestException("token query parameter is required");
+    }
+    return this.usersService.confirmEmailChange(token);
   }
 
   @Get(":stellarAddress")

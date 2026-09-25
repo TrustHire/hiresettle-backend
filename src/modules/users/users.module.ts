@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
 import { UsersService } from './users.service';
 import { UsersController } from './users.controller';
 import { GdprService } from './gdpr.service';
@@ -8,7 +9,7 @@ import { AppCacheModule } from '../../common/cache/cache.module';
 import { AuthModule } from '../auth/auth.module';
 
 @Module({
-  imports: [S3Module, AppCacheModule, AuthModule],
+  imports: [S3Module, AppCacheModule, AuthModule, ConfigModule],
   providers: [UsersService, GdprService, PiiAnonymizationSchedulerService],
   controllers: [UsersController],
   exports: [UsersService, GdprService],
