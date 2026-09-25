@@ -804,3 +804,21 @@ model FeatureFlag {
 
   @@map("feature_flags")
 }
+
+// Two-step company ownership transfer (#360).
+// The current owner initiates; the proposed new owner must accept within 7 days.
+// Acceptance atomically reassigns CompanyMember roles and writes an AuditLog entry.
+model OwnershipTransfer {
+  id          String    @id @default(uuid())
+  companyId   String                // the User.id of the company owner record
+  fromOwnerId String                // current owner's User.id
+  toMemberId  String                // proposed new owner's User.id (must be a CompanyMember)
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  cancelledAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([companyId])
+  @@index([toMemberId])
+  @@map("ownership_transfers")
+}
