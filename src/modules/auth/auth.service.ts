@@ -176,23 +176,30 @@ export class AuthService {
 
     // Check if 2FA is enabled
     if (user.totpEnabled) {
-      if (!dto.totpCode && !dto.recoveryCode) {
-        throw new UnauthorizedException(
-          "TOTP code or recovery code required for 2FA-enabled account",
-        );
-      }
+      // Check for a valid trusted-device token first — if present and valid, skip 2FA
+      const trustedDeviceSkip =
+        dto.trustedDeviceToken &&
+        (await this.verifyTrustedDeviceToken(user.id, dto.trustedDeviceToken));
 
-      if (dto.recoveryCode) {
-        const consumed = await this.consumeRecoveryCode(user.id, dto.recoveryCode);
-        if (!consumed) {
-          await this.handleFailedLogin(user.id, meta);
-          throw new UnauthorizedException("Invalid or already-used recovery code");
+      if (!trustedDeviceSkip) {
+        if (!dto.totpCode && !dto.recoveryCode) {
+          throw new UnauthorizedException(
+            "TOTP code or recovery code required for 2FA-enabled account",
+          );
         }
-      } else {
-        const isValid = this.verifyTotpCode(user.totpSecret!, dto.totpCode!);
-        if (!isValid) {
-          await this.handleFailedLogin(user.id, meta);
-          throw new UnauthorizedException("Invalid TOTP code");
+
+        if (dto.recoveryCode) {
+          const consumed = await this.consumeRecoveryCode(user.id, dto.recoveryCode);
+          if (!consumed) {
+            await this.handleFailedLogin(user.id, meta);
+            throw new UnauthorizedException("Invalid or already-used recovery code");
+          }
+        } else {
+          const isValid = this.verifyTotpCode(user.totpSecret!, dto.totpCode!);
+          if (!isValid) {
+            await this.handleFailedLogin(user.id, meta);
+            throw new UnauthorizedException("Invalid TOTP code");
+          }
         }
       }
     }
@@ -204,7 +211,19 @@ export class AuthService {
       user.id,
       meta,
     );
-    return this.issueTokenPair(user);
+
+    const tokenPair = await this.issueTokenPair(user);
+
+    // If the user asked to trust this device after a successful 2FA, issue a token
+    if (user.totpEnabled && dto.trustDevice) {
+      const trustedDeviceToken = await this.issueTrustedDeviceToken(
+        user.id,
+        meta.userAgent,
+      );
+      return { ...tokenPair, trustedDeviceToken };
+    }
+
+    return tokenPair;
   }
 
   // Backward-compatible alias kept for existing controller routes
@@ -707,6 +726,166 @@ export class AuthService {
     const recoveryCodes = await this.createRecoveryCodes(userId);
     this.logger.log(`Recovery codes regenerated for user: ${user.email || userId}`);
     return { recoveryCodes };
+  }
+
+  // ── Trusted Devices ──────────────────────────────────────────────────────
+
+  /**
+   * Issue a trusted-device token after a successful 2FA login.
+   * The raw token is returned once; only its SHA-256 hash is stored.
+   */
+  async issueTrustedDeviceToken(
+    userId: string,
+    userAgent?: string,
+  ): Promise<string> {
+    const ttlDays = this.config.get<number>("TRUSTED_DEVICE_TTL_DAYS", 30);
+    const rawToken = randomBytes(32).toString("hex");
+    const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+    const expiresAt = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000);
+
+    // Use first 120 chars of userAgent as the device label for display
+    const name = userAgent ? userAgent.slice(0, 120) : undefined;
+
+    await this.prisma.trustedDevice.create({
+      data: { userId, tokenHash, name, expiresAt },
+    });
+
+    return rawToken;
+  }
+
+  /**
+   * Verify a trusted-device token. Returns true if the token is valid,
+   * not revoked, and not expired — updating lastUsedAt in the process.
+   */
+  async verifyTrustedDeviceToken(
+    userId: string,
+    rawToken: string,
+  ): Promise<boolean> {
+    const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+    const now = new Date();
+
+    const device = await this.prisma.trustedDevice.findUnique({
+      where: { tokenHash },
+    });
+
+    if (
+      !device ||
+      device.userId !== userId ||
+      device.revokedAt !== null ||
+      device.expiresAt <= now
+    ) {
+      return false;
+    }
+
+    // Bump lastUsedAt — non-blocking
+    await this.prisma.trustedDevice
+      .update({ where: { id: device.id }, data: { lastUsedAt: now } })
+      .catch(() => undefined);
+
+    return true;
+  }
+
+  /**
+   * List active (non-revoked, non-expired) trusted devices for a user.
+   */
+  async listTrustedDevices(userId: string) {
+    const now = new Date();
+    return this.prisma.trustedDevice.findMany({
+      where: { userId, revokedAt: null, expiresAt: { gt: now } },
+      orderBy: { lastUsedAt: "desc" },
+      select: {
+        id: true,
+        name: true,
+        lastUsedAt: true,
+        expiresAt: true,
+        createdAt: true,
+      },
+    });
+  }
+
+  /**
+   * Revoke a single trusted device. Users can only revoke their own.
+   */
+  async revokeTrustedDevice(deviceId: string, userId: string) {
+    const device = await this.prisma.trustedDevice.findUnique({
+      where: { id: deviceId },
+    });
+
+    if (!device) {
+      throw new BadRequestException("Trusted device not found");
+    }
+
+    if (device.userId !== userId) {
+      throw new ForbiddenException(
+        "You can only revoke your own trusted devices",
+      );
+    }
+
+    if (device.revokedAt) {
+      throw new BadRequestException("Trusted device already revoked");
+    }
+
+    await this.prisma.trustedDevice.update({
+      where: { id: deviceId },
+      data: { revokedAt: new Date() },
+    });
+
+    return { revoked: true };
+  }
+
+  /**
+   * Revoke ALL trusted devices for a user — called after a password change.
+   */
+  private async revokeAllTrustedDevices(userId: string): Promise<void> {
+    await this.prisma.trustedDevice.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+  }
+
+  // ── Password Reset ────────────────────────────────────────────────────────
+
+  /**
+   * Change the authenticated user's password.
+   * Verifies the current password, enforces the complexity policy, and
+   * revokes all trusted devices to invalidate any stolen session on device-
+   * trust re-login.
+   */
+  async resetPassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string,
+  ) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user || !user.passwordHash) {
+      throw new BadRequestException(
+        "User not found or password login not available",
+      );
+    }
+
+    const currentValid = await this.verifyPassword(
+      currentPassword,
+      user.passwordHash,
+    );
+    if (!currentValid) {
+      throw new UnauthorizedException("Current password is incorrect");
+    }
+
+    this.passwordPolicy.validate(newPassword);
+
+    const newHash = await this.hashPassword(newPassword);
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash: newHash },
+    });
+
+    // Revoke all trusted devices — after a password change the previous
+    // device-trust relationship should no longer bypass 2FA.
+    await this.revokeAllTrustedDevices(userId);
+
+    this.logger.log(`Password changed for user: ${userId}`);
+    return { updated: true };
   }
 
   /** Generate 10 fresh codes, delete all previous ones, store hashes, return plain-text. */
