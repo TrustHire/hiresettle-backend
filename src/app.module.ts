@@ -17,6 +17,7 @@ import { DataRetentionModule } from './common/retention/data-retention.module';
 import { PrismaModule } from './common/prisma/prisma.module';
 import { S3Module } from './common/s3/s3.module';
 import { PasswordPolicyModule } from './common/password/password-policy.module';
+import { HibpModule } from './common/hibp/hibp.module';
 import { StellarModule as CommonStellarModule } from './common/stellar/stellar.module';
 import { StellarModule } from './modules/stellar/stellar.module';
 
@@ -67,6 +68,7 @@ import { FeatureFlagsModule } from './modules/feature-flags/feature-flags.module
     PrismaModule,
     S3Module,
     PasswordPolicyModule,
+    HibpModule,
     CommonStellarModule,
     StellarModule,
     AuthModule,

@@ -23,6 +23,7 @@ import { PrismaService } from "../../common/prisma/prisma.service";
 import { StellarService } from "../../common/stellar/stellar.service";
 import { SecurityEventsService } from "../../common/security-events/security-events.service";
 import { PasswordPolicyService } from "../../common/password/password-policy.service";
+import { HibpService } from "../../common/hibp/hibp.service";
 import { LoginDto } from "./dto/login.dto";
 import { RegisterDto } from "./dto/register.dto";
 import { Keypair } from "@stellar/stellar-sdk";
@@ -60,6 +61,7 @@ export class AuthService {
     private readonly stellar: StellarService,
     private readonly securityEvents: SecurityEventsService,
     private readonly passwordPolicy: PasswordPolicyService,
+    private readonly hibp: HibpService,
   ) {}
 
   generateNonce(stellarAddress: string): string {
@@ -86,6 +88,7 @@ export class AuthService {
 
   async register(dto: RegisterDto) {
     this.passwordPolicy.validate(dto.password);
+    await this.checkHibp(dto.password);
     const email = dto.email.toLowerCase();
     const passwordHash = await this.hashPassword(dto.password);
 
@@ -728,6 +731,40 @@ export class AuthService {
     return { recoveryCodes };
   }
 
+  // ── HaveIBeenPwned breach check ───────────────────────────────────────────
+
+  /**
+   * Rejects passwords that appear in the HaveIBeenPwned corpus.
+   *
+   * Behaviour:
+   *  - If HIBP_CHECK_ENABLED=false the check is skipped entirely.
+   *  - If the API is unreachable an error is logged and the check is skipped
+   *    (fail-open) so a network hiccup never blocks registrations.
+   *  - If the password is found it throws BadRequestException with a clear message.
+   */
+  private async checkHibp(password: string): Promise<void> {
+    const enabled = this.config.get<string>('HIBP_CHECK_ENABLED', 'true');
+    if (enabled === 'false' || enabled === '0') {
+      return;
+    }
+
+    let breached: boolean;
+    try {
+      breached = await this.hibp.isBreached(password);
+    } catch (err: any) {
+      // isBreached already logs API errors and returns false; this is a
+      // belt-and-suspenders catch for truly unexpected failures.
+      this.logger.warn(`HIBP check failed unexpectedly: ${err?.message ?? err} — skipping`);
+      return;
+    }
+
+    if (breached) {
+      throw new BadRequestException(
+        'This password has appeared in a known data breach. Please choose a different password.',
+      );
+    }
+  }
+
   // ── Trusted Devices ──────────────────────────────────────────────────────
 
   /**
@@ -872,6 +909,7 @@ export class AuthService {
     }
 
     this.passwordPolicy.validate(newPassword);
+    await this.checkHibp(newPassword);
 
     const newHash = await this.hashPassword(newPassword);
 
