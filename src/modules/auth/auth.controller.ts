@@ -258,6 +258,29 @@ export class AuthController {
     return this.authService.disableTotp(req.user.id, dto.code);
   }
 
+  // ── Issue #357 ────────────────────────────────────────────────────────────
+
+  @Get('rebind-challenge')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({
+    summary: 'Get a rebind challenge nonce for Stellar wallet rebinding (#357)',
+    description:
+      'Returns a 10-minute challenge nonce scoped to the authenticated user. ' +
+      'Sign this nonce with both the old and new Stellar keypairs, then POST to ' +
+      '/users/me/stellar-address.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Challenge nonce generated',
+    schema: { properties: { nonce: { type: 'string' } } },
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  getRebindChallenge(@Request() req: any) {
+    const nonce = this.authService.generateRebindChallenge(req.user.id);
+    return { nonce };
+  }
+
   // ── Issue #355 ────────────────────────────────────────────────────────────
 
   @Get('login-history')

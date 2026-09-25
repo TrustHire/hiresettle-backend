@@ -3,8 +3,9 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
+  ForbiddenException,
 } from "@nestjs/common";
-import { NotificationType, SecurityEventAction } from "@prisma/client";
+import { EngagementStatus, NotificationType, SecurityEventAction } from "@prisma/client";
 import { createHmac, randomBytes } from "crypto";
 import * as nodemailer from "nodemailer";
 import { ConfigService } from "@nestjs/config";
@@ -12,6 +13,7 @@ import { PrismaService } from "../../common/prisma/prisma.service";
 import { S3Service } from "../../common/s3/s3.service";
 import { CacheService } from "../../common/cache/cache.service";
 import { SecurityEventsService } from "../../common/security-events/security-events.service";
+import { StellarService } from "../../common/stellar/stellar.service";
 import { UpdatePreferencesDto } from "./dto/update-preferences.dto";
 import { PublicUserDto } from "./dto/public-user.dto";
 import { UserProfileDto } from "./dto/user-profile.dto";
@@ -30,6 +32,7 @@ export class UsersService {
     private readonly cache: CacheService,
     private readonly securityEvents: SecurityEventsService,
     private readonly config: ConfigService,
+    private readonly stellar: StellarService,
   ) {
     this.transporter = nodemailer.createTransport({
       host: this.config.get('SMTP_HOST'),
@@ -334,6 +337,117 @@ export class UsersService {
       subject: '⚠️ Email change requested – HireSettle',
       html,
     });
+  }
+
+  // ── Issue #357 ────────────────────────────────────────────────────────────
+
+  /**
+   * Bind a new Stellar address to the authenticated user.
+   *
+   * Security requirements:
+   *  - The `nonce` must have been issued via GET /auth/rebind-challenge (10-min TTL, consumed here).
+   *  - `newSignature` must be a valid Ed25519 signature of the nonce by the *new* keypair.
+   *  - If the user already has a Stellar address, `oldSignature` must also be a valid signature
+   *    of the nonce by the *old* keypair (proves the user still controls the old key).
+   *  - The user must have no active funded engagements referencing their current address.
+   */
+  async rebindStellarAddress(
+    userId: string,
+    newAddress: string,
+    nonce: string,
+    newSignature: string,
+    oldSignature: string | undefined,
+    meta?: { ip?: string; userAgent?: string },
+  ) {
+    // 1. Validate new address format
+    if (!this.stellar.isValidStellarAddress(newAddress)) {
+      throw new BadRequestException('Invalid Stellar address format');
+    }
+
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User not found');
+
+    // 2. Reject if new address is the same as the current one
+    if (user.stellarAddress === newAddress) {
+      throw new BadRequestException('New Stellar address must be different from the current one');
+    }
+
+    // 3. Verify new address signature
+    const newSigValid = this.stellar.verifySignature(newAddress, nonce, newSignature);
+    if (!newSigValid) {
+      throw new BadRequestException(
+        'Invalid signature from new Stellar address. Sign the nonce with your new keypair.',
+      );
+    }
+
+    // 4. If user has an existing address, require old key signature
+    if (user.stellarAddress) {
+      if (!oldSignature) {
+        throw new BadRequestException(
+          'oldSignature is required when the account already has a linked Stellar address.',
+        );
+      }
+      const oldSigValid = this.stellar.verifySignature(user.stellarAddress, nonce, oldSignature);
+      if (!oldSigValid) {
+        throw new BadRequestException(
+          'Invalid signature from old Stellar address. Sign the nonce with your current keypair.',
+        );
+      }
+    }
+
+    // 5. Block if user has active or pending-acceptance funded engagements
+    const activeStatuses = [
+      EngagementStatus.ACTIVE,
+      EngagementStatus.PENDING_ACCEPTANCE,
+      EngagementStatus.REPLACEMENT_REQUESTED,
+    ];
+
+    if (user.stellarAddress) {
+      const activeCount = await this.prisma.engagement.count({
+        where: {
+          status: { in: activeStatuses },
+          OR: [
+            { companyAddress: user.stellarAddress },
+            { recruiterAddress: user.stellarAddress },
+            { arbiterAddress: user.stellarAddress },
+          ],
+        },
+      });
+
+      if (activeCount > 0) {
+        throw new ForbiddenException(
+          'Cannot rebind Stellar address while you have active funded engagements. ' +
+            'Complete or cancel all active engagements first.',
+        );
+      }
+    }
+
+    // 6. Ensure new address isn't already claimed by another user
+    const taken = await this.prisma.user.findFirst({
+      where: { stellarAddress: newAddress, id: { not: userId } },
+    });
+    if (taken) {
+      throw new ConflictException('This Stellar address is already linked to another account');
+    }
+
+    // 7. Persist the new address
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { stellarAddress: newAddress },
+    });
+
+    // 8. Record security event
+    await this.securityEvents.log({
+      userId,
+      action: SecurityEventAction.ROLE_CHANGE, // closest existing action for key-material change
+      ip: meta?.ip,
+      userAgent: meta?.userAgent,
+    });
+
+    return {
+      message: 'Stellar address updated successfully.',
+      stellarAddress: newAddress,
+    };
   }
 
   async getAvatarUploadUrl(

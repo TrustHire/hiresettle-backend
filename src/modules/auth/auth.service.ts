@@ -52,6 +52,11 @@ export class AuthService {
   >();
   private readonly regChallenges = new Map<string, string>(); // keyed by userId
   private readonly authChallenges = new Map<string, string>();
+  // Rebind challenges keyed by userId (#357)
+  private readonly rebindChallenges = new Map<
+    string,
+    { nonce: string; expiresAt: number }
+  >();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -81,6 +86,38 @@ export class AuthService {
     }
     if (entry.nonce !== nonce) return false;
     this.nonces.delete(stellarAddress);
+    return true;
+  }
+
+  // ── Issue #357 — rebind challenge helpers ──────────────────────────────────
+
+  /**
+   * Generate a 10-minute challenge nonce scoped to a userId.
+   * Used for the Stellar wallet rebinding flow so the nonce is tied to the
+   * authenticated user rather than an address (which is changing).
+   */
+  generateRebindChallenge(userId: string): string {
+    const nonce = `hiresettle-rebind:${userId}:${Date.now()}:${randomBytes(16).toString('hex')}`;
+    this.rebindChallenges.set(userId, {
+      nonce,
+      expiresAt: Date.now() + 10 * 60 * 1000, // 10 min TTL
+    });
+    return nonce;
+  }
+
+  /**
+   * Validate and consume a rebind challenge nonce.
+   * Returns true on success; false if not found, expired, or mismatched.
+   */
+  consumeRebindChallenge(userId: string, nonce: string): boolean {
+    const entry = this.rebindChallenges.get(userId);
+    if (!entry) return false;
+    if (entry.expiresAt < Date.now()) {
+      this.rebindChallenges.delete(userId);
+      return false;
+    }
+    if (entry.nonce !== nonce) return false;
+    this.rebindChallenges.delete(userId);
     return true;
   }
 
