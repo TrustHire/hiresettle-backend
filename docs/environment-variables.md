@@ -51,6 +51,7 @@ Complete reference for every environment variable consumed by the HireSettle bac
 | `JWT_ACCESS_EXPIRES_IN` | No | `15m` | No | Access token lifetime (e.g., `15m`, `1h`, `30m`). Accepted by the `expiresIn` option of `JwtService.sign()`. |
 | `JWT_REFRESH_EXPIRES_IN` | No | `7d` | No | Refresh token JWT lifetime (e.g., `7d`, `30d`). Used for the `expiresIn` parameter when signing refresh tokens. |
 | `JWT_REFRESH_EXPIRES_DAYS` | No | `7` | No | Refresh token database record expiration in days. Controls when the `RefreshToken.expiresAt` date is set. |
+| `IDLE_SESSION_WINDOW_DAYS` | No | `7` | **Yes** | Refresh tokens unused for longer than this window are rejected on `POST /auth/refresh`. `RefreshToken.lastUsedAt` is updated on every refresh. Must be between 1 and 365. |
 | `SKIP_ACCOUNT_VALIDATION` | No | `false` | No | When truthy (`true` / `1`), skips the Stellar account existence check during registration. Useful for testing against a local Stellar network without pre-funded accounts. |
 | `HIRESETTLE_CONTRACT_VERSION` | No | `1` | No | Expected return value of the Soroban contract `version()` method. Startup fails if the configured contract reports a different version. |
 | `SKIP_CONTRACT_COMPATIBILITY_CHECK` | No | `false` | No | Skips the Soroban contract version check. Use only when running against a local mock contract. |

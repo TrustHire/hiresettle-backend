@@ -17,6 +17,10 @@ export const envValidationSchema = Joi.object({
     .default('log'),
   NOTIFICATION_RETENTION_DAYS: Joi.number().integer().min(1).default(90),
 
+  // Idle session expiration — refresh tokens unused for longer than this
+  // window are rejected on POST /auth/refresh (defaults to 7 days).
+  IDLE_SESSION_WINDOW_DAYS: Joi.number().integer().min(1).max(365).default(7),
+
   // Password complexity policy
   PASSWORD_MIN_LENGTH: Joi.number().integer().min(6).max(128).default(8),
   PASSWORD_REQUIRE_UPPERCASE: Joi.boolean().truthy('true', '1', 'yes').falsy('false', '0', 'no').default(true),

@@ -40,6 +40,7 @@ const makeRefreshToken = (overrides: Partial<any> = {}) => ({
   expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
   consumedAt: null,
   revokedAt: null,
+  lastUsedAt: null,
   createdAt: new Date(),
   ...overrides,
 });
@@ -86,6 +87,7 @@ const makeMockConfig = () => ({
     if (key === 'JWT_ACCESS_EXPIRES_IN') return '15m';
     if (key === 'JWT_REFRESH_EXPIRES_IN') return '7d';
     if (key === 'JWT_REFRESH_EXPIRES_DAYS') return 7;
+    if (key === 'IDLE_SESSION_WINDOW_DAYS') return 7;
     if (key === 'SKIP_ACCOUNT_VALIDATION') return true;
     if (key === 'TRUSTED_DEVICE_TTL_DAYS') return 30;
     return def ?? null;
@@ -202,6 +204,7 @@ describe('AuthService', () => {
           },
           { provide: StellarService, useValue: mockStellar },
           { provide: SecurityEventsService, useValue: makeMockSecurityEvents() },
+          { provide: PasswordPolicyService, useValue: makeMockPasswordPolicy() },
         ],
       }).compile();
       const svc2 = module2.get<AuthService>(AuthService);
@@ -357,6 +360,86 @@ describe('AuthService', () => {
 
       await expect(service.refresh('any_token')).rejects.toThrow(
         UnauthorizedException,
+      );
+    });
+
+    it('throws UnauthorizedException for an idle session beyond the window', async () => {
+      const idleSince = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+      const stored = makeRefreshToken({
+        lastUsedAt: idleSince,
+        user: makeUser(),
+      });
+      mockPrisma.refreshToken.findUnique.mockResolvedValue(stored);
+
+      await expect(service.refresh('idle_token')).rejects.toThrow(
+        UnauthorizedException,
+      );
+      // An idle rejection must not consume or rotate the token.
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('accepts a recently active session within the window', async () => {
+      const lastUsed = new Date(Date.now() - 6 * 24 * 60 * 60 * 1000);
+      const stored = makeRefreshToken({
+        lastUsedAt: lastUsed,
+        user: makeUser(),
+      });
+      mockPrisma.refreshToken.findUnique.mockResolvedValue(stored);
+      mockPrisma.$transaction.mockImplementation(async (fn: any) => {
+        if (typeof fn === 'function') {
+          return fn({
+            refreshToken: {
+              updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+              create: jest.fn().mockResolvedValue({}),
+            },
+          });
+        }
+      });
+
+      const result = await service.refresh('valid_token');
+      expect(result).toMatchObject({ accessToken: 'access_token' });
+    });
+
+    it('falls back to createdAt for legacy tokens without lastUsedAt', async () => {
+      const stored = makeRefreshToken({
+        lastUsedAt: null,
+        createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000),
+        user: makeUser(),
+      });
+      mockPrisma.refreshToken.findUnique.mockResolvedValue(stored);
+
+      await expect(service.refresh('legacy_token')).rejects.toThrow(
+        UnauthorizedException,
+      );
+    });
+
+    it('tracks last activity when rotating a token', async () => {
+      const stored = makeRefreshToken({ user: makeUser() });
+      mockPrisma.refreshToken.findUnique.mockResolvedValue(stored);
+
+      let txUpdateMany: jest.Mock;
+      let txCreate: jest.Mock;
+      mockPrisma.$transaction.mockImplementation(async (fn: any) => {
+        if (typeof fn === 'function') {
+          txUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
+          txCreate = jest.fn().mockResolvedValue({});
+          return fn({ refreshToken: { updateMany: txUpdateMany, create: txCreate } });
+        }
+      });
+
+      await service.refresh('valid_token');
+
+      // Consumed row gets its lastUsedAt bumped ...
+      expect(txUpdateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ lastUsedAt: expect.any(Date) }),
+        }),
+      );
+      // ... and the rotated token is minted with a fresh lastUsedAt.
+      expect(txCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ lastUsedAt: expect.any(Date) }),
+        }),
       );
     });
 

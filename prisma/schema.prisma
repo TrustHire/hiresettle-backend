@@ -211,6 +211,7 @@ model RefreshToken {
   expiresAt  DateTime
   consumedAt DateTime?
   revokedAt  DateTime?
+  lastUsedAt DateTime?  // last activity timestamp — used to expire idle sessions
   createdAt  DateTime  @default(now())
 
   // Relations
@@ -823,6 +824,20 @@ model OwnershipTransfer {
   @@index([companyId])
   @@index([toMemberId])
   @@map("ownership_transfers")
+}
+
+// A single-use backup code for a 2FA-enabled account.
+// The raw code is shown once at generation time; only the SHA-256 hash is stored.
+model RecoveryCode {
+  id       String    @id @default(uuid())
+  userId   String
+  codeHash String // SHA-256 of the raw recovery code
+  usedAt   DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("recovery_codes")
 }
 
 // A device that has been trusted after a successful 2FA login.
