@@ -65,6 +65,13 @@ const makeMockPrisma = () => ({
     findFirst: jest.fn(),
     update: jest.fn(),
   },
+  trustedDevice: {
+    create: jest.fn().mockResolvedValue({}),
+    findUnique: jest.fn(),
+    findMany: jest.fn(),
+    update: jest.fn(),
+    updateMany: jest.fn(),
+  },
   $transaction: jest.fn(),
 });
 
@@ -80,6 +87,7 @@ const makeMockConfig = () => ({
     if (key === 'JWT_REFRESH_EXPIRES_IN') return '7d';
     if (key === 'JWT_REFRESH_EXPIRES_DAYS') return 7;
     if (key === 'SKIP_ACCOUNT_VALIDATION') return true;
+    if (key === 'TRUSTED_DEVICE_TTL_DAYS') return 30;
     return def ?? null;
   }),
 });
@@ -850,6 +858,352 @@ describe('AuthService', () => {
           where: expect.objectContaining({ codeHash: expected }),
         }),
       );
+    });
+  });
+
+  // ── issueTrustedDeviceToken ───────────────────────────────────────────────
+
+  describe('issueTrustedDeviceToken()', () => {
+    it('stores a hashed token and returns the raw token', async () => {
+      mockPrisma.trustedDevice.create.mockResolvedValue({ id: 'td-1' });
+
+      const token = await service.issueTrustedDeviceToken('user-1', 'Mozilla/5.0');
+
+      expect(typeof token).toBe('string');
+      expect(token).toHaveLength(64); // 32 random bytes → 64 hex chars
+
+      expect(mockPrisma.trustedDevice.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            userId: 'user-1',
+            tokenHash: expect.any(String),
+            name: 'Mozilla/5.0',
+            expiresAt: expect.any(Date),
+          }),
+        }),
+      );
+
+      // Stored hash must be the SHA-256 of the returned raw token
+      const { createHash } = await import('crypto');
+      const expectedHash = createHash('sha256').update(token).digest('hex');
+      const storedHash = (mockPrisma.trustedDevice.create.mock.calls[0][0] as any).data.tokenHash;
+      expect(storedHash).toBe(expectedHash);
+    });
+
+    it('sets expiresAt 30 days in the future by default', async () => {
+      mockPrisma.trustedDevice.create.mockResolvedValue({ id: 'td-1' });
+      const before = Date.now();
+      await service.issueTrustedDeviceToken('user-1');
+      const after = Date.now();
+
+      const expiresAt: Date = (mockPrisma.trustedDevice.create.mock.calls[0][0] as any).data.expiresAt;
+      const expectedMs = 30 * 24 * 60 * 60 * 1000;
+      expect(expiresAt.getTime()).toBeGreaterThanOrEqual(before + expectedMs - 1000);
+      expect(expiresAt.getTime()).toBeLessThanOrEqual(after + expectedMs + 1000);
+    });
+
+    it('truncates userAgent to 120 chars for the name field', async () => {
+      mockPrisma.trustedDevice.create.mockResolvedValue({ id: 'td-1' });
+      const longAgent = 'A'.repeat(200);
+      await service.issueTrustedDeviceToken('user-1', longAgent);
+      const name = (mockPrisma.trustedDevice.create.mock.calls[0][0] as any).data.name;
+      expect(name).toHaveLength(120);
+    });
+  });
+
+  // ── verifyTrustedDeviceToken ──────────────────────────────────────────────
+
+  describe('verifyTrustedDeviceToken()', () => {
+    const makeDevice = (overrides: Partial<any> = {}) => ({
+      id: 'td-1',
+      userId: 'user-1',
+      tokenHash: 'some-hash',
+      revokedAt: null,
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      ...overrides,
+    });
+
+    it('returns true and updates lastUsedAt for a valid token', async () => {
+      const device = makeDevice();
+      mockPrisma.trustedDevice.findUnique.mockResolvedValue(device);
+      mockPrisma.trustedDevice.update.mockResolvedValue(device);
+
+      const result = await service.verifyTrustedDeviceToken('user-1', 'raw-token');
+      expect(result).toBe(true);
+      expect(mockPrisma.trustedDevice.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'td-1' },
+          data: { lastUsedAt: expect.any(Date) },
+        }),
+      );
+    });
+
+    it('returns false when token not found', async () => {
+      mockPrisma.trustedDevice.findUnique.mockResolvedValue(null);
+      const result = await service.verifyTrustedDeviceToken('user-1', 'bad-token');
+      expect(result).toBe(false);
+    });
+
+    it('returns false when device belongs to a different user', async () => {
+      const device = makeDevice({ userId: 'user-2' });
+      mockPrisma.trustedDevice.findUnique.mockResolvedValue(device);
+      const result = await service.verifyTrustedDeviceToken('user-1', 'raw-token');
+      expect(result).toBe(false);
+    });
+
+    it('returns false when device is revoked', async () => {
+      const device = makeDevice({ revokedAt: new Date() });
+      mockPrisma.trustedDevice.findUnique.mockResolvedValue(device);
+      const result = await service.verifyTrustedDeviceToken('user-1', 'raw-token');
+      expect(result).toBe(false);
+    });
+
+    it('returns false when device is expired', async () => {
+      const device = makeDevice({ expiresAt: new Date(Date.now() - 1000) });
+      mockPrisma.trustedDevice.findUnique.mockResolvedValue(device);
+      const result = await service.verifyTrustedDeviceToken('user-1', 'raw-token');
+      expect(result).toBe(false);
+    });
+  });
+
+  // ── login() — trusted device skip path ───────────────────────────────────
+
+  describe('login() — trusted device skip path', () => {
+    const password = 'S3cret!';
+    let hashCapture: string;
+
+    beforeEach(async () => {
+      const registeredUser = makeUser({ email: 'alice@example.com' });
+      mockPrisma.user.create.mockResolvedValue(registeredUser);
+      mockPrisma.refreshToken.create.mockResolvedValue({});
+      await service.register({ email: 'alice@example.com', password } as any);
+      hashCapture = (mockPrisma.user.create.mock.calls[0][0] as any).data.passwordHash;
+      jest.clearAllMocks();
+      mockPrisma.$transaction.mockImplementation((fn: any) => {
+        if (typeof fn === 'function') return fn(mockPrisma);
+        return Promise.all(fn);
+      });
+      mockJwt.sign.mockReturnValue('access_token');
+      mockJwt.signAsync.mockResolvedValue('refresh_token');
+    });
+
+    it('skips 2FA when a valid trusted device token is supplied', async () => {
+      const user2fa = makeUser({
+        passwordHash: hashCapture,
+        totpEnabled: true,
+        totpSecret: 'SECRET',
+      });
+      mockPrisma.user.findUnique.mockResolvedValue(user2fa);
+      mockPrisma.user.update.mockResolvedValue(user2fa);
+      mockPrisma.refreshToken.create.mockResolvedValue({});
+
+      jest.spyOn(service, 'verifyTrustedDeviceToken').mockResolvedValue(true);
+
+      const result = await service.login({
+        email: 'alice@example.com',
+        password,
+        trustedDeviceToken: 'some-valid-token',
+      } as any);
+
+      expect(service.verifyTrustedDeviceToken).toHaveBeenCalledWith(
+        user2fa.id,
+        'some-valid-token',
+      );
+      expect(result).toMatchObject({ accessToken: 'access_token' });
+    });
+
+    it('issues a trusted device token when trustDevice=true after valid 2FA', async () => {
+      const user2fa = makeUser({
+        passwordHash: hashCapture,
+        totpEnabled: true,
+        totpSecret: 'SECRET',
+      });
+      mockPrisma.user.findUnique.mockResolvedValue(user2fa);
+      mockPrisma.user.update.mockResolvedValue(user2fa);
+      mockPrisma.refreshToken.create.mockResolvedValue({});
+      mockPrisma.trustedDevice.create.mockResolvedValue({ id: 'td-1' });
+
+      jest.spyOn(service as any, 'verifyTotpCode').mockReturnValue(true);
+      jest.spyOn(service, 'issueTrustedDeviceToken').mockResolvedValue('new-device-token');
+
+      const result = await service.login({
+        email: 'alice@example.com',
+        password,
+        totpCode: '123456',
+        trustDevice: true,
+      } as any);
+
+      expect(service.issueTrustedDeviceToken).toHaveBeenCalledWith(
+        user2fa.id,
+        undefined,
+      );
+      expect(result).toMatchObject({
+        accessToken: 'access_token',
+        trustedDeviceToken: 'new-device-token',
+      });
+    });
+
+    it('does not issue a trusted device token when trustDevice is false', async () => {
+      const user2fa = makeUser({
+        passwordHash: hashCapture,
+        totpEnabled: true,
+        totpSecret: 'SECRET',
+      });
+      mockPrisma.user.findUnique.mockResolvedValue(user2fa);
+      mockPrisma.user.update.mockResolvedValue(user2fa);
+      mockPrisma.refreshToken.create.mockResolvedValue({});
+
+      jest.spyOn(service as any, 'verifyTotpCode').mockReturnValue(true);
+      jest.spyOn(service, 'issueTrustedDeviceToken').mockResolvedValue('token');
+
+      const result = await service.login({
+        email: 'alice@example.com',
+        password,
+        totpCode: '123456',
+      } as any);
+
+      expect(service.issueTrustedDeviceToken).not.toHaveBeenCalled();
+      expect(result).not.toHaveProperty('trustedDeviceToken');
+    });
+  });
+
+  // ── listTrustedDevices ────────────────────────────────────────────────────
+
+  describe('listTrustedDevices()', () => {
+    it('returns active devices ordered by lastUsedAt desc', async () => {
+      const devices = [
+        { id: 'td-1', name: 'Firefox', lastUsedAt: new Date(), expiresAt: new Date(Date.now() + 1e9), createdAt: new Date() },
+        { id: 'td-2', name: 'Chrome', lastUsedAt: new Date(), expiresAt: new Date(Date.now() + 1e9), createdAt: new Date() },
+      ];
+      mockPrisma.trustedDevice.findMany.mockResolvedValue(devices);
+
+      const result = await service.listTrustedDevices('user-1');
+
+      expect(mockPrisma.trustedDevice.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ userId: 'user-1', revokedAt: null }),
+          orderBy: { lastUsedAt: 'desc' },
+        }),
+      );
+      expect(result).toHaveLength(2);
+    });
+  });
+
+  // ── revokeTrustedDevice ───────────────────────────────────────────────────
+
+  describe('revokeTrustedDevice()', () => {
+    const makeDevice = (overrides: Partial<any> = {}) => ({
+      id: 'td-1',
+      userId: 'user-1',
+      revokedAt: null,
+      ...overrides,
+    });
+
+    it('revokes a device successfully', async () => {
+      const device = makeDevice();
+      mockPrisma.trustedDevice.findUnique.mockResolvedValue(device);
+      mockPrisma.trustedDevice.update.mockResolvedValue({ ...device, revokedAt: new Date() });
+
+      const result = await service.revokeTrustedDevice('td-1', 'user-1');
+
+      expect(mockPrisma.trustedDevice.update).toHaveBeenCalledWith({
+        where: { id: 'td-1' },
+        data: { revokedAt: expect.any(Date) },
+      });
+      expect(result).toEqual({ revoked: true });
+    });
+
+    it('throws BadRequestException when device not found', async () => {
+      mockPrisma.trustedDevice.findUnique.mockResolvedValue(null);
+      await expect(service.revokeTrustedDevice('td-1', 'user-1')).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('throws ForbiddenException when device belongs to another user', async () => {
+      const device = makeDevice({ userId: 'user-2' });
+      mockPrisma.trustedDevice.findUnique.mockResolvedValue(device);
+      await expect(service.revokeTrustedDevice('td-1', 'user-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('throws BadRequestException when device is already revoked', async () => {
+      const device = makeDevice({ revokedAt: new Date() });
+      mockPrisma.trustedDevice.findUnique.mockResolvedValue(device);
+      await expect(service.revokeTrustedDevice('td-1', 'user-1')).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+  });
+
+  // ── resetPassword ─────────────────────────────────────────────────────────
+
+  describe('resetPassword()', () => {
+    const newPassword = 'NewS3cret!';
+
+    it('updates password hash and revokes all trusted devices', async () => {
+      const password = 'OldS3cret!';
+
+      // Build a real hash for the current password
+      const registeredUser = makeUser({ email: 'bob@example.com' });
+      mockPrisma.user.create.mockResolvedValue(registeredUser);
+      mockPrisma.refreshToken.create.mockResolvedValue({});
+      await service.register({ email: 'bob@example.com', password } as any);
+      const currentHash = (mockPrisma.user.create.mock.calls[0][0] as any).data.passwordHash;
+
+      jest.clearAllMocks();
+      mockPrisma.$transaction.mockImplementation((fn: any) => {
+        if (typeof fn === 'function') return fn(mockPrisma);
+        return Promise.all(fn);
+      });
+
+      const user = makeUser({ passwordHash: currentHash });
+      mockPrisma.user.findUnique.mockResolvedValue(user);
+      mockPrisma.user.update.mockResolvedValue({ ...user, passwordHash: 'new-hash' });
+      mockPrisma.trustedDevice.updateMany.mockResolvedValue({ count: 2 });
+
+      const result = await service.resetPassword('user-1', password, newPassword);
+
+      expect(mockPrisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'user-1' },
+          data: expect.objectContaining({ passwordHash: expect.any(String) }),
+        }),
+      );
+      // All trusted devices should be revoked
+      expect(mockPrisma.trustedDevice.updateMany).toHaveBeenCalledWith({
+        where: { userId: 'user-1', revokedAt: null },
+        data: { revokedAt: expect.any(Date) },
+      });
+      expect(result).toEqual({ updated: true });
+    });
+
+    it('throws UnauthorizedException when current password is wrong', async () => {
+      const user = makeUser({ passwordHash: 'scrypt:salt:key' });
+      mockPrisma.user.findUnique.mockResolvedValue(user);
+      jest.spyOn(service as any, 'verifyPassword').mockResolvedValue(false);
+
+      await expect(
+        service.resetPassword('user-1', 'wrong-password', newPassword),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('throws BadRequestException when user has no password (OAuth-only account)', async () => {
+      const user = makeUser({ passwordHash: null });
+      mockPrisma.user.findUnique.mockResolvedValue(user);
+
+      await expect(
+        service.resetPassword('user-1', 'any', newPassword),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException when user is not found', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.resetPassword('ghost', 'any', newPassword),
+      ).rejects.toThrow(BadRequestException);
     });
   });
 });

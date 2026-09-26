@@ -174,6 +174,7 @@ model User {
   companyMembers       CompanyMember[]          @relation("CompanyOwner")
   memberOfCompanies    CompanyMember[]          @relation("MemberUser")
   recoveryCodes        RecoveryCode[]
+  trustedDevices       TrustedDevice[]
 
   @@index([role, deactivatedAt])
   @@index([deletedAt, anonymizedAt]) // Used by PiiAnonymizationSchedulerService
@@ -822,4 +823,25 @@ model OwnershipTransfer {
   @@index([companyId])
   @@index([toMemberId])
   @@map("ownership_transfers")
+}
+
+// A device that has been trusted after a successful 2FA login.
+// While the record is active (revokedAt null, expiresAt in the future) the device
+// can skip 2FA on subsequent logins.  The raw token is shown once to the client;
+// only the SHA-256 hash is stored.
+model TrustedDevice {
+  id         String    @id @default(uuid())
+  userId     String
+  tokenHash  String    @unique // SHA-256 of the raw trusted-device token
+  name       String?           // optional human-readable label (e.g. browser user-agent)
+  lastUsedAt DateTime  @default(now())
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@map("trusted_devices")
 }

@@ -325,4 +325,38 @@ export class AuthController {
   getLoginHistory(@Request() req: any, @Query() dto: LoginHistoryDto) {
     return this.authService.getLoginHistory(req.user.id, dto.page, dto.limit);
   }
+
+  // ── Trusted Devices ────────────────────────────────────────────────────────
+
+  @Get('trusted-devices')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({
+    summary: 'List trusted devices',
+    description: 'Returns all active (non-revoked, non-expired) trusted devices for the authenticated user.',
+  })
+  @ApiResponse({ status: 200, description: 'Trusted devices listed' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async listTrustedDevices(@Request() req: any) {
+    return this.authService.listTrustedDevices(req.user.id);
+  }
+
+  @Delete('trusted-devices/:id')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Revoke a trusted device',
+    description: 'Marks a trusted device as revoked. Future logins from this device will require 2FA again.',
+  })
+  @ApiResponse({ status: 200, description: 'Device revoked' })
+  @ApiResponse({ status: 400, description: 'Device not found or already revoked' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Cannot revoke another user\'s device' })
+  async revokeTrustedDevice(
+    @Request() req: any,
+    @Param('id') deviceId: string,
+  ) {
+    return this.authService.revokeTrustedDevice(deviceId, req.user.id);
+  }
 }
