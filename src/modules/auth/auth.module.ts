@@ -9,6 +9,7 @@ import { ApiKeysService } from './api-keys.service';
 import { JwtStrategy } from './jwt.strategy';
 import { ApiKeyGuard } from '../../common/guards/api-key.guard';
 import { JwtOrApiKeyGuard } from '../../common/guards/jwt-or-api-key.guard';
+import { ApiKeyScopesGuard } from '../../common/guards/api-key-scopes.guard';
 
 @Module({
   imports: [
@@ -24,7 +25,7 @@ import { JwtOrApiKeyGuard } from '../../common/guards/jwt-or-api-key.guard';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, ApiKeysService, JwtStrategy, ApiKeyGuard, JwtOrApiKeyGuard],
-  exports: [AuthService, ApiKeysService, ApiKeyGuard, JwtOrApiKeyGuard],
+  providers: [AuthService, ApiKeysService, JwtStrategy, ApiKeyGuard, JwtOrApiKeyGuard, ApiKeyScopesGuard],
+  exports: [AuthService, ApiKeysService, ApiKeyGuard, JwtOrApiKeyGuard, ApiKeyScopesGuard],
 })
 export class AuthModule {}

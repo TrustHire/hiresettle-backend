@@ -22,8 +22,10 @@ import { AuditLogService } from './audit-log.service';
 import { AuditLogEntryDto } from './dto/audit-log-response.dto';
 import { JwtOrApiKeyGuard } from '../../common/guards/jwt-or-api-key.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
+import { ApiKeyScopesGuard } from '../../common/guards/api-key-scopes.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { RequireScopes, ApiKeyScope } from '../../common/decorators/api-key-scopes.decorator';
 import { UserJwtSubThrottlerGuard } from '../../common/guards/user-jwt-sub-throttler.guard';
 import { AdminUsersService } from '../admin/admin-users.service';
 import { CancelEngagementDto } from './dto/cancel-engagement.dto';
@@ -37,6 +39,7 @@ import { CreateSavedFilterDto } from './dto/create-saved-filter.dto';
 @ApiSecurity('api-key')
 @UseGuards(UserJwtSubThrottlerGuard)
 @UseGuards(JwtOrApiKeyGuard)
+@UseGuards(ApiKeyScopesGuard)
 @Throttle({ default: { limit: 100, ttl: 60 } })
 @Controller('engagements')
 export class EngagementsController {
@@ -50,6 +53,7 @@ export class EngagementsController {
   @Post()
   @UseGuards(RolesGuard)
   @Roles(UserRole.COMPANY)
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_WRITE)
   @HttpCode(HttpStatus.CREATED)
   @Idempotent()
   @UseInterceptors(IdempotencyInterceptor)
@@ -71,6 +75,7 @@ export class EngagementsController {
    * List with optional filters: search, status (single/multi), date range, pagination.
    */
   @Get()
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_READ)
   @ApiOperation({ summary: 'List engagements with flexible filters and pagination' })
   @ApiQuery({ name: 'companyAddress', required: false, description: 'Filter by company Stellar address' })
   @ApiQuery({ name: 'recruiterAddress', required: false, description: 'Filter by recruiter Stellar address' })
@@ -125,6 +130,7 @@ export class EngagementsController {
    * Full detail — milestones, events, retention schedule.
    */
   @Get(':id')
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_READ)
   @ApiOperation({ summary: 'Get full engagement details' })
   @ApiParam({ name: 'id', description: 'Engagement ID' })
   @ApiResponse({ status: 200, description: 'Engagement retrieved' })
@@ -135,6 +141,7 @@ export class EngagementsController {
   }
 
   @Get(':id/summary')
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_READ)
   @ApiOperation({ summary: 'Get aggregated engagement summary' })
   @ApiParam({ name: 'id', description: 'Engagement ID' })
   @ApiResponse({ status: 200, description: 'Engagement summary retrieved' })
@@ -149,6 +156,7 @@ export class EngagementsController {
    * Returns the full status transition history for an engagement.
    */
   @Get(':id/audit-log')
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_READ)
   @ApiOperation({ summary: 'Get engagement audit log' })
   @ApiParam({ name: 'id', description: 'Engagement ID' })
   @ApiResponse({ status: 200, description: 'Audit log retrieved' })
@@ -166,6 +174,7 @@ export class EngagementsController {
    * Add an internal note to an engagement (participants only).
    */
   @Post(':id/notes')
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_WRITE)
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Add an internal note to an engagement (participants only)' })
   @ApiParam({ name: 'id', description: 'Engagement ID' })
@@ -186,6 +195,7 @@ export class EngagementsController {
    * List internal notes on an engagement (participants only).
    */
   @Get(':id/notes')
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_READ)
   @ApiOperation({ summary: 'List internal notes on an engagement (participants only)' })
   @ApiParam({ name: 'id', description: 'Engagement ID' })
   @ApiResponse({ status: 200, description: 'Notes retrieved' })
@@ -204,6 +214,7 @@ export class EngagementsController {
    * Force re-read the engagement from the Stellar chain.
    */
   @Post(':id/sync')
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_WRITE)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Force sync engagement status from Stellar chain' })
   @ApiParam({ name: 'id', description: 'Engagement ID' })
@@ -217,6 +228,7 @@ export class EngagementsController {
   @Post(':id/recuse-arbiter')
   @UseGuards(RolesGuard)
   @Roles(UserRole.ARBITER)
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_WRITE)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Recuse yourself as arbiter from an engagement (ARBITER only)' })
   recuseArbiter(
@@ -227,6 +239,7 @@ export class EngagementsController {
   }
 
   @Post(':id/archive')
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_WRITE)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Archive an engagement so it is excluded from default list views' })
   @ApiParam({ name: 'id', description: 'Engagement ID' })
@@ -239,6 +252,7 @@ export class EngagementsController {
   }
 
   @Post(':id/restore')
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_WRITE)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Restore an archived engagement back into default list views' })
   @ApiParam({ name: 'id', description: 'Engagement ID' })
@@ -253,6 +267,7 @@ export class EngagementsController {
   @Get('arbiters')
   @UseGuards(RolesGuard)
   @Roles(UserRole.COMPANY, UserRole.ADMIN)
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_READ)
   @ApiOperation({ summary: 'List all active arbiters (COMPANY and ADMIN only)' })
   listArbiters() {
     return this.adminUsersService.listArbiters();
@@ -261,6 +276,7 @@ export class EngagementsController {
   @Patch(':id/status')
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_WRITE)
   @ApiOperation({ summary: 'Admin override: Force update engagement status' })
   updateEngagementStatus(
     @Param('id') id: string,
@@ -279,6 +295,7 @@ export class EngagementsController {
    * Replace the full tag set on an engagement.
    */
   @Put(':id/tags')
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_WRITE)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Replace tags on an engagement (#252)' })
   @ApiParam({ name: 'id', description: 'Engagement ID' })
@@ -300,11 +317,11 @@ export class EngagementsController {
   /**
    * POST /api/v1/engagements/import
    * Accept a multipart CSV file and create engagements in bulk.
-   * Returns a per-row result report; invalid rows are skipped without failing the whole batch.
    */
   @Post('import')
   @UseGuards(RolesGuard)
   @Roles(UserRole.COMPANY)
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_WRITE)
   @HttpCode(HttpStatus.OK)
   @UseInterceptors(FileInterceptor('file'))
   @ApiConsumes('multipart/form-data')
@@ -328,11 +345,8 @@ export class EngagementsController {
   // SAVED FILTERS (#253)
   // ----------------------------------------------------------
 
-  /**
-   * GET /api/v1/engagements/filters
-   * List saved filter presets for the authenticated user.
-   */
   @Get('filters')
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_READ)
   @ApiOperation({ summary: 'List saved filter presets (#253)' })
   @ApiResponse({ status: 200, description: 'Saved filters retrieved' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
@@ -340,11 +354,8 @@ export class EngagementsController {
     return this.savedFiltersService.findAll(user.id);
   }
 
-  /**
-   * POST /api/v1/engagements/filters
-   * Save a named filter preset.
-   */
   @Post('filters')
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_WRITE)
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Save a named filter preset (#253)' })
   @ApiResponse({ status: 201, description: 'Saved filter created' })
@@ -358,11 +369,8 @@ export class EngagementsController {
     return this.savedFiltersService.create(user.id, dto);
   }
 
-  /**
-   * DELETE /api/v1/engagements/filters/:filterId
-   * Delete a saved filter preset.
-   */
   @Post('filters/:filterId/delete')
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_WRITE)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Delete a saved filter preset (#253)' })
   @ApiParam({ name: 'filterId', description: 'Saved filter ID' })
@@ -376,11 +384,8 @@ export class EngagementsController {
     return this.savedFiltersService.remove(user.id, filterId);
   }
 
-  /**
-   * GET /api/v1/engagements/filters/:filterId/apply
-   * Apply a saved filter preset — returns the engagement list as if those filters were entered manually.
-   */
   @Get('filters/:filterId/apply')
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_READ)
   @ApiOperation({ summary: 'Apply a saved filter preset and return matching engagements (#253)' })
   @ApiParam({ name: 'filterId', description: 'Saved filter ID' })
   @ApiResponse({ status: 200, description: 'Engagements matching the preset' })

@@ -12,6 +12,7 @@ export type ApiKeyAuthUser = {
   role: string;
   companyId: string | null;
   apiKeyId: string;
+  scopes: string[];
   authType: 'api_key';
 };
 
@@ -37,6 +38,8 @@ export class ApiKeysService {
       throw new BadRequestException('expiresAt must be in the future');
     }
 
+    const scopes = dto.scopes ?? [];
+
     const record = await this.prisma.apiKey.create({
       data: {
         name: dto.name,
@@ -45,10 +48,11 @@ export class ApiKeysService {
         userId: user.id,
         companyId: dto.companyId ?? user.id,
         expiresAt: expiresAt ?? undefined,
+        scopes,
       },
     });
 
-    this.logger.log(`API key created for user ${user.id}: ${record.id}`);
+    this.logger.log(`API key created for user ${user.id}: ${record.id} scopes=[${scopes.join(',')}]`);
 
     return {
       id: record.id,
@@ -56,6 +60,7 @@ export class ApiKeysService {
       keyPrefix: record.keyPrefix,
       userId: record.userId,
       companyId: record.companyId,
+      scopes: record.scopes,
       expiresAt: record.expiresAt,
       createdAt: record.createdAt,
       // Returned once — never stored or returned again
@@ -73,6 +78,7 @@ export class ApiKeysService {
         keyPrefix: true,
         userId: true,
         companyId: true,
+        scopes: true,
         expiresAt: true,
         revokedAt: true,
         lastUsedAt: true,
@@ -94,6 +100,7 @@ export class ApiKeysService {
         name: true,
         keyPrefix: true,
         userId: true,
+        scopes: true,
         revokedAt: true,
       },
     });
@@ -102,6 +109,8 @@ export class ApiKeysService {
   /**
    * Validate a raw X-Api-Key value. Rejects unknown, revoked, or expired keys.
    * Returns a request.user-shaped object compatible with JwtAuthGuard consumers.
+   * The `scopes` field is included so ApiKeyScopesGuard can enforce route-level
+   * scope requirements without an extra DB query.
    */
   async authenticate(rawKey: string): Promise<ApiKeyAuthUser> {
     if (!rawKey || typeof rawKey !== 'string') {
@@ -152,6 +161,7 @@ export class ApiKeysService {
       role: record.user.role,
       companyId: record.companyId,
       apiKeyId: record.id,
+      scopes: record.scopes,
       authType: 'api_key',
     };
   }
