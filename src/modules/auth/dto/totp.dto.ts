@@ -17,6 +17,17 @@ export class DisableTotpDto {
   code: string;
 }
 
+export class RegenerateRecoveryCodesDto {
+  @ApiProperty({
+    description: '6-digit TOTP code from authenticator app (required to regenerate recovery codes)',
+    example: '123456',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @Length(6, 6)
+  code: string;
+}
+
 export class TotpSecretResponseDto {
   @ApiProperty({ description: 'Base32 encoded TOTP secret (only shown once during enrollment)' })
   secret: string;

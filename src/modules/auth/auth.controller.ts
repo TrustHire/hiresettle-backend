@@ -12,7 +12,7 @@ import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { RevokeSessionDto } from './dto/revoke-session.dto';
-import { EnableTotpDto, DisableTotpDto } from './dto/totp.dto';
+import { EnableTotpDto, DisableTotpDto, RegenerateRecoveryCodesDto } from './dto/totp.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { RateLimit } from '../../common/decorators/throttle.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
