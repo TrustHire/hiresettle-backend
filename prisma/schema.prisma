@@ -190,6 +190,7 @@ model ApiKey {
   keyHash    String    @unique
   userId     String    // owning user (usually a COMPANY account)
   companyId  String?   // optional company scope (defaults to userId for COMPANY users)
+  scopes     String[]  @default([]) // e.g. ["engagements:read","engagements:write","webhooks:manage"]
   expiresAt  DateTime?
   revokedAt  DateTime?
   lastUsedAt DateTime?

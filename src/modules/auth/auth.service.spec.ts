@@ -13,6 +13,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
 import { SecurityEventsService } from '../../common/security-events/security-events.service';
 import { PasswordPolicyService } from '../../common/password/password-policy.service';
+import { HibpService } from '../../common/hibp/hibp.service';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -88,6 +89,7 @@ const makeMockConfig = () => ({
     if (key === 'JWT_REFRESH_EXPIRES_DAYS') return 7;
     if (key === 'SKIP_ACCOUNT_VALIDATION') return true;
     if (key === 'TRUSTED_DEVICE_TTL_DAYS') return 30;
+    if (key === 'HIBP_CHECK_ENABLED') return 'true';
     return def ?? null;
   }),
 });
@@ -110,6 +112,10 @@ const makeMockPasswordPolicy = () => ({
     requireNumber: true,
     requireSpecial: false,
   }),
+});
+
+const makeMockHibp = () => ({
+  isBreached: jest.fn().mockResolvedValue(false),
 });
 
 // ── Suite ─────────────────────────────────────────────────────────────────────
@@ -140,6 +146,7 @@ describe('AuthService', () => {
         { provide: StellarService, useValue: mockStellar },
         { provide: SecurityEventsService, useValue: makeMockSecurityEvents() },
         { provide: PasswordPolicyService, useValue: makeMockPasswordPolicy() },
+        { provide: HibpService, useValue: makeMockHibp() },
       ],
     }).compile();
 
@@ -195,6 +202,7 @@ describe('AuthService', () => {
             useValue: {
               get: jest.fn((key: string, def?: any) => {
                 if (key === 'SKIP_ACCOUNT_VALIDATION') return false;
+                if (key === 'HIBP_CHECK_ENABLED') return 'true';
                 if (key === 'JWT_REFRESH_EXPIRES_DAYS') return 7;
                 return def ?? null;
               }),
@@ -202,6 +210,8 @@ describe('AuthService', () => {
           },
           { provide: StellarService, useValue: mockStellar },
           { provide: SecurityEventsService, useValue: makeMockSecurityEvents() },
+          { provide: PasswordPolicyService, useValue: makeMockPasswordPolicy() },
+          { provide: HibpService, useValue: makeMockHibp() },
         ],
       }).compile();
       const svc2 = module2.get<AuthService>(AuthService);
@@ -1204,6 +1214,117 @@ describe('AuthService', () => {
       await expect(
         service.resetPassword('ghost', 'any', newPassword),
       ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  // ── HIBP integration — register() ────────────────────────────────────────
+
+  describe('register() — HIBP breach check', () => {
+    const dto = { email: 'alice@example.com', password: 'S3cret!' };
+
+    it('rejects registration when password is breached', async () => {
+      jest.spyOn(service as any, 'checkHibp').mockRejectedValue(
+        new BadRequestException(
+          'This password has appeared in a known data breach. Please choose a different password.',
+        ),
+      );
+
+      await expect(service.register(dto as any)).rejects.toThrow(BadRequestException);
+      await expect(service.register(dto as any)).rejects.toThrow(
+        /known data breach/,
+      );
+    });
+
+    it('allows registration when password is not breached', async () => {
+      jest.spyOn(service as any, 'checkHibp').mockResolvedValue(undefined);
+      mockPrisma.user.create.mockResolvedValue(makeUser({ email: dto.email }));
+      mockPrisma.refreshToken.create.mockResolvedValue({});
+
+      const result = await service.register(dto as any);
+      expect(result).toHaveProperty('accessToken');
+    });
+
+    it('skips the breach check and succeeds when HIBP_CHECK_ENABLED=false', async () => {
+      // Build a service with HIBP disabled in config
+      const disabledConfig = {
+        get: jest.fn((key: string, def?: any) => {
+          if (key === 'HIBP_CHECK_ENABLED') return 'false';
+          if (key === 'SKIP_ACCOUNT_VALIDATION') return true;
+          if (key === 'JWT_REFRESH_EXPIRES_DAYS') return 7;
+          return def ?? null;
+        }),
+      };
+      const hibpMock = { isBreached: jest.fn().mockResolvedValue(true) };
+      const modDisabled: TestingModule = await Test.createTestingModule({
+        providers: [
+          AuthService,
+          { provide: PrismaService, useValue: mockPrisma },
+          { provide: JwtService, useValue: mockJwt },
+          { provide: ConfigService, useValue: disabledConfig },
+          { provide: StellarService, useValue: mockStellar },
+          { provide: SecurityEventsService, useValue: makeMockSecurityEvents() },
+          { provide: PasswordPolicyService, useValue: makeMockPasswordPolicy() },
+          { provide: HibpService, useValue: hibpMock },
+        ],
+      }).compile();
+
+      const svcDisabled = modDisabled.get<AuthService>(AuthService);
+      mockPrisma.user.create.mockResolvedValue(makeUser({ email: dto.email }));
+      mockPrisma.refreshToken.create.mockResolvedValue({});
+
+      // Even though isBreached returns true, the check is skipped due to env flag
+      const result = await svcDisabled.register(dto as any);
+      expect(result).toHaveProperty('accessToken');
+      expect(hibpMock.isBreached).not.toHaveBeenCalled();
+    });
+
+    it('skips the breach check and succeeds when HIBP API is unreachable (fail-open)', async () => {
+      // isBreached returns false when API is unreachable (HibpService fail-opens internally)
+      jest.spyOn(service as any, 'checkHibp').mockResolvedValue(undefined);
+      mockPrisma.user.create.mockResolvedValue(makeUser({ email: dto.email }));
+      mockPrisma.refreshToken.create.mockResolvedValue({});
+
+      const result = await service.register(dto as any);
+      expect(result).toHaveProperty('accessToken');
+    });
+  });
+
+  // ── HIBP integration — resetPassword() ───────────────────────────────────
+
+  describe('resetPassword() — HIBP breach check', () => {
+    const newPassword = 'NewS3cret!';
+
+    it('rejects a breached new password on reset', async () => {
+      const password = 'OldS3cret!';
+      // Capture real hash
+      const registeredUser = makeUser({ email: 'bob@example.com' });
+      mockPrisma.user.create.mockResolvedValue(registeredUser);
+      mockPrisma.refreshToken.create.mockResolvedValue({});
+      jest.spyOn(service as any, 'checkHibp').mockResolvedValue(undefined);
+      await service.register({ email: 'bob@example.com', password } as any);
+      const currentHash = (mockPrisma.user.create.mock.calls[0][0] as any).data.passwordHash;
+      jest.clearAllMocks();
+      mockPrisma.$transaction.mockImplementation((fn: any) => {
+        if (typeof fn === 'function') return fn(mockPrisma);
+        return Promise.all(fn);
+      });
+
+      const user = makeUser({ passwordHash: currentHash });
+      mockPrisma.user.findUnique.mockResolvedValue(user);
+
+      // Now make checkHibp throw for the new password
+      jest.spyOn(service as any, 'checkHibp').mockRejectedValue(
+        new BadRequestException(
+          'This password has appeared in a known data breach. Please choose a different password.',
+        ),
+      );
+
+      await expect(
+        service.resetPassword('user-1', password, newPassword),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        service.resetPassword('user-1', password, newPassword),
+      ).rejects.toThrow(/known data breach/);
     });
   });
 });

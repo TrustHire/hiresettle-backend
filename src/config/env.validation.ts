@@ -24,6 +24,10 @@ export const envValidationSchema = Joi.object({
   PASSWORD_REQUIRE_NUMBER: Joi.boolean().truthy('true', '1', 'yes').falsy('false', '0', 'no').default(true),
   PASSWORD_REQUIRE_SPECIAL: Joi.boolean().truthy('true', '1', 'yes').falsy('false', '0', 'no').default(false),
 
+  // HaveIBeenPwned breach-password check
+  // Set to 'false' to disable (e.g. in offline environments or CI without outbound HTTPS).
+  HIBP_CHECK_ENABLED: Joi.string().valid('true', 'false', '1', '0').default('true'),
+
   // Data retention windows — per category (set to -1 to disable a category)
   DATA_RETENTION_DAYS: Joi.number().integer().min(-1).default(365),
   PII_ANONYMIZATION_WINDOW_DAYS: Joi.number().integer().min(1).default(30),
