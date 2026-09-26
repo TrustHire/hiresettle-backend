@@ -10,6 +10,9 @@ import {
   Patch,
   Post,
   Put,
+  Query,
+  Req,
+  Request,
   UploadedFile,
   UseGuards,
   UseInterceptors,
@@ -19,6 +22,7 @@ import {
   ApiBearerAuth,
   ApiOperation,
   ApiParam,
+  ApiQuery,
   ApiTags,
   ApiResponse,
   ApiConsumes,
@@ -41,9 +45,12 @@ import { SetSlackWebhookDto } from "./dto/set-slack-webhook.dto";
 import { SetDiscordWebhookDto } from "./dto/set-discord-webhook.dto";
 import { AvatarUploadDto } from "./dto/avatar-upload.dto";
 import { UserDataExportDto } from "./dto/user-data-export.dto";
+import { RequestEmailChangeDto } from "./dto/request-email-change.dto";
+import { RebindStellarAddressDto } from "./dto/rebind-stellar-address.dto";
 import { UsersService } from "./users.service";
 import { GdprService } from "./gdpr.service";
 import { UserRole } from "@prisma/client";
+import { AuthService } from "../auth/auth.service";
 
 class UpdateCustomFieldsConfigDto {
   @ApiProperty({
@@ -66,6 +73,7 @@ export class UsersController {
   constructor(
     private readonly usersService: UsersService,
     private readonly gdprService: GdprService,
+    private readonly authService: AuthService,
   ) {}
 
   @Get("me/export")
@@ -307,6 +315,93 @@ export class UsersController {
       userId,
       dto.allowedCustomFields,
     );
+  }
+
+  // ── Issue #357 ─────────────────────────────────────────────────────────────
+
+  @Post("me/stellar-address")
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @RateLimit(5, 60)
+  @ApiOperation({
+    summary: "Rebind Stellar wallet address with dual-key signature proof (#357)",
+    description:
+      "Links a new Stellar address to the account. Requires a valid nonce from " +
+      "GET /auth/rebind-challenge, signed by the new key. If the account already has a " +
+      "Stellar address, the old key must also sign the nonce. Blocked while the user " +
+      "has active funded engagements.",
+  })
+  @ApiResponse({ status: 200, description: "Stellar address updated" })
+  @ApiResponse({ status: 400, description: "Invalid signature, address format, or nonce" })
+  @ApiResponse({ status: 401, description: "Unauthorized" })
+  @ApiResponse({ status: 403, description: "Active funded engagements block the rebind" })
+  @ApiResponse({ status: 409, description: "New address already linked to another account" })
+  @ApiResponse({ status: 429, description: "Too many requests" })
+  async rebindStellarAddress(
+    @CurrentUser("id") userId: string,
+    @Body() dto: RebindStellarAddressDto,
+    @Req() req: any,
+  ) {
+    // Consume nonce here (controller owns AuthService); signature validation is in the service.
+    const nonceValid = this.authService.consumeRebindChallenge(userId, dto.nonce);
+    if (!nonceValid) {
+      throw new BadRequestException(
+        "Invalid or expired rebind nonce. Request a fresh challenge from GET /auth/rebind-challenge.",
+      );
+    }
+
+    return this.usersService.rebindStellarAddress(
+      userId,
+      dto.newAddress,
+      dto.nonce,
+      dto.newSignature,
+      dto.oldSignature,
+      { ip: req.ip, userAgent: req.headers["user-agent"] },
+    );
+  }
+
+  // ── Issue #356 ─────────────────────────────────────────────────────────────
+
+  @Post("me/email")
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @RateLimit(5, 60)
+  @ApiOperation({
+    summary: "Request an email address change (#356)",
+    description:
+      "Sends a confirmation link to the new address. The email only changes after the link is clicked. " +
+      "The old address receives a notification. Token expires after 24 h.",
+  })
+  @ApiResponse({ status: 200, description: "Confirmation email sent to new address" })
+  @ApiResponse({ status: 400, description: "New email is same as current or invalid" })
+  @ApiResponse({ status: 401, description: "Unauthorized" })
+  @ApiResponse({ status: 409, description: "Email already registered" })
+  @ApiResponse({ status: 429, description: "Too many requests" })
+  requestEmailChange(
+    @CurrentUser("id") userId: string,
+    @Body() dto: RequestEmailChangeDto,
+  ) {
+    return this.usersService.requestEmailChange(userId, dto.newEmail);
+  }
+
+  @Get("me/email/confirm")
+  @ApiOperation({
+    summary: "Confirm email address change via token (#356)",
+    description:
+      "Validates the token from the confirmation email and switches the account email " +
+      "to the new address. No authentication header required — the token is the credential.",
+  })
+  @ApiQuery({ name: "token", required: true, description: "HMAC token from the confirmation email" })
+  @ApiResponse({ status: 200, description: "Email updated successfully" })
+  @ApiResponse({ status: 400, description: "Invalid or expired token" })
+  @ApiResponse({ status: 409, description: "Email address no longer available" })
+  confirmEmailChange(@Query("token") token: string) {
+    if (!token) {
+      throw new BadRequestException("token query parameter is required");
+    }
+    return this.usersService.confirmEmailChange(token);
   }
 
   @Get(":stellarAddress")
