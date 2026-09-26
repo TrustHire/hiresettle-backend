@@ -16,6 +16,7 @@ import { EnableTotpDto, DisableTotpDto, RegenerateRecoveryCodesDto } from './dto
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { RateLimit } from '../../common/decorators/throttle.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { LoginHistoryDto } from './dto/login-history.dto';
 
 function requestMeta(req: ExpressRequest): RequestMeta {
   return { ip: req.ip, userAgent: req.headers['user-agent'] };
@@ -257,28 +258,71 @@ export class AuthController {
     return this.authService.disableTotp(req.user.id, dto.code);
   }
 
-  @Post('2fa/recovery-codes')
+  // ── Issue #357 ────────────────────────────────────────────────────────────
+
+  @Get('rebind-challenge')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
-  @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Regenerate 2FA backup recovery codes',
+    summary: 'Get a rebind challenge nonce for Stellar wallet rebinding (#357)',
     description:
-      'Invalidates all existing recovery codes and issues 10 fresh single-use codes. Requires a valid TOTP code. Codes are shown once — store them safely.',
+      'Returns a 10-minute challenge nonce scoped to the authenticated user. ' +
+      'Sign this nonce with both the old and new Stellar keypairs, then POST to ' +
+      '/users/me/stellar-address.',
   })
   @ApiResponse({
     status: 200,
-    description: 'New recovery codes issued',
+    description: 'Challenge nonce generated',
+    schema: { properties: { nonce: { type: 'string' } } },
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  getRebindChallenge(@Request() req: any) {
+    const nonce = this.authService.generateRebindChallenge(req.user.id);
+    return { nonce };
+  }
+
+  // ── Issue #355 ────────────────────────────────────────────────────────────
+
+  @Get('login-history')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({
+    summary: 'Get own login/security-event history (last 90 days, paginated)',
+    description:
+      'Returns time, IP, user-agent, action type, and success/failure for each ' +
+      'security event in the last 90 days. Users can only see their own events.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Paginated login history',
     schema: {
-      example: { recoveryCodes: ['AABB11-CC2233', '...'] },
+      properties: {
+        data: {
+          type: 'array',
+          items: {
+            properties: {
+              id: { type: 'string' },
+              action: { type: 'string' },
+              success: { type: 'boolean' },
+              ip: { type: 'string', nullable: true },
+              userAgent: { type: 'string', nullable: true },
+              createdAt: { type: 'string', format: 'date-time' },
+            },
+          },
+        },
+        meta: {
+          properties: {
+            total: { type: 'number' },
+            page: { type: 'number' },
+            limit: { type: 'number' },
+            windowDays: { type: 'number' },
+          },
+        },
+      },
     },
   })
-  @ApiResponse({ status: 400, description: '2FA not enabled' })
-  @ApiResponse({ status: 401, description: 'Unauthorized or invalid TOTP code' })
-  async regenerateRecoveryCodes(
-    @Request() req: any,
-    @Body() dto: RegenerateRecoveryCodesDto,
-  ) {
-    return this.authService.regenerateRecoveryCodes(req.user.id, dto.code);
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  getLoginHistory(@Request() req: any, @Query() dto: LoginHistoryDto) {
+    return this.authService.getLoginHistory(req.user.id, dto.page, dto.limit);
   }
 }

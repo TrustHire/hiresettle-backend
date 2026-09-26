@@ -934,4 +934,33 @@ export class StellarService implements OnModuleInit {
     await this.cache.set(CACHE_KEY, result, 10); // 10 s TTL
     return result;
   }
+
+  // ----------------------------------------------------------
+  // SIGNATURE VERIFICATION (#357 — wallet rebinding)
+  // ----------------------------------------------------------
+
+  /**
+   * Verify that `signature` is a valid Ed25519 signature of `message`
+   * produced by the private key that corresponds to `stellarAddress`.
+   *
+   * The Stellar SDK's Keypair.verify() expects:
+   *   - data:      Buffer of the raw message bytes
+   *   - signature: Buffer of the 64-byte raw signature
+   *
+   * Clients must base64-encode the 64-byte signature before sending it.
+   */
+  verifySignature(
+    stellarAddress: string,
+    message: string,
+    signatureBase64: string,
+  ): boolean {
+    try {
+      const keypair = Keypair.fromPublicKey(stellarAddress);
+      const messageBuffer = Buffer.from(message, 'utf8');
+      const signatureBuffer = Buffer.from(signatureBase64, 'base64');
+      return keypair.verify(messageBuffer, signatureBuffer);
+    } catch {
+      return false;
+    }
+  }
 }

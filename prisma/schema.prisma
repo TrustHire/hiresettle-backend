@@ -137,6 +137,10 @@ model User {
   slackWebhookUrl String?       // Slack incoming-webhook URL for notification alerts (#277)
   discordWebhookUrl String?     // Discord incoming-webhook URL for notification alerts (#278)
   batchWindowSeconds Int        @default(60) // notification batching window in seconds (#279)
+  // Email change flow (#356): pending new address + HMAC token cleared after confirmation
+  pendingEmail               String?
+  emailChangeToken           String?  @unique
+  emailChangeTokenExpiresAt  DateTime?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
@@ -802,16 +806,20 @@ model FeatureFlag {
   @@map("feature_flags")
 }
 
-// Single-use backup codes issued when 2FA is first enabled (or regenerated).
-// The raw code is shown once and never stored; only the SHA-256 hash is kept.
-model RecoveryCode {
-  id        String    @id @default(uuid())
-  userId    String
-  codeHash  String    // SHA-256 of the raw recovery code
-  usedAt    DateTime? // set when the code is consumed; null = still valid
+// Two-step company ownership transfer (#360).
+// The current owner initiates; the proposed new owner must accept within 7 days.
+// Acceptance atomically reassigns CompanyMember roles and writes an AuditLog entry.
+model OwnershipTransfer {
+  id          String    @id @default(uuid())
+  companyId   String                // the User.id of the company owner record
+  fromOwnerId String                // current owner's User.id
+  toMemberId  String                // proposed new owner's User.id (must be a CompanyMember)
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  cancelledAt DateTime?
+  createdAt   DateTime  @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@map("recovery_codes")
+  @@index([companyId])
+  @@index([toMemberId])
+  @@map("ownership_transfers")
 }

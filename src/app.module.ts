@@ -32,6 +32,7 @@ import { HealthModule } from './modules/health/health.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { BillingModule } from './modules/billing/billing.module';
 import { TeamInvitesModule } from './modules/team-invites/team-invites.module';
+import { CompaniesModule } from './modules/companies/companies.module';
 import { GraphqlModule } from './graphql/graphql.module';
 import stellarConfig from './config/stellar.config';
 import { MaintenanceModeModule } from './common/maintenance/maintenance-mode.module';
@@ -81,6 +82,7 @@ import { FeatureFlagsModule } from './modules/feature-flags/feature-flags.module
     AdminModule,
     BillingModule,
     TeamInvitesModule,
+    CompaniesModule,
     GraphqlModule,
     FeatureFlagsModule,
   ],

@@ -52,6 +52,11 @@ export class AuthService {
   >();
   private readonly regChallenges = new Map<string, string>(); // keyed by userId
   private readonly authChallenges = new Map<string, string>();
+  // Rebind challenges keyed by userId (#357)
+  private readonly rebindChallenges = new Map<
+    string,
+    { nonce: string; expiresAt: number }
+  >();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -81,6 +86,38 @@ export class AuthService {
     }
     if (entry.nonce !== nonce) return false;
     this.nonces.delete(stellarAddress);
+    return true;
+  }
+
+  // ── Issue #357 — rebind challenge helpers ──────────────────────────────────
+
+  /**
+   * Generate a 10-minute challenge nonce scoped to a userId.
+   * Used for the Stellar wallet rebinding flow so the nonce is tied to the
+   * authenticated user rather than an address (which is changing).
+   */
+  generateRebindChallenge(userId: string): string {
+    const nonce = `hiresettle-rebind:${userId}:${Date.now()}:${randomBytes(16).toString('hex')}`;
+    this.rebindChallenges.set(userId, {
+      nonce,
+      expiresAt: Date.now() + 10 * 60 * 1000, // 10 min TTL
+    });
+    return nonce;
+  }
+
+  /**
+   * Validate and consume a rebind challenge nonce.
+   * Returns true on success; false if not found, expired, or mismatched.
+   */
+  consumeRebindChallenge(userId: string, nonce: string): boolean {
+    const entry = this.rebindChallenges.get(userId);
+    if (!entry) return false;
+    if (entry.expiresAt < Date.now()) {
+      this.rebindChallenges.delete(userId);
+      return false;
+    }
+    if (entry.nonce !== nonce) return false;
+    this.rebindChallenges.delete(userId);
     return true;
   }
 
@@ -513,6 +550,68 @@ export class AuthService {
     const safeUser = this.sanitizeUser(updated);
     // Returned once, at creation time — never persisted in a response again.
     return webhookSecret ? { ...safeUser, webhookSecret } : safeUser;
+  }
+
+  /**
+   * Returns the authenticated user's own security events from the last 90 days.
+   * Covers all event types (login success/failure, logout, password reset, etc.)
+   * so the user can review recent account activity.
+   */
+  async getLoginHistory(
+    userId: string,
+    page: number = 1,
+    limit: number = 20,
+  ) {
+    const HISTORY_WINDOW_DAYS = 90;
+    const from = new Date(
+      Date.now() - HISTORY_WINDOW_DAYS * 24 * 60 * 60 * 1000,
+    );
+
+    const [data, total] = await this.prisma.$transaction([
+      this.prisma.securityEvent.findMany({
+        where: {
+          userId,
+          createdAt: { gte: from },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+        select: {
+          id: true,
+          action: true,
+          ip: true,
+          userAgent: true,
+          createdAt: true,
+        },
+      }),
+      this.prisma.securityEvent.count({
+        where: {
+          userId,
+          createdAt: { gte: from },
+        },
+      }),
+    ]);
+
+    // Derive success/failure flag from the action name so clients don't need
+    // to interpret SecurityEventAction values themselves.
+    const events = data.map((e) => ({
+      id: e.id,
+      action: e.action,
+      success: e.action !== SecurityEventAction.LOGIN_FAILURE,
+      ip: e.ip ?? null,
+      userAgent: e.userAgent ?? null,
+      createdAt: e.createdAt,
+    }));
+
+    return {
+      data: events,
+      meta: {
+        total,
+        page,
+        limit,
+        windowDays: HISTORY_WINDOW_DAYS,
+      },
+    };
   }
 
   async getSessions(userId: string) {
