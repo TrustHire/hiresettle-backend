@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, Param, ParseIntPipe, Patch, Post, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, Param, ParseIntPipe, Patch, Post, Put, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ApiConsumes, ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
@@ -17,6 +17,12 @@ import { SetPlacementDueDateDto } from './dto/set-placement-due-date.dto';
 import { AdjustMilestonePercentsDto } from './dto/adjust-milestone-percents.dto';
 import { Idempotent } from '../../common/decorators/idempotent.decorator';
 import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
+import { ProofVersionsService } from './proof-versions.service';
+import { PartialReleaseService } from './partial-release.service';
+import { ApproveMilestoneDto } from './dto/approve-milestone.dto';
+import { SubmitProofDto } from './dto/submit-proof.dto';
+import { RejectProofDto } from './dto/reject-proof.dto';
+import { ProposePartialReleaseDto } from './dto/propose-partial-release.dto';
 
 const ALLOWED_EVIDENCE_MIME_TYPES = [
   'image/jpeg',
@@ -35,7 +41,11 @@ const ALLOWED_EVIDENCE_MIME_TYPES = [
 @Controller('engagements/:engagementId/milestones')
 export class MilestonesController {
 
-  constructor(private readonly milestonesService: MilestonesService) { }
+  constructor(
+    private readonly milestonesService: MilestonesService,
+    private readonly proofVersions: ProofVersionsService,
+    private readonly partialReleases: PartialReleaseService,
+  ) { }
 
   @Get()
   @ApiOperation({ summary: 'List all milestones for an engagement (parties only)' })
@@ -103,12 +113,130 @@ export class MilestonesController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Not a party to this engagement' })
   @ApiResponse({ status: 404, description: 'Engagement or milestone not found' })
+  @ApiResponse({ status: 409, description: 'proofVersion is not the latest proof version' })
   approve(
+    @Param('engagementId') engagementId: string,
+    @Param('index', ParseIntPipe) index: number,
+    @Body() dto: ApproveMilestoneDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.milestonesService.approveMilestone(engagementId, index, user, dto?.proofVersion);
+  }
+
+  @Put(':index/approve')
+  @ApiOperation({ summary: 'Approve the latest proof version of a milestone (alias of POST)' })
+  @ApiResponse({ status: 200, description: 'Milestone approved successfully' })
+  @ApiResponse({ status: 409, description: 'proofVersion is not the latest proof version' })
+  approvePut(
+    @Param('engagementId') engagementId: string,
+    @Param('index', ParseIntPipe) index: number,
+    @Body() dto: ApproveMilestoneDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.milestonesService.approveMilestone(engagementId, index, user, dto?.proofVersion);
+  }
+
+  // ----------------------------------------------------------
+  // Proof versions (#376)
+  // ----------------------------------------------------------
+
+  @Post(':index/proof')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Submit or resubmit proof for a milestone (recruiter only); creates a new proof version' })
+  @ApiResponse({ status: 201, description: 'Proof version recorded; milestone is PROOF_SUBMITTED' })
+  @ApiResponse({ status: 403, description: 'Not the recruiter on this engagement' })
+  @ApiResponse({ status: 422, description: 'Milestone is not PENDING' })
+  submitProof(
+    @Param('engagementId') engagementId: string,
+    @Param('index', ParseIntPipe) index: number,
+    @Body() dto: SubmitProofDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.proofVersions.submitProof(engagementId, index, user, dto);
+  }
+
+  @Post(':index/proof/reject')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Reject the latest proof version (company only); the recruiter can then resubmit' })
+  @ApiResponse({ status: 200, description: 'Proof rejected; milestone back to PENDING' })
+  @ApiResponse({ status: 403, description: 'Not the company on this engagement' })
+  @ApiResponse({ status: 409, description: 'versionNumber is not the latest, or already reviewed' })
+  rejectProof(
+    @Param('engagementId') engagementId: string,
+    @Param('index', ParseIntPipe) index: number,
+    @Body() dto: RejectProofDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.proofVersions.rejectProof(engagementId, index, user, dto.reason, dto.versionNumber);
+  }
+
+  @Get(':index/proof-versions')
+  @ApiOperation({ summary: 'Full proof submission history for a milestone, newest first' })
+  @ApiResponse({ status: 200, description: 'Proof versions' })
+  async proofHistory(
     @Param('engagementId') engagementId: string,
     @Param('index', ParseIntPipe) index: number,
     @CurrentUser() user: any,
   ) {
-    return this.milestonesService.approveMilestone(engagementId, index, user);
+    const milestone = await this.milestonesService.findOneForUser(engagementId, index, user);
+    return milestone.proofVersions;
+  }
+
+  // ----------------------------------------------------------
+  // Partial payment release (#378)
+  // ----------------------------------------------------------
+
+  @Get(':index/partial-releases')
+  @ApiOperation({ summary: 'List partial release proposals for a milestone' })
+  listPartialReleases(
+    @Param('engagementId') engagementId: string,
+    @Param('index', ParseIntPipe) index: number,
+    @CurrentUser() user: any,
+  ) {
+    return this.partialReleases.list(engagementId, index, user);
+  }
+
+  @Post(':index/partial-releases')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Propose releasing part of the milestone escrow (company or recruiter); counts as the proposer approval',
+  })
+  @ApiResponse({ status: 201, description: 'Proposal created; awaiting the other party' })
+  @ApiResponse({ status: 400, description: 'Invalid split' })
+  @ApiResponse({ status: 409, description: 'A proposal is already open' })
+  proposePartialRelease(
+    @Param('engagementId') engagementId: string,
+    @Param('index', ParseIntPipe) index: number,
+    @Body() dto: ProposePartialReleaseDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.partialReleases.propose(engagementId, index, user, dto);
+  }
+
+  @Post(':index/partial-releases/:releaseId/approve')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Approve a partial release; executes on-chain once both parties have approved' })
+  @ApiResponse({ status: 200, description: 'Approval recorded (status EXECUTED once both parties approved)' })
+  @ApiResponse({ status: 409, description: 'Already approved or no longer open' })
+  approvePartialRelease(
+    @Param('engagementId') engagementId: string,
+    @Param('index', ParseIntPipe) index: number,
+    @Param('releaseId') releaseId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.partialReleases.approve(engagementId, index, releaseId, user);
+  }
+
+  @Post(':index/partial-releases/:releaseId/reject')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Reject an open partial release proposal' })
+  rejectPartialRelease(
+    @Param('engagementId') engagementId: string,
+    @Param('index', ParseIntPipe) index: number,
+    @Param('releaseId') releaseId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.partialReleases.reject(engagementId, index, releaseId, user);
   }
 
   @Post(':index/resolve')

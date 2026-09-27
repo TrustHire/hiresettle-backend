@@ -5,6 +5,7 @@ import { S3Service } from '../../common/s3/s3.service';
 import { MilestoneKind, MilestoneStatus, NotificationType } from '@prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
 import { BulkMilestoneItemDto } from './dto/bulk-create-milestones.dto';
+import { ProofVersionsService } from './proof-versions.service';
 
 @Injectable()
 export class MilestonesService {
@@ -15,6 +16,7 @@ export class MilestonesService {
     private readonly stellar: StellarService,
     private readonly notifications: NotificationsService,
     private readonly s3: S3Service,
+    private readonly proofVersions: ProofVersionsService,
   ) {}
 
   async findByEngagement(engagementId: string) {
@@ -55,7 +57,8 @@ export class MilestonesService {
     this.checkPartyAccess((m as any).engagement, user);
     const { engagement: _, ...milestone } = m as any;
     const approvals = await this.getApprovalCount(milestone.id);
-    return { ...milestone, approvals };
+    const proofVersions = await this.proofVersions.history(milestone.id);
+    return { ...milestone, approvals, proofVersions };
   }
 
   async findById(id: string, user: any) {
@@ -67,7 +70,8 @@ export class MilestonesService {
     this.checkPartyAccess((m as any).engagement, user);
     const { engagement: _, ...milestone } = m as any;
     const approvals = await this.getApprovalCount(milestone.id);
-    return { ...milestone, approvals };
+    const proofVersions = await this.proofVersions.history(milestone.id);
+    return { ...milestone, approvals, proofVersions };
   }
 
   private checkPartyAccess(engagement: any, user: any): void {
@@ -244,11 +248,13 @@ export class MilestonesService {
     return this.markConfirmed(engagementId, milestoneIndex, paymentReleased);
   }
 
-  async approveMilestone(engagementId: string, milestoneIndex: number, user: any) {
+  async approveMilestone(engagementId: string, milestoneIndex: number, user: any, proofVersion?: number) {
     const milestone = await this.findOne(engagementId, milestoneIndex);
     if (milestone.status !== MilestoneStatus.PROOF_SUBMITTED) {
       throw new UnprocessableEntityException('Milestone must have proof submitted before approval.');
     }
+    // Only the latest proof version can be approved (#376)
+    await this.proofVersions.assertReviewable(milestone.id, proofVersion);
 
     const engagement = await this.prisma.engagement.findUnique({ where: { id: engagementId } });
     if (!engagement) throw new NotFoundException('Engagement not found');
@@ -274,6 +280,7 @@ export class MilestonesService {
       await this.stellar.releaseMilestonePayment(engagementId, milestoneIndex);
       const paymentReleased = BigInt(milestone.amount || 0);
       const updated = await this.markConfirmed(engagementId, milestoneIndex, paymentReleased);
+      await this.proofVersions.markApproved(milestone.id, user.id);
 
       const recruiterId = engagement.recruiterId || '';
       if (recruiterId) {
@@ -329,6 +336,7 @@ export class MilestonesService {
     if (milestone.status !== MilestoneStatus.PROOF_SUBMITTED) {
       throw new UnprocessableEntityException('Milestone proof must be submitted before confirmation.');
     }
+    await this.proofVersions.assertReviewable(milestone.id);
 
     const engagement = await this.prisma.engagement.findUnique({ where: { id: engagementId } });
     if (!engagement) throw new NotFoundException('Engagement not found');
@@ -358,6 +366,7 @@ export class MilestonesService {
 
     const paymentReleased = BigInt(milestone.amount || 0);
     const updated = await this.markConfirmed(engagementId, milestoneIndex, paymentReleased);
+    await this.proofVersions.markApproved(milestone.id, user?.id ?? null);
 
     if (engagement) {
       await this.prisma.notification.create({
@@ -546,10 +555,13 @@ export class MilestonesService {
   }
 
   async markProofSubmitted(engagementId: string, milestoneIndex: number, proofHash: string) {
-    return this.prisma.milestone.update({
+    const updated = await this.prisma.milestone.update({
       where: { engagementId_milestoneIndex: { engagementId, milestoneIndex } },
       data: { proofHash, status: MilestoneStatus.PROOF_SUBMITTED },
     });
+    // On-chain submissions get a version too, so history is complete (#376)
+    await this.proofVersions.recordVersion(updated.id, { proofHash });
+    return updated;
   }
 
   async markConfirmed(engagementId: string, milestoneIndex: number, paymentReleased: bigint) {

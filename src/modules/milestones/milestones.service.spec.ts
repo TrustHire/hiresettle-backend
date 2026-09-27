@@ -3,7 +3,9 @@ import { MilestonesService } from './milestones.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { NotFoundException, UnprocessableEntityException, ForbiddenException } from '@nestjs/common';
+import { S3Service } from '../../common/s3/s3.service';
+import { ProofVersionsService } from './proof-versions.service';
+import { NotFoundException, UnprocessableEntityException, ForbiddenException, ConflictException } from '@nestjs/common';
 import { MilestoneStatus } from '@prisma/client';
 
 // ----------------------------------------------------------------
@@ -54,6 +56,13 @@ const mockStellar = {
 const mockNotifications = {
   notifyUser: jest.fn().mockResolvedValue(undefined),
   notifyUserById: jest.fn().mockResolvedValue(undefined),
+};
+
+const mockProofVersions = {
+  history: jest.fn().mockResolvedValue([]),
+  recordVersion: jest.fn().mockResolvedValue({ id: 'pv-1', versionNumber: 1 }),
+  assertReviewable: jest.fn().mockResolvedValue(null),
+  markApproved: jest.fn().mockResolvedValue(null),
 };
 
 const baseEngagement = {
@@ -108,6 +117,8 @@ describe('MilestonesService', () => {
         { provide: PrismaService, useValue: mockPrisma },
         { provide: StellarService, useValue: mockStellar },
         { provide: NotificationsService, useValue: mockNotifications },
+        { provide: S3Service, useValue: {} },
+        { provide: ProofVersionsService, useValue: mockProofVersions },
       ],
     }).compile();
 
@@ -120,6 +131,10 @@ describe('MilestonesService', () => {
     mockStellar.resolveMilestoneDispute.mockResolvedValue('resolve_tx');
     mockStellar.unlockRetentionMilestone.mockResolvedValue('unlock_tx');
     mockStellar.getCurrentLedgerSequence.mockResolvedValue(1_000_000);
+    mockProofVersions.history.mockResolvedValue([]);
+    mockProofVersions.recordVersion.mockResolvedValue({ id: 'pv-1', versionNumber: 1 });
+    mockProofVersions.assertReviewable.mockResolvedValue(null);
+    mockProofVersions.markApproved.mockResolvedValue(null);
   });
 
   // ----------------------------------------------------------
@@ -144,6 +159,9 @@ describe('MilestonesService', () => {
         }),
       );
       expect(result.status).toBe(MilestoneStatus.PROOF_SUBMITTED);
+      expect(mockProofVersions.recordVersion).toHaveBeenCalledWith(proofSubmittedMilestone.id, {
+        proofHash: 'proof_abc',
+      });
     });
 
     it('throws UnprocessableEntityException when milestone is not PENDING', async () => {
@@ -333,6 +351,34 @@ describe('MilestonesService', () => {
   // ----------------------------------------------------------
 
   describe('approveMilestone()', () => {
+    it('refuses to approve an outdated proof version (#376)', async () => {
+      mockPrisma.milestone.findUnique.mockResolvedValue(proofSubmittedMilestone);
+      mockProofVersions.assertReviewable.mockRejectedValue(
+        new ConflictException('Proof version 1 is outdated; only the latest version (2) can be reviewed.'),
+      );
+
+      await expect(service.approveMilestone('ENG-001', 0, { id: 'user-1' }, 1)).rejects.toThrow(ConflictException);
+
+      expect(mockProofVersions.assertReviewable).toHaveBeenCalledWith(proofSubmittedMilestone.id, 1);
+      expect(mockPrisma.milestoneApproval.create).not.toHaveBeenCalled();
+      expect(mockStellar.releaseMilestonePayment).not.toHaveBeenCalled();
+    });
+
+    it('marks the latest proof version approved once the milestone is confirmed', async () => {
+      mockPrisma.milestone.findUnique.mockResolvedValue(proofSubmittedMilestone);
+      mockPrisma.engagement.findUnique.mockResolvedValue({ ...baseEngagement, requiredApprovals: 1 });
+      mockPrisma.milestoneApproval.findUnique.mockResolvedValue(null);
+      mockPrisma.milestoneApproval.create.mockResolvedValue({});
+      mockPrisma.milestoneApproval.count.mockResolvedValue(1);
+      mockPrisma.milestone.update.mockResolvedValue({ ...proofSubmittedMilestone, status: MilestoneStatus.CONFIRMED });
+      mockPrisma.notification.create.mockResolvedValue({});
+
+      await service.approveMilestone('ENG-001', 0, { id: 'company-1' }, 2);
+
+      expect(mockProofVersions.assertReviewable).toHaveBeenCalledWith(proofSubmittedMilestone.id, 2);
+      expect(mockProofVersions.markApproved).toHaveBeenCalledWith(proofSubmittedMilestone.id, 'company-1');
+    });
+
     it('records first approval and returns unconfirmed when threshold not met', async () => {
       mockPrisma.milestone.findUnique.mockResolvedValue(proofSubmittedMilestone);
       mockPrisma.engagement.findUnique.mockResolvedValue({ ...baseEngagement, requiredApprovals: 2 });
@@ -480,6 +526,21 @@ describe('MilestonesService', () => {
       const result = await service.findOneForUser('ENG-001', 0, user);
 
       expect(result.approvals).toBe(2);
+    });
+
+    it('exposes the full proof submission history (#376)', async () => {
+      const history = [
+        { versionNumber: 2, status: 'SUBMITTED' },
+        { versionNumber: 1, status: 'REJECTED' },
+      ];
+      mockPrisma.milestone.findUnique.mockResolvedValue({ ...pendingMilestone, id: 'ms-0', engagement: baseEngagement });
+      mockPrisma.milestoneApproval.count.mockResolvedValue(0);
+      mockProofVersions.history.mockResolvedValue(history);
+
+      const result = await service.findOneForUser('ENG-001', 0, { role: 'COMPANY', stellarAddress: 'GABC' });
+
+      expect(mockProofVersions.history).toHaveBeenCalledWith('ms-0');
+      expect(result.proofVersions).toEqual(history);
     });
   });
 

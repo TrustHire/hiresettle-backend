@@ -62,6 +62,12 @@ enum NotificationType {
   ACCOUNT_MERGE_DETECTED
   FUNDING_SHORTFALL_DETECTED
   STELLAR_BALANCE_LOW
+  PROOF_REJECTED
+  PROOF_REVIEW_REMINDER
+  PROOF_SLA_ESCALATED
+  PARTIAL_RELEASE_PROPOSED
+  PARTIAL_RELEASE_EXECUTED
+  MILESTONE_COMMENT_ADDED
 }
 
 enum UserRole {
@@ -87,6 +93,32 @@ enum SecurityEventAction {
   ROLE_CHANGE
   ADMIN_OVERRIDE
   IMPERSONATION_ISSUED
+}
+
+// Lifecycle of a single proof submission on a milestone (#376).
+enum ProofVersionStatus {
+  SUBMITTED
+  APPROVED
+  REJECTED
+}
+
+// What happens when a company leaves proof unreviewed past its SLA (#377).
+enum ProofSlaAction {
+  AUTO_APPROVE
+  ESCALATE_TO_ADMIN
+}
+
+enum PartialReleaseStatus {
+  PROPOSED
+  EXECUTED
+  REJECTED
+  FAILED
+}
+
+// Fate of the escrow left over after a partial release (#378).
+enum PartialRemainderAction {
+  REFUND
+  RETAIN
 }
 
 // ============================================================
@@ -141,6 +173,9 @@ model User {
   pendingEmail               String?
   emailChangeToken           String?  @unique
   emailChangeTokenExpiresAt  DateTime?
+  // Proof review SLA (#377) — COMPANY only
+  proofSlaDays               Int            @default(7)
+  proofSlaAction             ProofSlaAction @default(ESCALATE_TO_ADMIN)
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
@@ -175,6 +210,7 @@ model User {
   memberOfCompanies    CompanyMember[]          @relation("MemberUser")
   recoveryCodes        RecoveryCode[]
   trustedDevices       TrustedDevice[]
+  milestoneComments    MilestoneComment[]
 
   @@index([role, deactivatedAt])
   @@index([deletedAt, anonymizedAt]) // Used by PiiAnonymizationSchedulerService
@@ -371,6 +407,9 @@ model Milestone {
   disputeEvidences   DisputeEvidence[]
   approvals          MilestoneApproval[]
   refunds            Refund[]
+  proofVersions      MilestoneProofVersion[]
+  partialReleases    MilestonePartialRelease[]
+  comments           MilestoneComment[]
 
   @@unique([engagementId, milestoneIndex])
   @@index([status])
@@ -612,6 +651,8 @@ model MilestoneAuditLog {
   fromStatus  MilestoneStatus
   toStatus    MilestoneStatus
   changedBy   String
+  action      String?       // e.g. PARTIAL_RELEASE_EXECUTED (#378)
+  details     Json?         // structured breakdown, e.g. amounts and txHash
   createdAt   DateTime      @default(now())
 
   milestone   Milestone     @relation(fields: [milestoneId], references: [id])
@@ -860,4 +901,76 @@ model TrustedDevice {
   @@index([userId])
   @@index([tokenHash])
   @@map("trusted_devices")
+}
+
+// Every proof submission on a milestone, kept after rejection so history is
+// never overwritten (#376). Only the highest versionNumber can be reviewed.
+model MilestoneProofVersion {
+  id               String             @id @default(uuid())
+  milestoneId      String
+  versionNumber    Int
+  proofUrl         String?
+  content          String?
+  proofHash        String?
+  submittedById    String?
+  submittedAt      DateTime           @default(now())
+  status           ProofVersionStatus @default(SUBMITTED)
+  reviewedById     String?
+  reviewedAt       DateTime?
+  rejectionReason  String?
+  // Review SLA bookkeeping (#377) — per version, so a resubmission restarts the clock
+  reminder50SentAt DateTime?
+  reminder90SentAt DateTime?
+  slaExpiredAt     DateTime?
+
+  milestone Milestone @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+
+  @@unique([milestoneId, versionNumber])
+  @@index([status, submittedAt])
+  @@map("milestone_proof_versions")
+}
+
+// A partial payout both parties must sign off on before it executes on-chain (#378).
+model MilestonePartialRelease {
+  id                  String                 @id @default(uuid())
+  milestoneId         String
+  engagementId        String
+  proposedById        String
+  releaseAmount       BigInt                 // stroops paid to the recruiter
+  remainderAmount     BigInt                 // stroops left after the release
+  remainderAction     PartialRemainderAction
+  reason              String?
+  status              PartialReleaseStatus   @default(PROPOSED)
+  companyApproverId   String?
+  companyApprovedAt   DateTime?
+  recruiterApproverId String?
+  recruiterApprovedAt DateTime?
+  txHash              String?
+  executedAt          DateTime?
+  failureReason       String?
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+
+  milestone Milestone @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+
+  @@index([milestoneId, status])
+  @@index([engagementId])
+  @@map("milestone_partial_releases")
+}
+
+// Discussion thread on a single milestone, visible to engagement participants (#379).
+model MilestoneComment {
+  id           String   @id @default(uuid())
+  milestoneId  String
+  engagementId String
+  authorId     String
+  body         String
+  createdAt    DateTime @default(now())
+
+  milestone Milestone @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+  author    User      @relation(fields: [authorId], references: [id])
+
+  @@index([milestoneId, createdAt])
+  @@index([engagementId, createdAt])
+  @@map("milestone_comments")
 }

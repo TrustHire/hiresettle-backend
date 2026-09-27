@@ -33,6 +33,8 @@ import { RequestReplacementDto } from './dto/request-replacement.dto';
 import { CreateEngagementNoteDto } from './dto/create-engagement-note.dto';
 import { SavedFiltersService } from './saved-filters.service';
 import { CreateSavedFilterDto } from './dto/create-saved-filter.dto';
+import { ActivityFeedService } from './activity-feed.service';
+import { EngagementActivityQueryDto } from './dto/engagement-activity-query.dto';
 
 @ApiTags('engagements')
 @ApiBearerAuth()
@@ -48,6 +50,7 @@ export class EngagementsController {
     private readonly adminUsersService: AdminUsersService,
     private readonly auditLogService: AuditLogService,
     private readonly savedFiltersService: SavedFiltersService,
+    private readonly activityFeed: ActivityFeedService,
   ) {}
 
   @Post()
@@ -167,6 +170,26 @@ export class EngagementsController {
     @CurrentUser() user: { id: string; role: string },
   ): Promise<AuditLogEntryDto[]> {
     return this.auditLogService.findByEngagement(engagementId, user.id, user.role);
+  }
+
+  /**
+   * GET /api/v1/engagements/:id/activity
+   * Merged timeline: status changes, notes, milestone audit entries, proof
+   * versions, partial releases and milestone comments (#379).
+   */
+  @Get(':id/activity')
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_READ)
+  @ApiOperation({ summary: 'Engagement activity feed, newest first (participants only)' })
+  @ApiParam({ name: 'id', description: 'Engagement ID' })
+  @ApiResponse({ status: 200, description: '{ items, nextCursor }' })
+  @ApiResponse({ status: 403, description: 'Not a participant of this engagement' })
+  @ApiResponse({ status: 404, description: 'Engagement not found' })
+  getActivity(
+    @Param('id') id: string,
+    @Query() query: EngagementActivityQueryDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.activityFeed.getActivity(id, user, query);
   }
 
   /**
