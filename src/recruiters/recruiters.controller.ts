@@ -3,6 +3,7 @@ import { RecruitersService } from './recruiters.service';
 
 const MAX_SPECIALIZATIONS = 5;
 const MIN_RESPONSE_TIME_DATA_POINTS = 3;
+const LEADERBOARD_PERIODS = ['30d', '90d', 'all'];
 
 @Controller('recruiters')
 export class RecruitersController {
@@ -11,6 +12,17 @@ export class RecruitersController {
   @Get()
   async findAll(@Query('specialization') specialization?: string) {
     return this.recruitersService.findAll({ specialization });
+  }
+
+  @Get('leaderboard')
+  async getLeaderboard(@Query('period') period?: string) {
+    const normalizedPeriod = period ?? 'all';
+    if (!LEADERBOARD_PERIODS.includes(normalizedPeriod)) {
+      throw new BadRequestException(
+        `period must be one of: ${LEADERBOARD_PERIODS.join(', ')}`,
+      );
+    }
+    return this.recruitersService.getLeaderboard(normalizedPeriod);
   }
 
   @Get('specializations')

@@ -6,6 +6,9 @@ import { Engagement } from '../engagements/engagement.entity';
 import { Dispute } from '../disputes/dispute.entity';
 
 const MIN_DATA_POINTS = 3;
+const LEADERBOARD_CACHE_TTL_MS = 60 * 60 * 1000;
+
+export type LeaderboardPeriod = '30d' | '90d' | 'all';
 
 export interface RecruiterStats {
   recruiterId: string;
@@ -16,8 +19,21 @@ export interface RecruiterStats {
   };
 }
 
+export interface LeaderboardEntry {
+  recruiterId: string;
+  completedPlacements: number;
+  rating: number | null;
+}
+
+interface LeaderboardCacheEntry {
+  expiresAt: number;
+  entries: LeaderboardEntry[];
+}
+
 @Injectable()
 export class RecruitersService {
+  private readonly leaderboardCache = new Map<LeaderboardPeriod, LeaderboardCacheEntry>();
+
   constructor(
     @InjectRepository(Recruiter)
     private readonly recruiters: Repository<Recruiter>,
@@ -30,6 +46,51 @@ export class RecruitersService {
   async getStats(recruiterId: string): Promise<RecruiterStats> {
     const responseTime = await this.computeResponseTime(recruiterId);
     return { recruiterId, responseTime };
+  }
+
+  /**
+   * Returns KYC-verified recruiters ranked by completed placements and rating.
+   * Results are cached for one hour per period.
+   */
+  async getLeaderboard(period: LeaderboardPeriod = 'all'): Promise<LeaderboardEntry[]> {
+    const cached = this.leaderboardCache.get(period);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.entries;
+    }
+
+    const entries = await this.computeLeaderboard(period);
+    this.leaderboardCache.set(period, {
+      expiresAt: Date.now() + LEADERBOARD_CACHE_TTL_MS,
+      entries,
+    });
+    return entries;
+  }
+
+  private async computeLeaderboard(period: LeaderboardPeriod): Promise<LeaderboardEntry[]> {
+    const since = periodSince(period);
+
+    const qb = this.recruiters
+      .createQueryBuilder('recruiter')
+      .where('recruiter.kycVerified = :kycVerified', { kycVerified: true });
+
+    if (since) {
+      qb.andWhere('recruiter.completedPlacementsAt >= :since', { since });
+    }
+
+    const recruiters = await qb.getMany();
+
+    return recruiters
+      .map((recruiter) => ({
+        recruiterId: recruiter.id,
+        completedPlacements: recruiter.completedPlacements ?? 0,
+        rating: recruiter.rating ?? null,
+      }))
+      .sort((a, b) => {
+        if (b.completedPlacements !== a.completedPlacements) {
+          return b.completedPlacements - a.completedPlacements;
+        }
+        return (b.rating ?? 0) - (a.rating ?? 0);
+      });
   }
 
   /**
@@ -80,6 +141,17 @@ export class RecruitersService {
       .map((d) => new Date(d.firstResponseAt).getTime() - new Date(d.openedAt).getTime())
       .filter((ms) => ms >= 0);
   }
+}
+
+function periodSince(period: LeaderboardPeriod): Date | null {
+  const now = Date.now();
+  if (period === '30d') {
+    return new Date(now - 30 * 24 * 60 * 60 * 1000);
+  }
+  if (period === '90d') {
+    return new Date(now - 90 * 24 * 60 * 60 * 1000);
+  }
+  return null;
 }
 
 function median(values: number[]): number | null {
