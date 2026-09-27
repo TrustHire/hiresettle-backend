@@ -1,4 +1,5 @@
 import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
+import { APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -8,6 +9,7 @@ import { AppCacheModule } from './common/cache/cache.module';
 import { envValidationSchema } from './config/env.validation';
 import { AppLoggerModule } from './common/logger/logger.module';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
+import { EtagInterceptor } from './common/interceptors/etag.interceptor';
 import { SecurityEventsModule } from './common/security-events/security-events.module';
 import { QueuesModule } from './queues/queues.module';
 
@@ -91,6 +93,12 @@ import { DevModule } from './modules/dev/dev.module';
     CompaniesModule,
     GraphqlModule,
     FeatureFlagsModule,
+  ],
+  providers: [
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: EtagInterceptor,
+    },
   ],
 })
 export class AppModule implements NestModule {

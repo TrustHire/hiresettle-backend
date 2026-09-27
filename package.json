@@ -23,6 +23,9 @@
     "admin:cli": "ts-node --project tsconfig.json src/cli/admin.ts",
     "friendbot:fund": "ts-node --project tsconfig.json scripts/friendbot-fund.ts"
   },
+  "prisma": {
+    "seed": "ts-node --project tsconfig.json prisma/seed.ts"
+  },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.0.0",
     "@aws-sdk/s3-request-presigner": "^3.0.0",
