@@ -13,6 +13,8 @@ export class HttpMetricsInterceptor implements NestInterceptor {
   constructor(private readonly metrics: MetricsService) {}
 
   intercept(ctx: ExecutionContext, next: CallHandler): Observable<any> {
+    if (ctx.getType() !== 'http') return next.handle();
+
     const req = ctx.switchToHttp().getRequest();
     const { method } = req;
     const start = Date.now();

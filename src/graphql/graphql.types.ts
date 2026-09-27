@@ -124,3 +124,27 @@ export class GraphqlEngagement {
   @Field(() => GraphQLISODateTime)
   updatedAt: Date;
 }
+
+@ObjectType()
+export class GraphqlNotification {
+  @Field()
+  id: string;
+
+  @Field()
+  type: string;
+
+  @Field()
+  title: string;
+
+  @Field()
+  message: string;
+
+  @Field({ nullable: true, description: "Notification data serialized as JSON" })
+  data: string | null;
+
+  @Field()
+  read: boolean;
+
+  @Field(() => GraphQLISODateTime)
+  createdAt: Date;
+}

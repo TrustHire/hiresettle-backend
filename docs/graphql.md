@@ -1,6 +1,7 @@
 # GraphQL API
 
-HireSettle exposes a read-only GraphQL layer alongside the primary REST API.
+HireSettle exposes a read-only GraphQL layer alongside the primary REST API,
+plus a WebSocket subscription for real-time notifications.
 It is built with [NestJS GraphQL](https://docs.nestjs.com/graphql/quick-start)
 using the **code-first** approach and served by Apollo Server.
 
@@ -233,7 +234,64 @@ query GetMilestones($engagementId: String) {
 
 ---
 
+## Subscriptions
+
+### `notificationAdded`
+
+Streams the authenticated user's new notifications in real time over
+WebSocket, alongside the [SSE stream](./realtime-notifications.md). A
+subscriber only ever receives their own notifications, and delivery follows
+the same per-type `sseEnabled` preference as the SSE stream.
+
+Subscriptions use the [`graphql-ws`](https://github.com/enisdenjo/graphql-ws)
+protocol at `ws(s)://<host>/graphql`. Authenticate with the same access JWT
+used for REST, passed in `connectionParams`:
+
+```ts
+import { createClient } from 'graphql-ws';
+
+const client = createClient({
+  url: 'wss://api.hiresettle.com/graphql',
+  connectionParams: { authorization: `Bearer ${accessToken}` },
+});
+
+client.subscribe(
+  {
+    query: `subscription {
+      notificationAdded { id type title message data read createdAt }
+    }`,
+  },
+  { next: (msg) => console.log(msg.data), error: console.error, complete: () => {} },
+);
+```
+
+- Missing, invalid, expired or refresh tokens are rejected and the socket is
+  closed with `4403 Forbidden`.
+- Once the access token expires, no further notifications are delivered;
+  reconnect with a freshly refreshed token.
+- `data` is the notification's data object serialised as a JSON string.
+- Like SSE, fan-out is in-process: clients only receive events published by
+  the API instance they are connected to.
+
+**Returns:** `GraphqlNotification!`
+
+---
+
 ## Types
+
+### `GraphqlNotification`
+
+| Field | Type | Nullable | Description |
+|---|---|---|---|
+| `id` | `String` | no | Notification ID. |
+| `type` | `String` | no | Notification type, e.g. `PAYMENT_RELEASED`. |
+| `title` | `String` | no | Short summary. |
+| `message` | `String` | no | Human-readable message. |
+| `data` | `String` | yes | Event-specific data serialised as JSON. |
+| `read` | `Boolean` | no | Whether the notification has been read. |
+| `createdAt` | `DateTime` | no | Creation timestamp. |
+
+---
 
 ### `GraphqlUser`
 

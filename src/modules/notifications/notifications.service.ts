@@ -1,4 +1,5 @@
 import {
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
@@ -8,6 +9,7 @@ import { ConfigService } from "@nestjs/config";
 import * as nodemailer from "nodemailer";
 import { InjectQueue } from "@nestjs/bullmq";
 import { Queue } from "bullmq";
+import { PubSub } from "graphql-subscriptions";
 import { PrismaService } from "../../common/prisma/prisma.service";
 import { NotificationType, Notification } from "@prisma/client";
 import { MetricsService } from "../../metrics/metrics.service";
@@ -21,6 +23,10 @@ import {
   DiscordNotificationsService,
   isDiscordKeyType,
 } from "./discord-notifications.service";
+import {
+  NOTIFICATIONS_PUBSUB,
+  NOTIFICATION_ADDED,
+} from "./notification-pubsub";
 
 @Injectable()
 export class NotificationsService {
@@ -39,6 +45,9 @@ export class NotificationsService {
     @Optional() private readonly slackNotifications?: SlackNotificationsService,
     @Optional()
     private readonly discordNotifications?: DiscordNotificationsService,
+    @Optional()
+    @Inject(NOTIFICATIONS_PUBSUB)
+    private readonly pubSub?: PubSub,
   ) {
     this.transporter = nodemailer.createTransport({
       host: this.config.get("SMTP_HOST"),
@@ -88,6 +97,16 @@ export class NotificationsService {
   }
 
   private pushToConnections(notification: Notification) {
+    // GraphQL subscribers (#408) share the SSE real-time preference.
+    this.pubSub
+      ?.publish(NOTIFICATION_ADDED, { [NOTIFICATION_ADDED]: notification })
+      .catch((err) =>
+        this.logger.error(
+          `Failed to publish notification ${notification.id} to GraphQL subscribers`,
+          err?.message,
+        ),
+      );
+
     const connections = this.userConnections.get(notification.userId);
     if (connections) {
       connections.forEach((res) => {

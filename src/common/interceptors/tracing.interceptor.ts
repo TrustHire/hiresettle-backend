@@ -6,6 +6,9 @@ import { randomUUID } from 'crypto';
 @Injectable()
 export class TracingInterceptor implements NestInterceptor {
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
+    // GraphQL (incl. WebSocket subscriptions) has no HTTP request to annotate.
+    if (context.getType() !== 'http') return next.handle();
+
     const span = trace.getActiveSpan();
 
     if (span) {
