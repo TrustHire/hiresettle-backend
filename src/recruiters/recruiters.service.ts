@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { Recruiter } from './recruiter.entity';
 import { Engagement } from '../engagements/engagement.entity';
 import { Dispute } from '../disputes/dispute.entity';
+import { MilestonePayment } from '../payments/milestone-payment.entity';
 
 const MIN_DATA_POINTS = 3;
 const LEADERBOARD_CACHE_TTL_MS = 60 * 60 * 1000;
@@ -25,10 +26,37 @@ export interface LeaderboardEntry {
   rating: number | null;
 }
 
+export interface PayoutHistoryQuery {
+  from?: Date;
+  to?: Date;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface PayoutHistoryEntry {
+  amount: string;
+  token: string;
+  engagementId: string;
+  milestoneId: string;
+  txHash: string;
+  date: Date;
+}
+
+export interface PaginatedPayoutHistory {
+  data: PayoutHistoryEntry[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
 interface LeaderboardCacheEntry {
   expiresAt: number;
   entries: LeaderboardEntry[];
 }
+
+const DEFAULT_PAYOUT_PAGE_SIZE = 20;
+const MAX_PAYOUT_PAGE_SIZE = 100;
 
 @Injectable()
 export class RecruitersService {
@@ -41,6 +69,8 @@ export class RecruitersService {
     private readonly engagements: Repository<Engagement>,
     @InjectRepository(Dispute)
     private readonly disputes: Repository<Dispute>,
+    @InjectRepository(MilestonePayment)
+    private readonly milestonePayments: Repository<MilestonePayment>,
   ) {}
 
   async getStats(recruiterId: string): Promise<RecruiterStats> {
@@ -91,6 +121,54 @@ export class RecruitersService {
         }
         return (b.rating ?? 0) - (a.rating ?? 0);
       });
+  }
+
+  /**
+   * Lists released milestone payments for the authenticated recruiter.
+   * Supports pagination and optional date-range filtering.
+   */
+  async getPayoutHistory(
+    recruiterId: string,
+    query: PayoutHistoryQuery = {},
+  ): Promise<PaginatedPayoutHistory> {
+    const page = Math.max(1, Math.floor(query.page ?? 1));
+    const pageSize = Math.min(
+      MAX_PAYOUT_PAGE_SIZE,
+      Math.max(1, Math.floor(query.pageSize ?? DEFAULT_PAYOUT_PAGE_SIZE)),
+    );
+
+    const qb = this.milestonePayments
+      .createQueryBuilder('payment')
+      .where('payment.recruiterId = :recruiterId', { recruiterId })
+      .andWhere('payment.status = :status', { status: 'released' });
+
+    if (query.from) {
+      qb.andWhere('payment.releasedAt >= :from', { from: query.from });
+    }
+    if (query.to) {
+      qb.andWhere('payment.releasedAt <= :to', { to: query.to });
+    }
+
+    qb.orderBy('payment.releasedAt', 'DESC')
+      .skip((page - 1) * pageSize)
+      .take(pageSize);
+
+    const [payments, total] = await qb.getManyAndCount();
+
+    return {
+      data: payments.map((payment) => ({
+        amount: payment.amount,
+        token: payment.token,
+        engagementId: payment.engagementId,
+        milestoneId: payment.milestoneId,
+        txHash: payment.txHash,
+        date: payment.releasedAt,
+      })),
+      total,
+      page,
+      pageSize,
+      totalPages: Math.ceil(total / pageSize),
+    };
   }
 
   /**

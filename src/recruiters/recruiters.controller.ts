@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Put, Body, Param, Query, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Post, Put, Body, Param, Query, NotFoundException, BadRequestException, Res } from '@nestjs/common';
+import { Response } from 'express';
 import { RecruitersService } from './recruiters.service';
 
 const MAX_SPECIALIZATIONS = 5;
@@ -28,6 +29,57 @@ export class RecruitersController {
   @Get('specializations')
   async listSpecializations() {
     return this.recruitersService.listSpecializations();
+  }
+
+  @Get('me/payouts')
+  async getMyPayouts(
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('format') format?: string,
+    @Res({ passthrough: true }) res?: Response,
+  ) {
+    const parsedPage = page !== undefined ? Number(page) : 1;
+    const parsedLimit = limit !== undefined ? Number(limit) : 20;
+    if (!Number.isInteger(parsedPage) || parsedPage < 1) {
+      throw new BadRequestException('page must be a positive integer');
+    }
+    if (!Number.isInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > 100) {
+      throw new BadRequestException('limit must be an integer between 1 and 100');
+    }
+    const fromDate = from !== undefined ? new Date(from) : undefined;
+    const toDate = to !== undefined ? new Date(to) : undefined;
+    if (fromDate && Number.isNaN(fromDate.getTime())) {
+      throw new BadRequestException('from must be a valid date');
+    }
+    if (toDate && Number.isNaN(toDate.getTime())) {
+      throw new BadRequestException('to must be a valid date');
+    }
+    const result = await this.recruitersService.getMyPayouts({
+      from: fromDate,
+      to: toDate,
+      page: parsedPage,
+      limit: parsedLimit,
+    });
+    if (format === 'csv') {
+      const header = 'amount,token,engagement,milestone,txHash,date';
+      const rows = result.items.map((p) =>
+        [p.amount, p.token, p.engagement, p.milestone, p.txHash, p.date]
+          .map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`)
+          .join(','),
+      );
+      const csv = [header, ...rows].join('\n');
+      if (res) {
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader(
+          'Content-Disposition',
+          'attachment; filename="payouts.csv"',
+        );
+      }
+      return csv;
+    }
+    return result;
   }
 
   @Get(':id')
