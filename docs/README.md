@@ -10,6 +10,7 @@ This directory contains the technical documentation for the HireSettle backend.
 | [Admin CLI](./cli.md) | Every CLI command, its arguments, examples, and required environment variables. |
 | [Alerts](./alerts.md) | Prometheus alerting rules for latency, error rate, queue depth, and pool exhaustion. |
 | [Architecture](./architecture.md) | System diagram, NestJS module layout, and external service interactions. |
+| [Authentication](./authentication.md) | All login methods (email/password, Stellar wallet, Google OAuth, WebAuthn, TOTP 2FA, API keys) and the token/refresh lifecycle. |
 | [Billing](./billing.md) | Company billing routes, fee summaries, and CSV export. |
 | [Caching](./caching.md) | Overview of the caching layer, Redis/in-memory backends, and usage. |
 | [Contributing](../CONTRIBUTING.md) | Branching strategy, commit conventions, and PR process. |
