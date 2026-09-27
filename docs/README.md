@@ -32,6 +32,7 @@ This directory contains the technical documentation for the HireSettle backend.
 | [Performance](./performance.md) | k6 performance test scenarios, p95 SLO target, and how to add new scenarios. |
 | [Queues](./queues.md) | BullMQ queue names, producers, processors, retry settings, Bull Board access, and dead-letter event requeueing. |
 | [Rate Limiting](./rate-limiting.md) | Default throttle limits, per-route overrides, and Retry-After headers. |
+| [Realtime Notifications](./realtime-notifications.md) | Connecting to the `GET /notifications/stream` SSE endpoint, event payload format, and reconnect/heartbeat behaviour. |
 | [Runbook](./runbook.md) | On-call runbook with step-by-step resolution for each Prometheus alert. |
 | [S3 Cleanup](./s3-cleanup.md) | Presigned URL configuration and the orphaned S3 object cleanup job. |
 | [Secrets](./secrets.md) | Secret management, credential rotation procedures, and production injection. |
