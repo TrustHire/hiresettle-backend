@@ -4,6 +4,10 @@ CREATE TABLE "notification_preferences" (
     "userId" TEXT NOT NULL,
     "type" "NotificationType" NOT NULL,
     "emailEnabled" BOOLEAN NOT NULL DEFAULT true,
+    "quietHoursEnabled" BOOLEAN NOT NULL DEFAULT false,
+    "quietHoursStart" TEXT,
+    "quietHoursEnd" TEXT,
+    "timezone" TEXT NOT NULL DEFAULT 'UTC',
 
     CONSTRAINT "notification_preferences_pkey" PRIMARY KEY ("id")
 );

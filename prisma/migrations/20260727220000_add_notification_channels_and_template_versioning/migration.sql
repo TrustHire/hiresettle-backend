@@ -24,6 +24,30 @@ ALTER TABLE "engagement_templates" ADD CONSTRAINT "engagement_templates_companyI
 ALTER TABLE "notification_preferences" ADD COLUMN     "inAppEnabled" BOOLEAN NOT NULL DEFAULT true,
 ADD COLUMN     "sseEnabled" BOOLEAN NOT NULL DEFAULT true;
 
+-- AlterTable: optional SMS delivery channel (issue #395). SMS stays disabled until the
+-- user verifies a phone number, so the phone column is nullable and smsEnabled defaults false.
+ALTER TABLE "notification_preferences" ADD COLUMN     "smsEnabled" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN     "phoneNumber" TEXT,
+ADD COLUMN     "phoneVerifiedAt" TIMESTAMP(3);
+
+-- CreateTable: per-user daily SMS send counter used to enforce the daily cap (issue #395)
+CREATE TABLE "sms_daily_usage" (
+    "id" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "day" DATE NOT NULL,
+    "count" INTEGER NOT NULL DEFAULT 0,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "sms_daily_usage_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateIndex
+CREATE UNIQUE INDEX "sms_daily_usage_userId_day_key" ON "sms_daily_usage"("userId", "day");
+
+-- AddForeignKey
+ALTER TABLE "sms_daily_usage" ADD CONSTRAINT "sms_daily_usage_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
 -- AlterTable: track which version an engagement template is currently on
 ALTER TABLE "engagement_templates" ADD COLUMN     "currentVersion" INTEGER NOT NULL DEFAULT 1;
 
