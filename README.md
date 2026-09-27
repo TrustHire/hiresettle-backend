@@ -319,3 +319,8 @@ The `GET /milestones/:index/timer` endpoint queries the chain directly to get th
 ## License
 
 MIT
+
+## Handsoff notes
+
+<!-- handsoff-issue-405 -->
+- #405: Add admin endpoints to pause and resume queues
