@@ -656,6 +656,8 @@ model MilestoneAuditLog {
   fromStatus  MilestoneStatus
   toStatus    MilestoneStatus
   changedBy   String
+  action      String?       // e.g. PARTIAL_RELEASE_EXECUTED (#378)
+  details     Json?         // structured breakdown, e.g. amounts and txHash
   createdAt   DateTime      @default(now())
 
   milestone   Milestone     @relation(fields: [milestoneId], references: [id])

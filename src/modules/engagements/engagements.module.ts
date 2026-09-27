@@ -7,6 +7,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { AdminModule } from '../admin/admin.module';
 import { PrismaModule } from '../../common/prisma/prisma.module';
 import { AuditLogService } from './audit-log.service';
+import { ActivityFeedService } from './activity-feed.service';
 import { IdempotencyModule } from '../../common/idempotency/idempotency.module';
 import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
 import { AuthModule } from '../auth/auth.module';
@@ -21,7 +22,7 @@ import { AuthModule } from '../auth/auth.module';
     MulterModule.register({ limits: { fileSize: 5 * 1024 * 1024 } }), // max 5 MB CSV
   ],
   controllers: [EngagementsController],
-  providers: [EngagementsService, SavedFiltersService, AuditLogService, IdempotencyInterceptor],
+  providers: [EngagementsService, SavedFiltersService, AuditLogService, IdempotencyInterceptor, ActivityFeedService],
   exports: [EngagementsService, AuditLogService],
 })
 export class EngagementsModule {}

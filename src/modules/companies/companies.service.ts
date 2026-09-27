@@ -8,6 +8,7 @@ import {
 import { CompanyRole } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { UpdateProofSlaSettingsDto } from './dto/proof-sla-settings.dto';
 
 const TRANSFER_TTL_DAYS = 7;
 
@@ -16,6 +17,28 @@ export class CompaniesService {
   private readonly logger = new Logger(CompaniesService.name);
 
   constructor(private readonly prisma: PrismaService) {}
+
+  // ── Issue #377: proof review SLA ──────────────────────────────────────────
+
+  async getProofSlaSettings(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { proofSlaDays: true, proofSlaAction: true },
+    });
+    if (!user) throw new NotFoundException('User not found');
+    return user;
+  }
+
+  async updateProofSlaSettings(userId: string, dto: UpdateProofSlaSettingsDto) {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        ...(dto.proofSlaDays !== undefined ? { proofSlaDays: dto.proofSlaDays } : {}),
+        ...(dto.proofSlaAction !== undefined ? { proofSlaAction: dto.proofSlaAction } : {}),
+      },
+      select: { proofSlaDays: true, proofSlaAction: true },
+    });
+  }
 
   // ── Issue #360 ────────────────────────────────────────────────────────────
 

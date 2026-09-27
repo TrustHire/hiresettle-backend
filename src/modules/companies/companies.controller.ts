@@ -6,6 +6,7 @@ import {
   HttpCode,
   HttpStatus,
   Post,
+  Put,
   UseGuards,
   Request,
 } from '@nestjs/common';
@@ -23,11 +24,42 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { CompanyRoles } from '../../common/decorators/company-roles.decorator';
 import { CompaniesService } from './companies.service';
 import { InitiateTransferDto } from './dto/initiate-transfer.dto';
+import { UpdateProofSlaSettingsDto } from './dto/proof-sla-settings.dto';
 
 @ApiTags('companies')
 @Controller('companies')
 export class CompaniesController {
   constructor(private readonly companiesService: CompaniesService) {}
+
+  // ── Issue #377: proof review SLA ──────────────────────────────────────────
+
+  @Get('me/proof-sla')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.COMPANY)
+  @ApiOperation({ summary: 'Get the proof review SLA settings for your company (#377)' })
+  @ApiResponse({ status: 200, description: '{ proofSlaDays, proofSlaAction }' })
+  getProofSla(@Request() req: any) {
+    return this.companiesService.getProofSlaSettings(req.user.id);
+  }
+
+  @Put('me/proof-sla')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard, CompanyRoleGuard)
+  @Roles(UserRole.COMPANY)
+  @CompanyRoles(CompanyRole.OWNER)
+  @ApiOperation({
+    summary: 'Update the proof review SLA (#377)',
+    description:
+      'proofSlaDays (default 7) is how long the company has to review submitted proof. Reminders go out at 50% ' +
+      'and 90% of the window; on expiry proofSlaAction runs: AUTO_APPROVE releases the payment, ' +
+      'ESCALATE_TO_ADMIN notifies admins.',
+  })
+  @ApiResponse({ status: 200, description: 'Updated settings' })
+  @ApiResponse({ status: 403, description: 'Caller is not the company OWNER' })
+  updateProofSla(@Request() req: any, @Body() dto: UpdateProofSlaSettingsDto) {
+    return this.companiesService.updateProofSlaSettings(req.user.id, dto);
+  }
 
   // ── Issue #360 ────────────────────────────────────────────────────────────
 

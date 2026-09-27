@@ -654,6 +654,50 @@ export class StellarService implements OnModuleInit {
   }
 
   /**
+   * Release part of a milestone's escrow to the recruiter (#378). The
+   * remainder is refunded to the company when `refundRemainder` is true,
+   * otherwise it stays in escrow on the milestone.
+   * Returns tx hash on confirmation; throws StellarError on failure.
+   */
+  async releasePartialMilestonePayment(
+    engagementId: string,
+    milestoneIndex: number,
+    releaseAmount: bigint,
+    refundRemainder: boolean,
+    signer?: Keypair,
+  ): Promise<string> {
+    const keypair = signer ?? this.backendKeypair;
+    if (!keypair) {
+      throw new StellarError(
+        'Backend Stellar keypair is not configured',
+        StellarErrorCode.KEYPAIR_NOT_CONFIGURED,
+      );
+    }
+
+    const contract = new Contract(this.contractId);
+    const account = await this.rpcClient.getAccount(keypair.publicKey());
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        contract.call(
+          'release_partial_payment',
+          nativeToScVal(engagementId, { type: 'string' }),
+          nativeToScVal(milestoneIndex, { type: 'u32' }),
+          nativeToScVal(releaseAmount, { type: 'i128' }),
+          nativeToScVal(refundRemainder, { type: 'bool' }),
+        ),
+      )
+      .setTimeout(60)
+      .build();
+
+    const { txHash } = await this.submitAndConfirm(tx, signer);
+    return txHash;
+  }
+
+  /**
    * Submit a cancellation transaction for an ACTIVE engagement.
    * Returns tx hash on confirmation; throws StellarError on failure.
    */
