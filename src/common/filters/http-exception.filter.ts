@@ -10,6 +10,9 @@ export class HttpExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(HttpExceptionFilter.name);
 
   catch(exception: unknown, host: ArgumentsHost) {
+    // Let GraphQL (queries and WebSocket subscriptions) format its own errors.
+    if (host.getType() !== 'http') return exception;
+
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();

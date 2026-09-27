@@ -10,6 +10,8 @@ import { Request, Response } from 'express';
 @Catch(ThrottlerException)
 export class TooManyRequestsHeadersFilter implements ExceptionFilter {
     catch(exception: ThrottlerException, host: ArgumentsHost) {
+        if (host.getType() !== 'http') return exception;
+
         const ctx = host.switchToHttp();
         const response = ctx.getResponse<Response>();
         const request = ctx.getRequest<Request>();
