@@ -21,6 +21,7 @@ import {
   DiscordNotificationsService,
   isDiscordKeyType,
 } from "./discord-notifications.service";
+import { WebPushService } from "./web-push.service";
 
 @Injectable()
 export class NotificationsService {
@@ -39,6 +40,7 @@ export class NotificationsService {
     @Optional() private readonly slackNotifications?: SlackNotificationsService,
     @Optional()
     private readonly discordNotifications?: DiscordNotificationsService,
+    @Optional() private readonly webPush?: WebPushService,
   ) {
     this.transporter = nodemailer.createTransport({
       host: this.config.get("SMTP_HOST"),
@@ -147,6 +149,14 @@ export class NotificationsService {
 
       if (sseEnabled) {
         this.pushToConnections(notification);
+      }
+
+      // Browser web push (#392): respects the per-type pushEnabled preference.
+      const pushEnabled = pref ? pref.pushEnabled : true;
+      if (pushEnabled && this.webPush) {
+        this.webPush.sendNotification(notification).catch((err) =>
+          this.logger.error(`Web push failed for ${notification.id}`, err?.message),
+        );
       }
 
       if (user.email) {
@@ -265,6 +275,7 @@ export class NotificationsService {
         emailEnabled: pref ? pref.emailEnabled : true,
         inAppEnabled: pref ? pref.inAppEnabled : true,
         sseEnabled: pref ? pref.sseEnabled : true,
+        pushEnabled: pref ? pref.pushEnabled : true,
       };
     });
   }
@@ -276,6 +287,7 @@ export class NotificationsService {
       emailEnabled?: boolean;
       inAppEnabled?: boolean;
       sseEnabled?: boolean;
+      pushEnabled?: boolean;
     }[],
   ) {
     return Promise.all(
