@@ -70,6 +70,12 @@ export const envValidationSchema = Joi.object({
   STELLAR_BREAKER_ROLLING_COUNT_TIMEOUT: Joi.number().integer().min(1000).max(60000).default(10000),
   STELLAR_BREAKER_ROLLING_COUNT_BUCKETS: Joi.number().integer().min(1).max(20).default(10),
 
+  // Web push / VAPID (optional, #392) — push is disabled when keys are unset.
+  // Generate a key pair with: npx web-push generate-vapid-keys
+  VAPID_PUBLIC_KEY: Joi.string().allow('').optional(),
+  VAPID_PRIVATE_KEY: Joi.string().allow('').optional(),
+  VAPID_SUBJECT: Joi.string().pattern(/^(mailto:|https:\/\/)/).allow('').optional(),
+
   // Google OAuth2 (optional)
   GOOGLE_CLIENT_ID: Joi.string().allow('').optional(),
   GOOGLE_CLIENT_SECRET: Joi.string().allow('').optional(),

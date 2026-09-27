@@ -185,6 +185,9 @@ export class PiiAnonymizationSchedulerService {
       // 4. Delete notification preferences — personal settings.
       await tx.notificationPreference.deleteMany({ where: { userId } });
 
+      // 4b. Delete browser push subscriptions — device identifiers (#392).
+      await tx.pushSubscription.deleteMany({ where: { userId } });
+
       // 5. Null network identifiers on SecurityEvent rows.
       //    Preserves the action and timestamp for audit/compliance while
       //    removing ip and userAgent which are personal data under GDPR.

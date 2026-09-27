@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { NotificationsController } from './notifications.controller';
 import { NotificationsService } from './notifications.service';
+import { WebPushService } from './web-push.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { UserJwtSubThrottlerGuard } from '../../common/guards/user-jwt-sub-throttler.guard';
 import { NotificationType } from '@prisma/client';
@@ -27,6 +28,15 @@ describe('NotificationsController', () => {
         {
           provide: NotificationsService,
           useValue: mockNotificationsService,
+        },
+        {
+          provide: WebPushService,
+          useValue: {
+            getPublicKey: jest.fn(),
+            listForUser: jest.fn(),
+            subscribe: jest.fn(),
+            unsubscribe: jest.fn(),
+          },
         },
       ],
     })

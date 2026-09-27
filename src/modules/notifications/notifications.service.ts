@@ -24,9 +24,9 @@ import {
   isDiscordKeyType,
 } from "./discord-notifications.service";
 import {
-  NOTIFICATIONS_PUBSUB,
-  NOTIFICATION_ADDED,
-} from "./notification-pubsub";
+  TeamsNotificationsService,
+  isTeamsKeyType,
+} from "./teams-notifications.service";
 
 @Injectable()
 export class NotificationsService {
@@ -41,13 +41,13 @@ export class NotificationsService {
     @Optional() @InjectQueue("email") private readonly emailQueue?: Queue,
     @Optional() @InjectQueue("slack") private readonly slackQueue?: Queue,
     @Optional() @InjectQueue("discord") private readonly discordQueue?: Queue,
+    @Optional() @InjectQueue("teams") private readonly teamsQueue?: Queue,
     @Optional() private readonly metrics?: MetricsService,
     @Optional() private readonly slackNotifications?: SlackNotificationsService,
     @Optional()
     private readonly discordNotifications?: DiscordNotificationsService,
     @Optional()
-    @Inject(NOTIFICATIONS_PUBSUB)
-    private readonly pubSub?: PubSub,
+    private readonly teamsNotifications?: TeamsNotificationsService,
   ) {
     this.transporter = nodemailer.createTransport({
       host: this.config.get("SMTP_HOST"),
@@ -168,6 +168,14 @@ export class NotificationsService {
         this.pushToConnections(notification);
       }
 
+      // Browser web push (#392): respects the per-type pushEnabled preference.
+      const pushEnabled = pref ? pref.pushEnabled : true;
+      if (pushEnabled && this.webPush) {
+        this.webPush.sendNotification(notification).catch((err) =>
+          this.logger.error(`Web push failed for ${notification.id}`, err?.message),
+        );
+      }
+
       if (user.email) {
         const emailEnabled = pref ? pref.emailEnabled : true;
 
@@ -267,6 +275,28 @@ export class NotificationsService {
         }
       }
 
+      // Microsoft Teams: mirror Slack event selection, Adaptive Card payload (#391)
+      if ((user as any).teamsWebhookUrl && isTeamsKeyType(type)) {
+        const teamsJob = {
+          webhookUrl: (user as any).teamsWebhookUrl,
+          type,
+          title,
+          message,
+          data,
+        };
+        if (this.teamsQueue) {
+          await this.teamsQueue.add("send", teamsJob);
+        } else if (this.teamsNotifications) {
+          await this.teamsNotifications.send(
+            type,
+            title,
+            message,
+            data,
+            (user as any).teamsWebhookUrl,
+          );
+        }
+      }
+
       return notification;
     } catch (error) {
       this.logger.error(`Failed to notify user ${userId}`, error.message);
@@ -284,6 +314,7 @@ export class NotificationsService {
         emailEnabled: pref ? pref.emailEnabled : true,
         inAppEnabled: pref ? pref.inAppEnabled : true,
         sseEnabled: pref ? pref.sseEnabled : true,
+        pushEnabled: pref ? pref.pushEnabled : true,
       };
     });
   }
@@ -295,6 +326,7 @@ export class NotificationsService {
       emailEnabled?: boolean;
       inAppEnabled?: boolean;
       sseEnabled?: boolean;
+      pushEnabled?: boolean;
     }[],
   ) {
     return Promise.all(

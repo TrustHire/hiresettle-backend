@@ -86,6 +86,16 @@ Complete reference for every environment variable consumed by the HireSettle bac
 
 ---
 
+## Web Push (VAPID)
+
+| Variable | Required | Default | Validated at startup | Description |
+| --- | --- | --- | --- | --- |
+| `VAPID_PUBLIC_KEY` | No | — | **Yes** | VAPID public key served at `GET /notifications/push/vapid-public-key` and used by browsers as `applicationServerKey`. Generate a pair with `npx web-push generate-vapid-keys`. Web push is disabled when unset. |
+| `VAPID_PRIVATE_KEY` | No | — | **Yes** | VAPID private key used to sign push messages. Keep secret. |
+| `VAPID_SUBJECT` | No | `mailto:noreply@hiresettle.com` | **Yes** | Contact URI (`mailto:` or `https://`) sent to push services. |
+
+---
+
 ## S3 / Object Storage
 
 | Variable | Required | Default | Validated at startup | Description |

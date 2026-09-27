@@ -226,6 +226,7 @@ export class EventsService implements OnModuleInit {
             await this.webhooks.sendWebhook(sub.url, payload, {
               userId: companyUser.id,
               secret: companyUser.webhookSecret ?? undefined,
+              subscriptionId: sub.id,
             });
           }
         }

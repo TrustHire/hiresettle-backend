@@ -21,6 +21,10 @@ export class NotificationPreferenceItemDto {
   @ApiProperty({ required: false, description: 'Push this notification type over the SSE stream' })
   @IsOptional() @IsBoolean()
   sseEnabled?: boolean;
+
+  @ApiProperty({ required: false, description: 'Send this notification type as a browser web push' })
+  @IsOptional() @IsBoolean()
+  pushEnabled?: boolean;
 }
 
 export class UpdateNotificationPreferencesDto {

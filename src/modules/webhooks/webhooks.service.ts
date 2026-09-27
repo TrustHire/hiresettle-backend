@@ -15,6 +15,8 @@ export interface WebhookPayload {
 export interface WebhookDeliveryMeta {
   userId?: string;
   secret?: string;
+  /** Set when delivering to a WebhookSubscription so the attempt shows up in its delivery log (#397). */
+  subscriptionId?: string;
 }
 
 @Injectable()
@@ -29,7 +31,13 @@ export class WebhooksService {
     if (!url) return;
 
     if (this.webhookQueue) {
-      await this.webhookQueue.add('send', { url, payload, userId: meta.userId, secret: meta.secret });
+      await this.webhookQueue.add('send', {
+        url,
+        payload,
+        userId: meta.userId,
+        secret: meta.secret,
+        subscriptionId: meta.subscriptionId,
+      });
       this.logger.log(`Webhook job enqueued for ${url} (event: ${payload.event})`);
       return;
     }
