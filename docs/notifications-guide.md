@@ -1,241 +1,60 @@
 # Notifications Guide
 
-How HireSettle delivers notifications across channels, the available notification types, and how users can control their preferences.
-
-## Delivery Channels
-
-Every notification is written to the database as an **in-app** record. Depending on type and user preferences, the same event may also be delivered via **email** and pushed over **SSE**.
-
-| Channel | Description |
-|---------|-------------|
-| **In-app** | Persisted in the `notifications` table. Always delivered regardless of preferences. Queried via `GET /notifications`. |
-| **SSE** | Real-time push to `GET /notifications/stream`. Delivered whenever the user has an open connection; no persistence of missed messages. |
-| **Email** | Sent via Nodemailer through a BullMQ queue (`email` queue, 3 retries with exponential backoff). Controlled by per-type user preferences (enabled by default). |
-| **Slack** | Posted to a company's Slack channel via an incoming webhook (`slack` queue, 3 retries). Opt-in per user via `slackWebhookUrl`; only key, company-facing notification types are posted. |
-
----
-
-## Notification Types
+This guide covers how notifications are delivered, how users control them, and how
+critical events can be escalated to additional channels.
 
-| Type | Trigger | Channels | Email Template |
-|------|---------|----------|----------------|
-| `ENGAGEMENT_CREATED` | Company creates an engagement; Stellar chain event | In-app, SSE, Email | `ENGAGEMENT_CREATED.html` |
-| `MILESTONE_UNLOCKED` | Retention timer expires (cron every 10 min) or chain event | In-app, SSE, Email | — |
-| `PROOF_SUBMITTED` | Recruiter submits proof for a milestone | In-app, SSE, Email | — |
-| `MILESTONE_CONFIRMED` | Admin overrides milestone status to CONFIRMED | In-app, SSE, Email | `MILESTONE_CONFIRMED.html` |
-| `PAYMENT_RELEASED` | Escrowed funds released to recruiter on-chain | In-app, SSE, Email | `PAYMENT_RELEASED.html` |
-| `DISPUTE_RAISED` | Company disputes a milestone | In-app, SSE, Email | `DISPUTE_RAISED.html` |
-| `DISPUTE_RESOLVED` | Arbiter resolves a dispute on-chain | In-app, SSE, Email | `DISPUTE_RESOLVED.html` |
-| `REPLACEMENT_REQUESTED` | Company requests a candidate replacement | In-app, SSE, Email | `REPLACEMENT_REQUESTED.html` |
-| `ENGAGEMENT_CANCELLED` | Company cancels an engagement; admin override | In-app, SSE, Email | `ENGAGEMENT_CANCELLED.html` |
-| `RETENTION_WINDOW_APPROACHING` | Cron runs hourly; retention unlock is within 3 days | In-app, SSE, Email | `RETENTION_WINDOW_APPROACHING.html` |
-| `ARBITER_ASSIGNED` | Admin assigns an arbiter to an engagement | In-app, SSE, Email | — |
-| `ARBITER_REASSIGNED` | Admin reassigns an arbiter (old arbiter notified) | In-app, SSE, Email | — |
-| `ARBITER_RECUSAL_REQUESTED` | Arbiter recuses themselves from an engagement | In-app, SSE, Email | — |
-| `ACCOUNT_MERGE_DETECTED` | Merge detector cron flags a merged Stellar account | In-app, SSE, Email | — |
+## Delivery channels
 
-Types without a dedicated email template still send an email using the base template with the notification's `message` text.
+Notifications are delivered over the following channels:
 
----
+- **Email** — the default channel for all notification types.
+- **SMS** — an optional channel for critical events only (see below).
 
-## Email Templates
+## Notification types
 
-### Location
+Notification types are grouped by severity. Only **critical** types are eligible
+for SMS delivery:
 
-Templates live in per-locale directories (BCP-47 tags):
+| Type | Severity | SMS eligible |
+| --- | --- | --- |
+| `dispute_opened` | critical | yes |
+| `dispute_resolved` | critical | yes |
+| `security_alert` | critical | yes |
+| `payment_failed` | normal | no |
+| `payout_completed` | normal | no |
+| `weekly_summary` | normal | no |
 
-```
-src/common/email/templates/
-├── en/                                  — English (default, always present)
-│   ├── base.html                        — shared layout (header, footer, CTA button)
-│   ├── engagement_created.html
-│   ├── engagement_cancelled.html
-│   ├── milestone_confirmed.html
-│   ├── payment_released.html
-│   ├── dispute_raised.html
-│   ├── dispute_resolved.html
-│   ├── replacement_requested.html
-│   └── retention_window_approaching.html
-└── es/                                  — Spanish (example secondary locale)
-    └── (same set of templates)
-```
+Non-critical types are always delivered by email and can never be routed to SMS.
 
-### How Templates Work
+## Enabling SMS notifications
 
-Templates are plain Handlebars `.html` files rendered by `EmailTemplateService` (`src/common/email/email-template.service.ts`). Each type template is a partial block that fills the `base` layout:
+SMS delivery is opt-in and requires a verified phone number. A user cannot enable
+SMS until their phone number has been verified:
 
-```html
-{{#> base}}
-<p>Your localized content here — {{engagementTitle}}, {{amount}}, ...</p>
-{{/base}}
-```
+1. The user adds a phone number in notification settings.
+2. A verification code is sent to that number.
+3. The user submits the code to confirm ownership.
+4. Only after verification succeeds can SMS delivery be enabled.
 
-The `base.html` layout exposes the block via `{{> @partial-block}}` and supplies the header, footer, and optional CTA button.
+If a phone number is changed, it must be verified again before SMS delivery
+resumes. Unverified numbers are never used for delivery.
 
-**Locale resolution** follows the user's `locale` preference with a guaranteed English fallback:
+## Daily SMS cap
 
-1. `templates/<locale>/<name>.html` — the user's preferred locale (e.g. `es`)
-2. `templates/en/<name>.html` — English variant
-3. `templates/en/base.html` + the notification's `message` text — last resort; a missing template never errors
+To prevent runaway costs and accidental spam, each user has a **per-user daily
+SMS cap**. Once the cap is reached for the current day, further critical
+notifications fall back to email for the remainder of the day. The cap resets at
+the start of the next day.
 
-The template name is the lowercased notification type (e.g. `PAYMENT_RELEASED` → `payment_released`), so filenames must match exactly.
+## Provider configuration
 
-**Common variables available in all templates:**
+SMS delivery is performed through a provider (for example, Twilio). Provider
+credentials are configured through environment variables and are never stored in
+the repository. When no provider is configured, SMS delivery is disabled and all
+notifications continue to be delivered by email.
 
-| Variable | Type | Description |
-|----------|------|-------------|
-| `subject` | string | Email subject line (prefixed with a per-type emoji) |
-| `message` | string | Human-readable notification body |
-| `ctaLink` | string? | Optional URL for a call-to-action button |
-| `year` | string | Current year for the footer |
+## Quiet hours
 
-**Type-specific variables:**
-
-| Template | Extra Variables |
-|----------|-----------------|
-| `ENGAGEMENT_CREATED` | `engagementTitle` |
-| `MILESTONE_CONFIRMED` | `engagementTitle`, `milestoneIndex` |
-| `PAYMENT_RELEASED` | `engagementTitle`, `milestoneIndex`, `amount` |
-| `DISPUTE_RAISED` | `engagementTitle`, `milestoneIndex`, `reason` |
-| `DISPUTE_RESOLVED` | `engagementTitle`, `milestoneIndex`, `resolution` |
-| `ENGAGEMENT_CANCELLED` | `engagementTitle`, `reason` |
-| `REPLACEMENT_REQUESTED` | `engagementTitle` |
-| `RETENTION_WINDOW_APPROACHING` | `engagementTitle`, `milestoneIndex` |
-
-### Adding a New Locale
-
-1. Create `src/common/email/templates/<locale>/` and copy the English set.
-2. Translate `base.html` and each type template; keep the filename and variable names identical to the English versions.
-3. Templates you don't translate simply fall back to English automatically — no code change needed.
-4. Users select the locale via `PATCH /users/me/profile` with `{ "locale": "<tag>" }`.
-
-### Setting the User Locale
-
-Each user has a `locale` field (BCP-47 tag, default `en`). It is read/writable through the profile endpoint (`PATCH /users/me/profile`) and is carried onto the email queue so both queued and direct sends render in the user's language.
-
----
-
-## User Preferences (Email Opt-Out)
-
-Users can control which notification types send emails. The preference system is per-type with a single boolean toggle. Email language is controlled separately by the user's `locale` (see [Setting the User Locale](#setting-the-user-locale)).
-
-### Defaults
-
-- Email is **enabled by default** for every type.
-- No preference record exists until the user explicitly changes a setting.
-- Preferences **only control the email channel**. In-app records are always created and SSE pushes always fire regardless of the preference.
-
-### API Endpoints
-
-| Method | Route | Description |
-|--------|-------|-------------|
-| `GET` | `/users/me/notification-preferences` | Returns all 14 types with current `emailEnabled` status. Types with no saved record default to `true`. |
-| `PUT` | `/users/me/notification-preferences` | Upserts preferences. Body: `{ preferences: [{ type: "PAYMENT_RELEASED", emailEnabled: false }, ...] }` |
-
-### Data Model
-
-```prisma
-model NotificationPreference {
-  id           String           @id @default(uuid())
-  userId       String
-  type         NotificationType
-  emailEnabled Boolean          @default(true)
-  createdAt    DateTime         @default(now())
-  updatedAt    DateTime         @updatedAt
-  user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  @@unique([userId, type])
-}
-```
-
----
-
-## Slack Integration
-
-Companies that want alerts in their team Slack channel can configure an incoming webhook. When set, key notification types are posted to that channel in a readable Blocks format (header + message + link back to the app) — never raw JSON.
-
-### Key Notification Types
-
-Only these company-facing, actionable types are posted to Slack:
-
-- `ENGAGEMENT_CREATED`, `PROOF_SUBMITTED`, `MILESTONE_CONFIRMED`, `PAYMENT_RELEASED`
-- `DISPUTE_RAISED`, `DISPUTE_RESOLVED`, `REPLACEMENT_REQUESTED`, `ENGAGEMENT_CANCELLED`
-- `FUNDING_SHORTFALL_DETECTED`
-
-Other types stay in-app/email-only even when a webhook is configured.
-
-### API Endpoints
-
-| Method | Route | Description |
-|--------|-------|-------------|
-| `PUT` | `/users/me/slack-webhook` | Set the webhook. Body: `{ "url": "https://hooks.slack.com/services/<team-id>/<webhook-id>/<token>" }` (https only) |
-| `DELETE` | `/users/me/slack-webhook` | Clear the webhook (disables Slack alerts) |
-| `GET` | `/users/me` | Profile includes the current `slackWebhookUrl` (or `null`) |
-
-### Data Model
-
-Stored as `slackWebhookUrl` on the `users` table (nullable, no default — Slack is off until a company opts in).
-
-### Delivery
-
-Sends run through the BullMQ `slack` queue (3 attempts, exponential backoff). A failed webhook call is retried by the queue and logged; it never blocks notification creation.
-
----
-
-## SSE (Server-Sent Events)
-
-### Connecting
-
-```
-GET /notifications/stream
-Authorization: Bearer <token>
-```
-
-The endpoint returns a long-lived `text/event-stream` response. Each notification is pushed as:
-
-```
-data: {"id":"...","type":"PAYMENT_RELEASED","title":"...","message":"...","data":{...}}
-
-```
-
-### Behavior
-
-- Multiple connections per user are supported.
-- Connections are stored in memory; they do not survive a server restart.
-- If no SSE connection is open when a notification fires, the client must poll `GET /notifications` to retrieve it.
-- A keep-alive comment (`: keep-alive`) is sent on connection and periodically to prevent proxy timeouts.
-
----
-
-## Cleanup
-
-A daily cron (`notification-cleanup.service.ts`) deletes notifications that are:
-
-- **Read** (`read = true`), AND
-- Older than `NOTIFICATION_RETENTION_DAYS` (default: 90 days, configurable via env var)
-
-Unread notifications are never auto-deleted.
-
----
-
-## Notification Dispatchers
-
-| Service | Types Dispatched |
-|---------|-----------------|
-| `EventsService` | Chain-event-driven: `ENGAGEMENT_CREATED`, `MILESTONE_UNLOCKED`, `PROOF_SUBMITTED`, `PAYMENT_RELEASED`, `DISPUTE_RAISED`, `DISPUTE_RESOLVED`, `REPLACEMENT_REQUESTED`, `ENGAGEMENT_CANCELLED` |
-| `RetentionsSchedulerService` | Cron-driven: `RETENTION_WINDOW_APPROACHING`, `MILESTONE_UNLOCKED` |
-| `EngagementsService` | `ENGAGEMENT_CANCELLED`, `REPLACEMENT_REQUESTED`, `ARBITER_RECUSAL_REQUESTED` |
-| `MilestonesService` | `MILESTONE_CONFIRMED` (admin override); also direct DB writes for `PROOF_SUBMITTED`, `PAYMENT_RELEASED`, `DISPUTE_RAISED`, `DISPUTE_RESOLVED` |
-| `AdminUsersService` | `ARBITER_ASSIGNED`, `ARBITER_REASSIGNED` |
-| `StellarMergeDetectorService` | `ACCOUNT_MERGE_DETECTED` (cron every 5 min) |
-
----
-
-## SMTP Configuration
-
-| Env Var | Required | Default | Description |
-|---------|----------|---------|-------------|
-| `SMTP_HOST` | Yes | — | SMTP server hostname |
-| `SMTP_PORT` | No | `587` | SMTP server port |
-| `SMTP_USER` | Yes | — | SMTP auth username |
-| `SMTP_PASS` | Yes | — | SMTP auth password |
-| `EMAIL_FROM` | No | `noreply@hiresettle.com` | Sender address |
+Quiet hours suppress non-critical notifications during a user-defined window.
+Critical notifications (including those eligible for SMS) are not suppressed by
+quiet hours.

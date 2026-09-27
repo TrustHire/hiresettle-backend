@@ -12,6 +12,14 @@ const URGENT_NOTIFICATION_TYPES: NotificationType[] = [
   NotificationType.SECURITY,
 ];
 
+// Only critical notification types are eligible for SMS delivery.
+const SMS_ELIGIBLE_NOTIFICATION_TYPES: NotificationType[] = [
+  NotificationType.DISPUTE,
+  NotificationType.SECURITY,
+];
+
+const DEFAULT_DAILY_SMS_CAP = 5;
+
 @Injectable()
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
@@ -32,6 +40,24 @@ export class NotificationsService {
     const preferences = await this.preferencesRepository.findOne({
       where: { userId },
     });
+
+    if (channel === NotificationChannel.SMS) {
+      const smsBlockReason = await this.getSmsBlockReason(userId, type, preferences);
+      if (smsBlockReason) {
+        this.logger.warn(
+          `SMS notification ${type} for user ${userId} blocked: ${smsBlockReason}`,
+        );
+        return this.notificationRepository.save(
+          this.notificationRepository.create({
+            userId,
+            type,
+            channel,
+            payload,
+            status: NotificationStatus.FAILED,
+          }),
+        );
+      }
+    }
 
     const notification = this.notificationRepository.create({
       userId,
@@ -73,6 +99,53 @@ export class NotificationsService {
     notification.status = NotificationStatus.SENT;
     notification.sentAt = new Date();
     return this.notificationRepository.save(notification);
+  }
+
+  /**
+   * Returns a human-readable reason when an SMS notification must not be sent,
+   * or null when SMS delivery is allowed.
+   */
+  private async getSmsBlockReason(
+    userId: string,
+    type: NotificationType,
+    preferences?: UserNotificationPreferences | null,
+  ): Promise<string | null> {
+    if (!SMS_ELIGIBLE_NOTIFICATION_TYPES.includes(type)) {
+      return `notification type ${type} is not eligible for SMS`;
+    }
+
+    if (!preferences || !preferences.smsEnabled) {
+      return 'SMS notifications are not enabled';
+    }
+
+    if (!preferences.phoneNumber || !preferences.phoneVerifiedAt) {
+      return 'phone number is not verified';
+    }
+
+    const dailyCap = preferences.dailySmsCap ?? DEFAULT_DAILY_SMS_CAP;
+    const sentToday = await this.countSmsSentToday(userId);
+    if (sentToday >= dailyCap) {
+      return `daily SMS cap of ${dailyCap} reached`;
+    }
+
+    return null;
+  }
+
+  private async countSmsSentToday(userId: string): Promise<number> {
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+
+    return this.notificationRepository
+      .createQueryBuilder('notification')
+      .where('notification.userId = :userId', { userId })
+      .andWhere('notification.channel = :channel', {
+        channel: NotificationChannel.SMS,
+      })
+      .andWhere('notification.status = :status', {
+        status: NotificationStatus.SENT,
+      })
+      .andWhere('notification.sentAt >= :startOfDay', { startOfDay })
+      .getCount();
   }
 
   private shouldDelayForQuietHours(
