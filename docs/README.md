@@ -23,6 +23,7 @@ This directory contains the technical documentation for the HireSettle backend.
 | [Glossary](./glossary.md) | Domain-specific terms: Engagement, Milestone, Escrow, Arbiter, Soroban, and more. |
 | [GraphQL API](./graphql.md) | GraphQL endpoint location, authentication, all available queries with examples, and REST features not yet in GraphQL. |
 | [Incident Response](./incident-response.md) | Incident severity levels, triage process, escalation path, and postmortem template. |
+| [KYC](./kyc.md) | Recruiter KYC states, document upload, admin review, and accepted file types/size limits. |
 | [Load Testing](./load-testing.md) | k6 load and stress test suite, SLO targets, and how to interpret results. |
 | [Monitoring](./monitoring.md) | Prometheus metrics emitted by the backend, labels, and example Grafana/PromQL queries. |
 | [Multi-Currency](./multi-currency.md) | `ALLOWED_TOKENS` configuration for accepting multiple Stellar token contracts. |
