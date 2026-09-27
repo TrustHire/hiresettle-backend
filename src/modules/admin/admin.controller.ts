@@ -48,6 +48,7 @@ import { AuthService, RequestMeta } from '../auth/auth.service';
 import { ApiKeysService } from '../auth/api-keys.service';
 import { CreateApiKeyDto } from '../auth/dto/create-api-key.dto';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { ArbiterAssignmentService } from '../disputes/arbiter-assignment.service';
 
 import { SetCompanyPlanDto } from './dto/set-company-plan.dto';
 
@@ -71,6 +72,7 @@ export class AdminController {
     private readonly apiKeys: ApiKeysService,
     private readonly prisma: PrismaService,
     private readonly disputeStats: AdminDisputeStatsService,
+    private readonly arbiterAssignment: ArbiterAssignmentService,
   ) {}
 
   @Get('disputes/stats')
@@ -163,9 +165,14 @@ export class AdminController {
   }
 
   @Patch('engagements/:id/arbiter')
-  @ApiOperation({ summary: 'Assign or reassign an arbiter to an engagement' })
-  assignArbiter(@Param('id') id: string, @Body() dto: AssignArbiterDto) {
-    return this.adminUsers.assignArbiter(id, dto.arbiterId);
+  @ApiOperation({
+    summary: 'Assign or reassign an arbiter to an engagement',
+    description: 'Also pins the engagement's active disputes to this arbiter; manual assignments take precedence over auto-assignment.',
+  })
+  async assignArbiter(@Param('id') id: string, @Body() dto: AssignArbiterDto) {
+    const updated = await this.adminUsers.assignArbiter(id, dto.arbiterId);
+    await this.arbiterAssignment.applyManualOverride(id, dto.arbiterId);
+    return updated;
   }
 
   @Get('arbiters')

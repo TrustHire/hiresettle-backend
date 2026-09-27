@@ -860,6 +860,13 @@ export class EngagementsService {
       throw new ForbiddenException('Only the assigned arbiter can recuse themselves');
     }
 
+    // Persist the recusal so auto-assignment never routes this engagement's disputes back to them (#383)
+    await this.prisma.arbiterRecusal.upsert({
+      where: { engagementId_arbiterId: { engagementId, arbiterId: userId } },
+      update: {},
+      create: { engagementId, arbiterId: userId },
+    });
+
     // Notify all admins
     const admins = await this.prisma.user.findMany({
       where: { role: UserRole.ADMIN, deactivatedAt: null },

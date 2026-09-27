@@ -15,9 +15,10 @@ import { S3Module } from '../../common/s3/s3.module';
 import { EngagementsModule } from '../engagements/engagements.module';
 import { IdempotencyModule } from '../../common/idempotency/idempotency.module';
 import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
+import { DisputesModule } from '../disputes/disputes.module';
 
 @Module({
-  imports: [S3Module, EngagementsModule, IdempotencyModule, NotificationsModule],
+  imports: [S3Module, EngagementsModule, IdempotencyModule, DisputesModule],
   controllers: [
     MilestonesController, MilestoneDetailController, AdminDisputesController, AdminMilestonesController,
     MilestoneCommentsController,

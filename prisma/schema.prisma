@@ -62,12 +62,9 @@ enum NotificationType {
   ACCOUNT_MERGE_DETECTED
   FUNDING_SHORTFALL_DETECTED
   STELLAR_BALANCE_LOW
-  PROOF_REJECTED
-  PROOF_REVIEW_REMINDER
-  PROOF_SLA_ESCALATED
-  PARTIAL_RELEASE_PROPOSED
-  PARTIAL_RELEASE_EXECUTED
-  MILESTONE_COMMENT_ADDED
+  DISPUTE_SLA_OVERDUE
+  DISPUTE_APPEALED
+  DISPUTE_APPEAL_DECIDED
 }
 
 enum UserRole {
@@ -95,30 +92,37 @@ enum SecurityEventAction {
   IMPERSONATION_ISSUED
 }
 
-// Lifecycle of a single proof submission on a milestone (#376).
-enum ProofVersionStatus {
-  SUBMITTED
-  APPROVED
-  REJECTED
+// Dispute lifecycle (#381, #382, #383). OPEN and UNDER_REVIEW count toward an
+// arbiter's active workload; RESOLVED means a decision is recorded and the
+// appeal window is running; CLOSED means funds have been settled.
+enum DisputeStatus {
+  OPEN
+  UNDER_REVIEW
+  RESOLVED
+  CLOSED
 }
 
-// What happens when a company leaves proof unreviewed past its SLA (#377).
-enum ProofSlaAction {
-  AUTO_APPROVE
-  ESCALATE_TO_ADMIN
+// Stage drives the SLA response deadline (#381).
+enum DisputeStage {
+  ASSIGNMENT
+  ARBITER_REVIEW
+  APPEAL_REVIEW
 }
 
-enum PartialReleaseStatus {
-  PROPOSED
-  EXECUTED
-  REJECTED
-  FAILED
+enum DisputeSlaStatus {
+  ON_TRACK
+  OVERDUE
+  MET
 }
 
-// Fate of the escrow left over after a partial release (#378).
-enum PartialRemainderAction {
+enum DisputeOutcome {
+  RELEASE
   REFUND
-  RETAIN
+}
+
+enum DisputeAppealStatus {
+  OPEN
+  DECIDED
 }
 
 // ============================================================
@@ -173,9 +177,9 @@ model User {
   pendingEmail               String?
   emailChangeToken           String?  @unique
   emailChangeTokenExpiresAt  DateTime?
-  // Proof review SLA (#377) — COMPANY only
-  proofSlaDays               Int            @default(7)
-  proofSlaAction             ProofSlaAction @default(ESCALATE_TO_ADMIN)
+  // Tokenized iCal feed (#380): SHA-256 of the raw feed token; null = feed disabled
+  calendarTokenHash          String?  @unique
+  calendarTokenCreatedAt     DateTime?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
@@ -210,7 +214,8 @@ model User {
   memberOfCompanies    CompanyMember[]          @relation("MemberUser")
   recoveryCodes        RecoveryCode[]
   trustedDevices       TrustedDevice[]
-  milestoneComments    MilestoneComment[]
+  arbitratedDisputes   Dispute[]                @relation("DisputeArbiter")
+  arbiterRecusals      ArbiterRecusal[]
 
   @@index([role, deactivatedAt])
   @@index([deletedAt, anonymizedAt]) // Used by PiiAnonymizationSchedulerService
@@ -300,6 +305,8 @@ model Engagement {
   auditLogs       EngagementAuditLog[]
   notes           EngagementNote[]
   review          RecruiterReview?
+  disputes        Dispute[]
+  arbiterRecusals ArbiterRecusal[]
 
   @@index([status])
   @@index([companyAddress])
@@ -407,9 +414,7 @@ model Milestone {
   disputeEvidences   DisputeEvidence[]
   approvals          MilestoneApproval[]
   refunds            Refund[]
-  proofVersions      MilestoneProofVersion[]
-  partialReleases    MilestonePartialRelease[]
-  comments           MilestoneComment[]
+  disputes           Dispute[]
 
   @@unique([engagementId, milestoneIndex])
   @@index([status])
@@ -903,74 +908,79 @@ model TrustedDevice {
   @@map("trusted_devices")
 }
 
-// Every proof submission on a milestone, kept after rejection so history is
-// never overwritten (#376). Only the highest versionNumber can be reviewed.
-model MilestoneProofVersion {
-  id               String             @id @default(uuid())
-  milestoneId      String
-  versionNumber    Int
-  proofUrl         String?
-  content          String?
-  proofHash        String?
-  submittedById    String?
-  submittedAt      DateTime           @default(now())
-  status           ProofVersionStatus @default(SUBMITTED)
-  reviewedById     String?
-  reviewedAt       DateTime?
-  rejectionReason  String?
-  // Review SLA bookkeeping (#377) — per version, so a resubmission restarts the clock
-  reminder50SentAt DateTime?
-  reminder90SentAt DateTime?
-  slaExpiredAt     DateTime?
+// A dispute raised on a milestone (#381, #382, #383). One milestone can be
+// disputed more than once over its life, but only one dispute is active at a time.
+model Dispute {
+  id                      String           @id @default(uuid())
+  engagementId            String
+  milestoneId             String
+  raisedById              String?
+  reason                  String?
+  status                  DisputeStatus    @default(OPEN)
+  stage                   DisputeStage     @default(ASSIGNMENT)
+  arbiterId               String?
+  arbiterAssignedAt       DateTime?
+  arbiterManuallyAssigned Boolean          @default(false) // admin override wins over auto-assignment (#383)
+  responseDeadline        DateTime?        // SLA deadline for the current stage (#381)
+  slaStatus               DisputeSlaStatus @default(ON_TRACK)
+  slaEscalatedAt          DateTime?        // set when admins were notified about an overdue dispute
+  outcome                 DisputeOutcome?
+  resolvedAt              DateTime?
+  appealDeadline          DateTime?        // resolvedAt + appeal window; funds stay in escrow until then (#382)
+  fundsLocked             Boolean          @default(true)
+  fundsReleasedAt         DateTime?
+  isFinal                 Boolean          @default(false)
+  createdAt               DateTime         @default(now())
+  updatedAt               DateTime         @updatedAt
 
-  milestone Milestone @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
-
-  @@unique([milestoneId, versionNumber])
-  @@index([status, submittedAt])
-  @@map("milestone_proof_versions")
-}
-
-// A partial payout both parties must sign off on before it executes on-chain (#378).
-model MilestonePartialRelease {
-  id                  String                 @id @default(uuid())
-  milestoneId         String
-  engagementId        String
-  proposedById        String
-  releaseAmount       BigInt                 // stroops paid to the recruiter
-  remainderAmount     BigInt                 // stroops left after the release
-  remainderAction     PartialRemainderAction
-  reason              String?
-  status              PartialReleaseStatus   @default(PROPOSED)
-  companyApproverId   String?
-  companyApprovedAt   DateTime?
-  recruiterApproverId String?
-  recruiterApprovedAt DateTime?
-  txHash              String?
-  executedAt          DateTime?
-  failureReason       String?
-  createdAt           DateTime               @default(now())
-  updatedAt           DateTime               @updatedAt
-
-  milestone Milestone @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+  engagement Engagement     @relation(fields: [engagementId], references: [id])
+  milestone  Milestone      @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+  arbiter    User?          @relation("DisputeArbiter", fields: [arbiterId], references: [id])
+  appeal     DisputeAppeal?
 
   @@index([milestoneId, status])
   @@index([engagementId])
-  @@map("milestone_partial_releases")
+  @@index([arbiterId, status])
+  @@index([status, slaStatus, responseDeadline])
+  @@index([status, appealDeadline])
+  @@map("disputes")
 }
 
-// Discussion thread on a single milestone, visible to engagement participants (#379).
-model MilestoneComment {
+// At most one appeal per dispute — enforced by @unique on disputeId (#382).
+model DisputeAppeal {
+  id                String              @id @default(uuid())
+  disputeId         String              @unique
+  appellantId       String
+  reason            String
+  originalArbiterId String?
+  arbiterId         String?
+  originalOutcome   DisputeOutcome
+  status            DisputeAppealStatus @default(OPEN)
+  outcome           DisputeOutcome?
+  isFinal           Boolean             @default(false)
+  decidedAt         DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  dispute Dispute @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+
+  @@index([arbiterId])
+  @@map("dispute_appeals")
+}
+
+// Persisted arbiter recusals; recused arbiters are excluded from auto-assignment
+// for that engagement (#383).
+model ArbiterRecusal {
   id           String   @id @default(uuid())
-  milestoneId  String
   engagementId String
-  authorId     String
-  body         String
+  arbiterId    String
+  reason       String?
   createdAt    DateTime @default(now())
 
-  milestone Milestone @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
-  author    User      @relation(fields: [authorId], references: [id])
+  engagement Engagement @relation(fields: [engagementId], references: [id], onDelete: Cascade)
+  arbiter    User       @relation(fields: [arbiterId], references: [id], onDelete: Cascade)
 
-  @@index([milestoneId, createdAt])
-  @@index([engagementId, createdAt])
-  @@map("milestone_comments")
+  @@unique([engagementId, arbiterId])
+  @@index([arbiterId])
+  @@map("arbiter_recusals")
 }

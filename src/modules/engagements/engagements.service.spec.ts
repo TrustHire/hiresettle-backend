@@ -29,6 +29,7 @@ const makeMockPrisma = () => ({
   auditLog: { create: jest.fn() },
   user: { findMany: jest.fn() },
   notification: { create: jest.fn() },
+  arbiterRecusal: { upsert: jest.fn() },
   $transaction: jest.fn((fn) => (typeof fn === 'function' ? fn(mockPrisma) : Promise.all(fn))),
 });
 
@@ -302,6 +303,12 @@ describe('EngagementsService', () => {
       const result = await service.recuseArbiter('ENG-001', 'arbiter-1', UserRole.ARBITER);
 
       expect(result).toEqual({ message: 'Recusal request sent successfully' });
+      expect(mockPrisma.arbiterRecusal.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { engagementId_arbiterId: { engagementId: 'ENG-001', arbiterId: 'arbiter-1' } },
+          create: { engagementId: 'ENG-001', arbiterId: 'arbiter-1' },
+        }),
+      );
       expect(mockNotifications.notifyUserById).toHaveBeenCalledWith(
         'admin-1',
         'ARBITER_RECUSAL_REQUESTED',

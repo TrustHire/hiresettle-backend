@@ -255,7 +255,7 @@ export class MilestonesController {
     @Body() dto: ResolveDisputeDto,
     @CurrentUser() user: any,
   ) {
-    return this.milestonesService.resolveDisputeFlow(engagementId, index, dto.resolution);
+    return this.milestonesService.resolveDisputeFlow(engagementId, index, dto.resolution, user);
   }
 
   @Patch(':index/status')

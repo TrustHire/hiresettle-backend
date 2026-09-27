@@ -28,6 +28,7 @@ import { EngagementsModule } from './modules/engagements/engagements.module';
 import { EngagementTemplatesModule } from './modules/engagement-templates/engagement-templates.module';
 import { RecruitersModule } from './modules/recruiters/recruiters.module';
 import { MilestonesModule } from './modules/milestones/milestones.module';
+import { DisputesModule } from './modules/disputes/disputes.module';
 import { EventsModule } from './modules/events/events.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { UsersModule } from './modules/users/users.module';
@@ -82,6 +83,7 @@ import { DevModule } from './modules/dev/dev.module';
     EngagementTemplatesModule,
     RecruitersModule,
     MilestonesModule,
+    DisputesModule,
     EventsModule,
     NotificationsModule,
     UsersModule,
