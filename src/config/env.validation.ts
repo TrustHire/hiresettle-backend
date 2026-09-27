@@ -48,6 +48,12 @@ export const envValidationSchema = Joi.object({
 
   // Placement milestone due-soon reminder (#260)
   PLACEMENT_MILESTONE_REMINDER_DAYS: Joi.number().integer().min(1).max(365).default(7),
+
+  // Dispute workflow (#381, #382)
+  DISPUTE_APPEAL_WINDOW_HOURS: Joi.number().integer().min(0).max(720).default(72),
+  DISPUTE_SLA_ASSIGNMENT_HOURS: Joi.number().integer().min(1).max(720).default(24),
+  DISPUTE_SLA_REVIEW_HOURS: Joi.number().integer().min(1).max(720).default(72),
+  DISPUTE_SLA_APPEAL_HOURS: Joi.number().integer().min(1).max(720).default(72),
   
   // Database connection pooling
   DATABASE_POOL_MIN: Joi.number().integer().min(1).max(20).default(2),

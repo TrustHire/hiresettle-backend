@@ -62,6 +62,9 @@ enum NotificationType {
   ACCOUNT_MERGE_DETECTED
   FUNDING_SHORTFALL_DETECTED
   STELLAR_BALANCE_LOW
+  DISPUTE_SLA_OVERDUE
+  DISPUTE_APPEALED
+  DISPUTE_APPEAL_DECIDED
 }
 
 enum UserRole {
@@ -87,6 +90,39 @@ enum SecurityEventAction {
   ROLE_CHANGE
   ADMIN_OVERRIDE
   IMPERSONATION_ISSUED
+}
+
+// Dispute lifecycle (#381, #382, #383). OPEN and UNDER_REVIEW count toward an
+// arbiter's active workload; RESOLVED means a decision is recorded and the
+// appeal window is running; CLOSED means funds have been settled.
+enum DisputeStatus {
+  OPEN
+  UNDER_REVIEW
+  RESOLVED
+  CLOSED
+}
+
+// Stage drives the SLA response deadline (#381).
+enum DisputeStage {
+  ASSIGNMENT
+  ARBITER_REVIEW
+  APPEAL_REVIEW
+}
+
+enum DisputeSlaStatus {
+  ON_TRACK
+  OVERDUE
+  MET
+}
+
+enum DisputeOutcome {
+  RELEASE
+  REFUND
+}
+
+enum DisputeAppealStatus {
+  OPEN
+  DECIDED
 }
 
 // ============================================================
@@ -141,6 +177,9 @@ model User {
   pendingEmail               String?
   emailChangeToken           String?  @unique
   emailChangeTokenExpiresAt  DateTime?
+  // Tokenized iCal feed (#380): SHA-256 of the raw feed token; null = feed disabled
+  calendarTokenHash          String?  @unique
+  calendarTokenCreatedAt     DateTime?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
@@ -175,6 +214,8 @@ model User {
   memberOfCompanies    CompanyMember[]          @relation("MemberUser")
   recoveryCodes        RecoveryCode[]
   trustedDevices       TrustedDevice[]
+  arbitratedDisputes   Dispute[]                @relation("DisputeArbiter")
+  arbiterRecusals      ArbiterRecusal[]
 
   @@index([role, deactivatedAt])
   @@index([deletedAt, anonymizedAt]) // Used by PiiAnonymizationSchedulerService
@@ -264,6 +305,8 @@ model Engagement {
   auditLogs       EngagementAuditLog[]
   notes           EngagementNote[]
   review          RecruiterReview?
+  disputes        Dispute[]
+  arbiterRecusals ArbiterRecusal[]
 
   @@index([status])
   @@index([companyAddress])
@@ -371,6 +414,7 @@ model Milestone {
   disputeEvidences   DisputeEvidence[]
   approvals          MilestoneApproval[]
   refunds            Refund[]
+  disputes           Dispute[]
 
   @@unique([engagementId, milestoneIndex])
   @@index([status])
@@ -860,4 +904,81 @@ model TrustedDevice {
   @@index([userId])
   @@index([tokenHash])
   @@map("trusted_devices")
+}
+
+// A dispute raised on a milestone (#381, #382, #383). One milestone can be
+// disputed more than once over its life, but only one dispute is active at a time.
+model Dispute {
+  id                      String           @id @default(uuid())
+  engagementId            String
+  milestoneId             String
+  raisedById              String?
+  reason                  String?
+  status                  DisputeStatus    @default(OPEN)
+  stage                   DisputeStage     @default(ASSIGNMENT)
+  arbiterId               String?
+  arbiterAssignedAt       DateTime?
+  arbiterManuallyAssigned Boolean          @default(false) // admin override wins over auto-assignment (#383)
+  responseDeadline        DateTime?        // SLA deadline for the current stage (#381)
+  slaStatus               DisputeSlaStatus @default(ON_TRACK)
+  slaEscalatedAt          DateTime?        // set when admins were notified about an overdue dispute
+  outcome                 DisputeOutcome?
+  resolvedAt              DateTime?
+  appealDeadline          DateTime?        // resolvedAt + appeal window; funds stay in escrow until then (#382)
+  fundsLocked             Boolean          @default(true)
+  fundsReleasedAt         DateTime?
+  isFinal                 Boolean          @default(false)
+  createdAt               DateTime         @default(now())
+  updatedAt               DateTime         @updatedAt
+
+  engagement Engagement     @relation(fields: [engagementId], references: [id])
+  milestone  Milestone      @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+  arbiter    User?          @relation("DisputeArbiter", fields: [arbiterId], references: [id])
+  appeal     DisputeAppeal?
+
+  @@index([milestoneId, status])
+  @@index([engagementId])
+  @@index([arbiterId, status])
+  @@index([status, slaStatus, responseDeadline])
+  @@index([status, appealDeadline])
+  @@map("disputes")
+}
+
+// At most one appeal per dispute — enforced by @unique on disputeId (#382).
+model DisputeAppeal {
+  id                String              @id @default(uuid())
+  disputeId         String              @unique
+  appellantId       String
+  reason            String
+  originalArbiterId String?
+  arbiterId         String?
+  originalOutcome   DisputeOutcome
+  status            DisputeAppealStatus @default(OPEN)
+  outcome           DisputeOutcome?
+  isFinal           Boolean             @default(false)
+  decidedAt         DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  dispute Dispute @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+
+  @@index([arbiterId])
+  @@map("dispute_appeals")
+}
+
+// Persisted arbiter recusals; recused arbiters are excluded from auto-assignment
+// for that engagement (#383).
+model ArbiterRecusal {
+  id           String   @id @default(uuid())
+  engagementId String
+  arbiterId    String
+  reason       String?
+  createdAt    DateTime @default(now())
+
+  engagement Engagement @relation(fields: [engagementId], references: [id], onDelete: Cascade)
+  arbiter    User       @relation(fields: [arbiterId], references: [id], onDelete: Cascade)
+
+  @@unique([engagementId, arbiterId])
+  @@index([arbiterId])
+  @@map("arbiter_recusals")
 }

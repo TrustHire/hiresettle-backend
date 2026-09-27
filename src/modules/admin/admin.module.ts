@@ -14,9 +14,10 @@ import { AuthModule } from '../auth/auth.module';
 import { MaintenanceModeModule } from '../../common/maintenance/maintenance-mode.module';
 import { AdminDisputeStatsService } from './admin-dispute-stats.service';
 import { StellarBalanceAlertService } from './stellar-balance-alert.service';
+import { DisputesModule } from '../disputes/disputes.module';
 
 @Module({
-  imports: [NotificationsModule, PrismaModule, UsersModule, WebhooksModule, AuthModule, MaintenanceModeModule],
+  imports: [NotificationsModule, PrismaModule, UsersModule, WebhooksModule, AuthModule, MaintenanceModeModule, DisputesModule],
   controllers: [AdminController],
   providers: [
     AdminUsersService,

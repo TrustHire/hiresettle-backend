@@ -2,8 +2,9 @@ import { Injectable, NotFoundException, Logger, UnprocessableEntityException, Fo
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
 import { S3Service } from '../../common/s3/s3.service';
-import { MilestoneKind, MilestoneStatus, NotificationType } from '@prisma/client';
+import { DisputeOutcome, MilestoneKind, MilestoneStatus, NotificationType } from '@prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
+import { DisputeActor, DisputesService } from '../disputes/disputes.service';
 import { BulkMilestoneItemDto } from './dto/bulk-create-milestones.dto';
 
 @Injectable()
@@ -15,6 +16,7 @@ export class MilestonesService {
     private readonly stellar: StellarService,
     private readonly notifications: NotificationsService,
     private readonly s3: S3Service,
+    private readonly disputes: DisputesService,
   ) {}
 
   async findByEngagement(engagementId: string) {
@@ -387,6 +389,9 @@ export class MilestonesService {
       } as any,
     });
 
+    // Opens the Dispute record, starts its SLA clock and auto-assigns an arbiter (#381, #383)
+    await this.disputes.openForMilestone(milestone.id, { reason });
+
     const engagement = await this.prisma.engagement.findUnique({ where: { id: engagementId } });
     if (engagement) {
       const targets = [engagement.companyId, engagement.recruiterId, engagement.arbiterId].filter(Boolean);
@@ -405,10 +410,17 @@ export class MilestonesService {
     return updated;
   }
 
-  async resolveDisputeFlow(engagementId: string, milestoneIndex: number, resolution: string) {
+  async resolveDisputeFlow(engagementId: string, milestoneIndex: number, resolution: string, actor?: DisputeActor) {
     const milestone = await this.findOne(engagementId, milestoneIndex);
     if (milestone.status !== MilestoneStatus.DISPUTED) {
       throw new UnprocessableEntityException('Milestone is not under an active dispute phase.');
+    }
+
+    // Tracked disputes go through the appeal window before funds move (#382);
+    // only legacy disputes without a Dispute record settle immediately.
+    const dispute = await this.disputes.recordDecision(milestone.id, resolution as DisputeOutcome, actor);
+    if (dispute) {
+      return { ...(await this.findOne(engagementId, milestoneIndex)), dispute };
     }
 
     const approved = resolution === 'RELEASE';
@@ -564,10 +576,12 @@ export class MilestonesService {
   }
 
   async markDisputed(engagementId: string, milestoneIndex: number) {
-    return this.prisma.milestone.update({
+    const updated = await this.prisma.milestone.update({
       where: { engagementId_milestoneIndex: { engagementId, milestoneIndex } },
       data: { status: MilestoneStatus.DISPUTED },
     });
+    await this.disputes.openForMilestone(updated.id);
+    return updated;
   }
 
   async markResolved(
@@ -576,13 +590,15 @@ export class MilestonesService {
     approved: boolean,
     paymentReleased?: bigint,
   ) {
-    return this.prisma.milestone.update({
+    const updated = await this.prisma.milestone.update({
       where: { engagementId_milestoneIndex: { engagementId, milestoneIndex } },
       data: {
         status: approved ? MilestoneStatus.RESOLVED : MilestoneStatus.PENDING,
         ...(approved && paymentReleased ? { paymentReleased, confirmedAt: new Date() } : {}),
       },
     });
+    await this.disputes.markSettledOnChain(updated.id);
+    return updated;
   }
 
   async resolveDispute(engagementId: string, milestoneIndex: number, approved: boolean) {
