@@ -31,6 +31,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { UsersModule } from './modules/users/users.module';
 import { HealthModule } from './modules/health/health.module';
 import { AdminModule } from './modules/admin/admin.module';
+import { AnnouncementsModule } from './modules/announcements/announcements.module';
 import { BillingModule } from './modules/billing/billing.module';
 import { TeamInvitesModule } from './modules/team-invites/team-invites.module';
 import { CompaniesModule } from './modules/companies/companies.module';
@@ -84,6 +85,7 @@ import { DevModule } from './modules/dev/dev.module';
     UsersModule,
     HealthModule,
     AdminModule,
+    AnnouncementsModule,
     BillingModule,
     TeamInvitesModule,
     CompaniesModule,

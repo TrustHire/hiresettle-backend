@@ -100,6 +100,20 @@ Passport's `JwtAuthGuard` also returns 401 automatically when no `Authorization:
 
 ---
 
+## 402 — Payment Required
+
+Returned when an action would exceed the company's plan usage limits and no active override applies.
+
+| Message | Context |
+|---------|---------|
+| `Plan limit reached: <metric> (<used>/<limit>). Upgrade your plan or request an override.` | Action blocked because the company is at or above its plan limit for the metric |
+
+Enforcement happens at the action/service layer before the operation is performed. When a company reaches **80%** of a plan limit, a warning notification is emitted (see the notifications API) so admins can act before the hard limit is hit.
+
+Admins can grant a **temporary override** that bypasses the limit for a defined period. While an override is active, actions are allowed even when usage is at or above the limit; once it expires, enforcement resumes automatically.
+
+---
+
 ## 403 — Forbidden
 
 Authenticated but not authorized for the requested action.
@@ -212,4 +226,4 @@ The Bull Board admin queue proxy (`/admin/queues`) bypasses NestJS filters and r
 { "message": "Forbidden" }
 ```
 
-These lack the `success`, `statusCode`, `timestamp`, and `path` fields. This only affects `/admin/queues`.
+These lack the standard error envelope and should be handled separately by clients.
