@@ -2,6 +2,7 @@ import { Controller, Get, Post, Put, Body, Param, Query, NotFoundException, BadR
 import { RecruitersService } from './recruiters.service';
 
 const MAX_SPECIALIZATIONS = 5;
+const MIN_RESPONSE_TIME_DATA_POINTS = 3;
 
 @Controller('recruiters')
 export class RecruitersController {
@@ -24,6 +25,28 @@ export class RecruitersController {
       throw new NotFoundException(`Recruiter ${id} not found`);
     }
     return recruiter;
+  }
+
+  @Get(':id/stats')
+  async getStats(@Param('id') id: string) {
+    const recruiter = await this.recruitersService.findOne(id);
+    if (!recruiter) {
+      throw new NotFoundException(`Recruiter ${id} not found`);
+    }
+    const responseTime = await this.recruitersService.getResponseTimeMetric(id);
+    return {
+      ...recruiter,
+      responseTime: {
+        inviteToDecision:
+          responseTime.inviteToDecisionCount >= MIN_RESPONSE_TIME_DATA_POINTS
+            ? responseTime.inviteToDecisionMedianMs
+            : null,
+        disputeToFirstResponse:
+          responseTime.disputeToFirstResponseCount >= MIN_RESPONSE_TIME_DATA_POINTS
+            ? responseTime.disputeToFirstResponseMedianMs
+            : null,
+      },
+    };
   }
 
   @Put(':id/specializations')
