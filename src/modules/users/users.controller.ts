@@ -43,6 +43,7 @@ import { UserProfileDto } from "./dto/user-profile.dto";
 import { UpdateProfileDto } from "./dto/update-profile.dto";
 import { SetSlackWebhookDto } from "./dto/set-slack-webhook.dto";
 import { SetDiscordWebhookDto } from "./dto/set-discord-webhook.dto";
+import { SetTeamsWebhookDto } from "./dto/set-teams-webhook.dto";
 import { AvatarUploadDto } from "./dto/avatar-upload.dto";
 import { UserDataExportDto } from "./dto/user-data-export.dto";
 import { RequestEmailChangeDto } from "./dto/request-email-change.dto";
@@ -236,6 +237,37 @@ export class UsersController {
   @ApiResponse({ status: 401, description: "Unauthorized" })
   clearDiscordWebhook(@CurrentUser("id") userId: string) {
     return this.usersService.clearDiscordWebhook(userId);
+  }
+
+  @Put("me/teams-webhook")
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({
+    summary:
+      "Set the Microsoft Teams incoming-webhook URL for notification alerts (#391)",
+  })
+  @ApiResponse({ status: 200, description: "Teams webhook configured" })
+  @ApiResponse({ status: 400, description: "Invalid URL" })
+  @ApiResponse({ status: 401, description: "Unauthorized" })
+  setTeamsWebhook(
+    @CurrentUser("id") userId: string,
+    @Body() dto: SetTeamsWebhookDto,
+  ) {
+    return this.usersService.setTeamsWebhook(userId, dto.url);
+  }
+
+  @Delete("me/teams-webhook")
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      "Clear the Microsoft Teams incoming-webhook URL (disable Teams alerts) (#391)",
+  })
+  @ApiResponse({ status: 200, description: "Teams webhook cleared" })
+  @ApiResponse({ status: 401, description: "Unauthorized" })
+  clearTeamsWebhook(@CurrentUser("id") userId: string) {
+    return this.usersService.clearTeamsWebhook(userId);
   }
 
   @Post("me/avatar/presigned-url")

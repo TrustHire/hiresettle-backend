@@ -5,6 +5,7 @@ import { StellarTxProcessor } from "./stellar-tx.processor";
 import { WebhookProcessor } from "./webhook.processor";
 import { SlackProcessor } from "./slack.processor";
 import { DiscordProcessor } from "./discord.processor";
+import { TeamsProcessor } from "./teams.processor";
 import { NotificationsModule } from "../modules/notifications/notifications.module";
 import { StellarModule } from "../common/stellar/stellar.module";
 
@@ -13,6 +14,7 @@ export const QUEUE_STELLAR_TX = "stellar-tx";
 export const QUEUE_WEBHOOK = "webhook";
 export const QUEUE_SLACK = "slack";
 export const QUEUE_DISCORD = "discord";
+export const QUEUE_TEAMS = "teams";
 
 // Shared retry defaults — imported by any module that registers a queue
 export const emailQueueOptions = {
@@ -50,6 +52,13 @@ export const discordQueueOptions = {
     backoff: { type: "exponential", delay: 2000 },
   },
 };
+export const teamsQueueOptions = {
+  name: QUEUE_TEAMS,
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: { type: "exponential", delay: 2000 },
+  },
+};
 
 @Module({
   imports: [
@@ -59,6 +68,7 @@ export const discordQueueOptions = {
       webhookQueueOptions,
       slackQueueOptions,
       discordQueueOptions,
+      teamsQueueOptions,
     ),
     NotificationsModule,
     StellarModule,
@@ -69,6 +79,7 @@ export const discordQueueOptions = {
     WebhookProcessor,
     SlackProcessor,
     DiscordProcessor,
+    TeamsProcessor,
   ],
 })
 export class QueuesModule {}

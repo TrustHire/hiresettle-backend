@@ -217,6 +217,39 @@ describe('UsersService', () => {
     });
   });
 
+  describe('setTeamsWebhook()', () => {
+    const userId = 'user-123';
+    const url = 'https://example.webhook.office.com/webhookb2/<id>/IncomingWebhook/<token>';
+
+    it('persists the Teams webhook URL', async () => {
+      mockPrisma.user.update.mockResolvedValue({ id: userId, teamsWebhookUrl: url });
+
+      const result = await service.setTeamsWebhook(userId, url);
+
+      expect(mockPrisma.user.update).toHaveBeenCalledWith({
+        where: { id: userId },
+        data: { teamsWebhookUrl: url },
+      });
+      expect(result).toEqual({ teamsWebhookUrl: url });
+    });
+  });
+
+  describe('clearTeamsWebhook()', () => {
+    const userId = 'user-123';
+
+    it('clears the Teams webhook URL', async () => {
+      mockPrisma.user.update.mockResolvedValue({ id: userId, teamsWebhookUrl: null });
+
+      const result = await service.clearTeamsWebhook(userId);
+
+      expect(mockPrisma.user.update).toHaveBeenCalledWith({
+        where: { id: userId },
+        data: { teamsWebhookUrl: null },
+      });
+      expect(result).toEqual({ teamsWebhookUrl: null });
+    });
+  });
+
   describe('uploadAvatar()', () => {
     const userId = 'user-123';
     const mockFile = {
