@@ -3,6 +3,8 @@ import { MilestonesService } from './milestones.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { DisputesService } from '../disputes/disputes.service';
+import { S3Service } from '../../common/s3/s3.service';
 import { NotFoundException, UnprocessableEntityException, ForbiddenException } from '@nestjs/common';
 import { MilestoneStatus } from '@prisma/client';
 
@@ -54,6 +56,12 @@ const mockStellar = {
 const mockNotifications = {
   notifyUser: jest.fn().mockResolvedValue(undefined),
   notifyUserById: jest.fn().mockResolvedValue(undefined),
+};
+
+const mockDisputes = {
+  openForMilestone: jest.fn().mockResolvedValue({ id: 'dispute-1' }),
+  recordDecision: jest.fn().mockResolvedValue(null),
+  markSettledOnChain: jest.fn().mockResolvedValue({ count: 0 }),
 };
 
 const baseEngagement = {
@@ -108,6 +116,8 @@ describe('MilestonesService', () => {
         { provide: PrismaService, useValue: mockPrisma },
         { provide: StellarService, useValue: mockStellar },
         { provide: NotificationsService, useValue: mockNotifications },
+        { provide: S3Service, useValue: {} },
+        { provide: DisputesService, useValue: mockDisputes },
       ],
     }).compile();
 
@@ -120,6 +130,9 @@ describe('MilestonesService', () => {
     mockStellar.resolveMilestoneDispute.mockResolvedValue('resolve_tx');
     mockStellar.unlockRetentionMilestone.mockResolvedValue('unlock_tx');
     mockStellar.getCurrentLedgerSequence.mockResolvedValue(1_000_000);
+    mockDisputes.openForMilestone.mockResolvedValue({ id: 'dispute-1' });
+    mockDisputes.recordDecision.mockResolvedValue(null);
+    mockDisputes.markSettledOnChain.mockResolvedValue({ count: 0 });
   });
 
   // ----------------------------------------------------------
@@ -248,6 +261,18 @@ describe('MilestonesService', () => {
       expect(result.status).toBe(MilestoneStatus.DISPUTED);
     });
 
+    it('opens a tracked Dispute so SLA and arbiter auto-assignment kick in', async () => {
+      mockPrisma.milestone.findUnique.mockResolvedValue(proofSubmittedMilestone);
+      mockPrisma.milestone.update.mockResolvedValue({ ...disputedMilestone });
+      mockPrisma.engagement.findUnique.mockResolvedValue(baseEngagement);
+
+      await service.disputeFlow('ENG-001', 0, 'Deliverable not met');
+
+      expect(mockDisputes.openForMilestone).toHaveBeenCalledWith(proofSubmittedMilestone.id, {
+        reason: 'Deliverable not met',
+      });
+    });
+
     it('throws UnprocessableEntityException when milestone is not PROOF_SUBMITTED', async () => {
       mockPrisma.milestone.findUnique.mockResolvedValue(pendingMilestone);
       await expect(service.disputeFlow('ENG-001', 0, 'reason')).rejects.toThrow(
@@ -261,6 +286,20 @@ describe('MilestonesService', () => {
   // ----------------------------------------------------------
 
   describe('resolveDisputeFlow()', () => {
+    it('defers settlement to the appeal window when the dispute is tracked', async () => {
+      const dispute = { id: 'dispute-1', status: 'RESOLVED', outcome: 'RELEASE' };
+      mockPrisma.milestone.findUnique.mockResolvedValue(disputedMilestone);
+      mockDisputes.recordDecision.mockResolvedValue(dispute);
+      const arbiter = { id: 'arbiter-1', role: 'ARBITER' };
+
+      const result = await service.resolveDisputeFlow('ENG-001', 0, 'RELEASE', arbiter);
+
+      expect(mockDisputes.recordDecision).toHaveBeenCalledWith(disputedMilestone.id, 'RELEASE', arbiter);
+      expect(mockStellar.resolveMilestoneDispute).not.toHaveBeenCalled();
+      expect(mockPrisma.milestone.update).not.toHaveBeenCalled();
+      expect(result).toEqual(expect.objectContaining({ dispute }));
+    });
+
     it('calls resolveMilestoneDispute on chain with approved=true then marks RESOLVED', async () => {
       mockPrisma.milestone.findUnique.mockResolvedValue(disputedMilestone);
       mockPrisma.milestone.update.mockResolvedValue({
@@ -551,6 +590,28 @@ describe('MilestonesService', () => {
       mockPrisma.engagement.findUnique.mockResolvedValue(null);
       const user = { role: 'COMPANY', stellarAddress: 'GABC' };
       await expect(service.findByEngagementForUser('ENG-001', user)).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  // ----------------------------------------------------------
+  // chain-event sync with the dispute workflow (#381, #383)
+  // ----------------------------------------------------------
+
+  describe('chain-event dispute sync', () => {
+    it('markDisputed() opens a tracked Dispute for the milestone', async () => {
+      mockPrisma.milestone.update.mockResolvedValue({ ...disputedMilestone });
+
+      await service.markDisputed('ENG-001', 0);
+
+      expect(mockDisputes.openForMilestone).toHaveBeenCalledWith(disputedMilestone.id);
+    });
+
+    it('markResolved() closes any dispute still open on the milestone', async () => {
+      mockPrisma.milestone.update.mockResolvedValue({ ...disputedMilestone, status: MilestoneStatus.RESOLVED });
+
+      await service.markResolved('ENG-001', 0, true);
+
+      expect(mockDisputes.markSettledOnChain).toHaveBeenCalledWith(disputedMilestone.id);
     });
   });
 });
