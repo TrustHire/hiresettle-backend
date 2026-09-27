@@ -21,6 +21,10 @@ import {
   DiscordNotificationsService,
   isDiscordKeyType,
 } from "./discord-notifications.service";
+import {
+  TeamsNotificationsService,
+  isTeamsKeyType,
+} from "./teams-notifications.service";
 
 @Injectable()
 export class NotificationsService {
@@ -35,10 +39,13 @@ export class NotificationsService {
     @Optional() @InjectQueue("email") private readonly emailQueue?: Queue,
     @Optional() @InjectQueue("slack") private readonly slackQueue?: Queue,
     @Optional() @InjectQueue("discord") private readonly discordQueue?: Queue,
+    @Optional() @InjectQueue("teams") private readonly teamsQueue?: Queue,
     @Optional() private readonly metrics?: MetricsService,
     @Optional() private readonly slackNotifications?: SlackNotificationsService,
     @Optional()
     private readonly discordNotifications?: DiscordNotificationsService,
+    @Optional()
+    private readonly teamsNotifications?: TeamsNotificationsService,
   ) {
     this.transporter = nodemailer.createTransport({
       host: this.config.get("SMTP_HOST"),
@@ -244,6 +251,28 @@ export class NotificationsService {
             title,
             message,
             (user as any).discordWebhookUrl,
+          );
+        }
+      }
+
+      // Microsoft Teams: mirror Slack event selection, Adaptive Card payload (#391)
+      if ((user as any).teamsWebhookUrl && isTeamsKeyType(type)) {
+        const teamsJob = {
+          webhookUrl: (user as any).teamsWebhookUrl,
+          type,
+          title,
+          message,
+          data,
+        };
+        if (this.teamsQueue) {
+          await this.teamsQueue.add("send", teamsJob);
+        } else if (this.teamsNotifications) {
+          await this.teamsNotifications.send(
+            type,
+            title,
+            message,
+            data,
+            (user as any).teamsWebhookUrl,
           );
         }
       }
