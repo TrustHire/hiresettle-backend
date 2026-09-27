@@ -453,6 +453,7 @@ model SystemConfig {
 }
 
 enum WebhookDeliveryStatus {
+  SUCCEEDED
   FAILED
   RESENT
 }
@@ -492,24 +493,29 @@ model WebhookSubscription {
 
 // Recorded when a webhook job exhausts its retry attempts, so failures are
 // tracked instead of silently dropped. Admins can resend from here.
+// Subscription deliveries are also logged on success so companies can audit
+// them via GET /webhooks/subscriptions/:id/deliveries (#397).
 model WebhookDelivery {
-  id           String                @id @default(uuid())
-  userId       String?
-  url          String
-  event        String
-  payload      Json
-  attempts     Int
-  errorMessage String?
-  status       WebhookDeliveryStatus @default(FAILED)
-  resendCount  Int                   @default(0)
-  lastResendAt DateTime?
-  createdAt    DateTime              @default(now())
-  updatedAt    DateTime              @updatedAt
+  id             String                @id @default(uuid())
+  userId         String?
+  subscriptionId String?               // set when the delivery targeted a WebhookSubscription (#397)
+  url            String
+  event          String
+  payload        Json
+  attempts       Int
+  responseCode   Int?                  // HTTP status returned by the receiver, null on network errors (#397)
+  errorMessage   String?
+  status         WebhookDeliveryStatus @default(FAILED)
+  resendCount    Int                   @default(0)
+  lastResendAt   DateTime?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
 
   user User? @relation(fields: [userId], references: [id])
 
   @@index([status])
   @@index([userId])
+  @@index([subscriptionId, createdAt])
   @@map("webhook_deliveries")
 }
 

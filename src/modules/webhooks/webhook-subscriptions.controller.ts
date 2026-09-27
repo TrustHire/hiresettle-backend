@@ -5,6 +5,7 @@ import {
   Body,
   Param,
   Delete,
+  Query,
   UseGuards,
   HttpCode,
   HttpStatus,
@@ -24,6 +25,7 @@ import { Throttle } from "@nestjs/throttler";
 import { WebhookSubscriptionsService } from "./webhook-subscriptions.service";
 import { WebhooksService } from "./webhooks.service";
 import { CreateWebhookSubscriptionDto } from "./dto/create-webhook-subscription.dto";
+import { ListWebhookDeliveriesDto } from "./dto/list-webhook-deliveries.dto";
 import { JwtOrApiKeyGuard } from "../../common/guards/jwt-or-api-key.guard";
 import { RolesGuard } from "../../common/guards/roles.guard";
 import { ApiKeyScopesGuard } from "../../common/guards/api-key-scopes.guard";
@@ -99,6 +101,22 @@ export class WebhookSubscriptionsController {
   @ApiResponse({ status: 404, description: "Subscription not found" })
   remove(@CurrentUser() user: User, @Param("id") id: string) {
     return this.subscriptionsService.remove(id, user.id);
+  }
+
+  @Get(":id/deliveries")
+  @ApiOperation({
+    summary:
+      "List delivery attempts for a webhook subscription, filterable by status and event type (#397)",
+  })
+  @ApiResponse({ status: 200, description: "Paginated delivery log" })
+  @ApiResponse({ status: 403, description: "Not authorized" })
+  @ApiResponse({ status: 404, description: "Subscription not found" })
+  listDeliveries(
+    @CurrentUser() user: User,
+    @Param("id") id: string,
+    @Query() query: ListWebhookDeliveriesDto,
+  ) {
+    return this.subscriptionsService.listDeliveries(id, user.id, query);
   }
 
   @Post(":id/replay")
