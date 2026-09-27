@@ -15,6 +15,7 @@ on-chain transactions, outbound webhooks, and third-party chat notifications.
 | `webhook` | `WebhookProcessor` | 3 | exponential, 2 s base | `WebhooksService` |
 | `slack` | `SlackProcessor` | 3 | exponential, 2 s base | `NotificationsService` |
 | `discord` | `DiscordProcessor` | 3 | exponential, 2 s base | `NotificationsService` |
+| `teams` | `TeamsProcessor` | 3 | exponential, 2 s base | `NotificationsService` |
 
 All queues share one Redis connection configured by `REDIS_URL` (see
 [`src/app.module.ts`](../src/app.module.ts) and
@@ -167,6 +168,33 @@ interface DiscordJobData {
   type: NotificationType;
   title: string;
   message: string;
+}
+```
+
+**Retry settings:** 3 attempts, exponential backoff starting at 2 s.
+
+---
+
+### `teams`
+
+Posts Adaptive Card messages to a company's Microsoft Teams incoming webhook
+URL, using the same key-type selection as Slack and Discord.
+
+**Enqueued by:** `NotificationsService.notifyUserById()` when the user has
+`teamsWebhookUrl` set (via `PUT /users/me/teams-webhook`) and the
+notification type matches the Teams key-type list.
+
+**Job name:** `send`
+
+**Job payload:**
+
+```ts
+interface TeamsJobData {
+  webhookUrl: string;
+  type: NotificationType;
+  title: string;
+  message: string;
+  data?: Record<string, any>; // rendered as an Adaptive Card FactSet
 }
 ```
 

@@ -577,4 +577,20 @@ export class UsersService {
     });
     return { discordWebhookUrl: null };
   }
+
+  async setTeamsWebhook(userId: string, url: string) {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { teamsWebhookUrl: url },
+    });
+    return { teamsWebhookUrl: url };
+  }
+
+  async clearTeamsWebhook(userId: string) {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { teamsWebhookUrl: null },
+    });
+    return { teamsWebhookUrl: null };
+  }
 }
