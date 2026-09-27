@@ -1,128 +1,160 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { createHmac, randomBytes } from 'crypto';
 import { WebhookSubscription } from './entities/webhook-subscription.entity';
 import { WebhookDelivery } from './entities/webhook-delivery.entity';
+import { MailService } from '../mail/mail.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
-const DEFAULT_GRACE_PERIOD_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_FAILURE_THRESHOLD = 50;
+
+/**
+ * Current webhook payload format version. Bump this when the payload shape
+ * changes so consumers can opt into the new format via their subscription.
+ */
+export const CURRENT_WEBHOOK_VERSION = 1;
+
+/**
+ * Oldest payload version still supported. Subscriptions pinned to a version
+ * below this are upgraded to CURRENT_WEBHOOK_VERSION. Older versions remain
+ * deliverable during the deprecation window instead of breaking consumers.
+ */
+export const MIN_SUPPORTED_WEBHOOK_VERSION = 1;
 
 @Injectable()
 export class WebhooksService {
+  private readonly logger = new Logger(WebhooksService.name);
+
   constructor(
     @InjectRepository(WebhookSubscription)
     private readonly subscriptionRepository: Repository<WebhookSubscription>,
     @InjectRepository(WebhookDelivery)
     private readonly deliveryRepository: Repository<WebhookDelivery>,
+    private readonly mailService: MailService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
-  async findAll(): Promise<WebhookSubscription[]> {
-    return this.subscriptionRepository.find();
+  private get failureThreshold(): number {
+    const configured = Number(process.env.WEBHOOK_FAILURE_THRESHOLD);
+    return Number.isFinite(configured) && configured > 0
+      ? configured
+      : DEFAULT_FAILURE_THRESHOLD;
   }
 
-  async findOne(id: string): Promise<WebhookSubscription> {
-    const subscription = await this.subscriptionRepository.findOne({ where: { id } });
+  /**
+   * Resolve the payload version a subscription is pinned to. Subscriptions
+   * without an explicit version default to the current format, and versions
+   * below the supported floor are clamped up so deliveries never break.
+   */
+  getSubscriptionVersion(subscription: WebhookSubscription): number {
+    const version = subscription.version ?? CURRENT_WEBHOOK_VERSION;
+    return version < MIN_SUPPORTED_WEBHOOK_VERSION
+      ? MIN_SUPPORTED_WEBHOOK_VERSION
+      : version;
+  }
+
+  /**
+   * Build the headers sent with every webhook delivery, including the
+   * X-Webhook-Version header reflecting the subscription's payload version.
+   */
+  buildDeliveryHeaders(subscription: WebhookSubscription): Record<string, string> {
+    return {
+      'Content-Type': 'application/json',
+      'X-Webhook-Version': String(this.getSubscriptionVersion(subscription)),
+    };
+  }
+
+  async recordDeliverySuccess(subscriptionId: string): Promise<void> {
+    await this.subscriptionRepository.update(subscriptionId, {
+      consecutiveFailures: 0,
+    });
+  }
+
+  async recordDeliveryFailure(
+    subscriptionId: string,
+    error?: string,
+  ): Promise<void> {
+    const subscription = await this.subscriptionRepository.findOne({
+      where: { id: subscriptionId },
+    });
     if (!subscription) {
-      throw new NotFoundException(`Webhook subscription ${id} not found`);
+      throw new NotFoundException('Webhook subscription not found');
     }
-    return subscription;
-  }
 
-  async create(data: Partial<WebhookSubscription>): Promise<WebhookSubscription> {
-    const subscription = this.subscriptionRepository.create({
-      ...data,
-      secret: data.secret ?? this.generateSecret(),
+    const consecutiveFailures = (subscription.consecutiveFailures ?? 0) + 1;
+    const shouldDisable =
+      subscription.active && consecutiveFailures >= this.failureThreshold;
+
+    await this.subscriptionRepository.update(subscriptionId, {
+      consecutiveFailures,
+      active: shouldDisable ? false : subscription.active,
+      disabledAt: shouldDisable ? new Date() : subscription.disabledAt,
     });
-    return this.subscriptionRepository.save(subscription);
-  }
 
-  async update(id: string, data: Partial<WebhookSubscription>): Promise<WebhookSubscription> {
-    const subscription = await this.findOne(id);
-    Object.assign(subscription, data);
-    return this.subscriptionRepository.save(subscription);
-  }
-
-  async remove(id: string): Promise<void> {
-    const subscription = await this.findOne(id);
-    await this.subscriptionRepository.remove(subscription);
-  }
-
-  /**
-   * Rotate the signing secret for a subscription. The previous secret is kept
-   * for a grace period (default 24h) so consumers can update at their own pace.
-   * Deliveries are signed with both secrets while the grace period is active.
-   */
-  async rotateSecret(
-    id: string,
-    gracePeriodMs: number = DEFAULT_GRACE_PERIOD_MS,
-  ): Promise<WebhookSubscription> {
-    const subscription = await this.findOne(id);
-    subscription.previousSecret = subscription.secret;
-    subscription.secret = this.generateSecret();
-    subscription.secretRotatedAt = new Date();
-    subscription.previousSecretExpiresAt = new Date(Date.now() + gracePeriodMs);
-    return this.subscriptionRepository.save(subscription);
-  }
-
-  /**
-   * Returns the secrets that should be used to sign a delivery right now.
-   * The old secret is included only while its grace period has not expired.
-   */
-  getActiveSecrets(subscription: WebhookSubscription): string[] {
-    const secrets = [subscription.secret];
-    if (
-      subscription.previousSecret &&
-      subscription.previousSecretExpiresAt &&
-      subscription.previousSecretExpiresAt.getTime() > Date.now()
-    ) {
-      secrets.push(subscription.previousSecret);
-    }
-    return secrets;
-  }
-
-  /**
-   * Removes the previous secret once the grace period has elapsed. Intended to
-   * be called by a scheduled cleanup job.
-   */
-  async pruneExpiredSecrets(): Promise<void> {
-    const subscriptions = await this.subscriptionRepository.find();
-    const now = Date.now();
-    const expired = subscriptions.filter(
-      (subscription) =>
-        subscription.previousSecret &&
-        subscription.previousSecretExpiresAt &&
-        subscription.previousSecretExpiresAt.getTime() <= now,
-    );
-    for (const subscription of expired) {
-      subscription.previousSecret = null;
-      subscription.previousSecretExpiresAt = null;
-    }
-    if (expired.length > 0) {
-      await this.subscriptionRepository.save(expired);
+    if (shouldDisable) {
+      await this.notifyOwnerOfAutoDisable(subscription, consecutiveFailures, error);
     }
   }
 
-  async deliver(subscription: WebhookSubscription, payload: unknown): Promise<WebhookDelivery> {
-    const body = JSON.stringify(payload);
-    const signatures = this.getActiveSecrets(subscription).map((secret) =>
-      this.sign(body, secret),
-    );
-
-    const delivery = this.deliveryRepository.create({
-      subscriptionId: subscription.id,
-      payload: body,
-      signature: signatures[0],
-      signatures,
-      status: 'pending',
+  async reenableSubscription(subscriptionId: string): Promise<WebhookSubscription> {
+    const subscription = await this.subscriptionRepository.findOne({
+      where: { id: subscriptionId },
     });
-    return this.deliveryRepository.save(delivery);
+    if (!subscription) {
+      throw new NotFoundException('Webhook subscription not found');
+    }
+
+    await this.subscriptionRepository.update(subscriptionId, {
+      active: true,
+      consecutiveFailures: 0,
+      disabledAt: null,
+    });
+
+    return this.subscriptionRepository.findOne({ where: { id: subscriptionId } });
   }
 
-  private sign(body: string, secret: string): string {
-    return createHmac('sha256', secret).update(body).digest('hex');
-  }
+  private async notifyOwnerOfAutoDisable(
+    subscription: WebhookSubscription,
+    consecutiveFailures: number,
+    error?: string,
+  ): Promise<void> {
+    const owner = subscription.owner;
+    if (!owner) {
+      this.logger.warn(
+        `Webhook subscription ${subscription.id} auto-disabled but has no owner to notify`,
+      );
+      return;
+    }
 
-  private generateSecret(): string {
-    return randomBytes(32).toString('hex');
+    const message =
+      `Your webhook subscription "${subscription.name ?? subscription.id}" was ` +
+      `automatically disabled after ${consecutiveFailures} consecutive failed deliveries.` +
+      (error ? ` Last error: ${error}` : '');
+
+    try {
+      await this.mailService.send({
+        to: owner.email,
+        subject: 'Webhook subscription disabled after repeated failures',
+        text: message,
+      });
+    } catch (mailError) {
+      this.logger.error(
+        `Failed to email owner of webhook subscription ${subscription.id}`,
+        mailError as Error,
+      );
+    }
+
+    try {
+      await this.notificationsService.create({
+        userId: owner.id,
+        type: 'webhook.disabled',
+        message,
+      });
+    } catch (notificationError) {
+      this.logger.error(
+        `Failed to create in-app notification for webhook subscription ${subscription.id}`,
+        notificationError as Error,
+      );
+    }
   }
 }
