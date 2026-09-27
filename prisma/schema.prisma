@@ -192,6 +192,7 @@ model User {
   notifications        Notification[]
   refreshTokens        RefreshToken[]
   notificationPrefs    NotificationPreference[]
+  pushSubscriptions    PushSubscription[]
   milestoneAuditLogs   MilestoneAuditLog[]
   disputeEvidences     DisputeEvidence[]
   auditLogs            EngagementAuditLog[]
@@ -546,12 +547,32 @@ model NotificationPreference {
   emailEnabled Boolean          @default(true)
   inAppEnabled Boolean          @default(true)
   sseEnabled   Boolean          @default(true)
+  pushEnabled  Boolean          @default(true) // browser web push (#392)
 
   user User @relation(fields: [userId], references: [id])
 
   @@unique([userId, type])
   @@index([userId])
   @@map("notification_preferences")
+}
+
+// Browser web push subscriptions (VAPID) registered per device (#392).
+// Rows are removed automatically when the push service reports them gone.
+model PushSubscription {
+  id         String    @id @default(uuid())
+  userId     String
+  endpoint   String    @unique
+  p256dh     String
+  auth       String
+  userAgent  String?
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("push_subscriptions")
 }
 
 model Notification {

@@ -156,6 +156,14 @@ export class NotificationsService {
         this.pushToConnections(notification);
       }
 
+      // Browser web push (#392): respects the per-type pushEnabled preference.
+      const pushEnabled = pref ? pref.pushEnabled : true;
+      if (pushEnabled && this.webPush) {
+        this.webPush.sendNotification(notification).catch((err) =>
+          this.logger.error(`Web push failed for ${notification.id}`, err?.message),
+        );
+      }
+
       if (user.email) {
         const emailEnabled = pref ? pref.emailEnabled : true;
 
@@ -294,6 +302,7 @@ export class NotificationsService {
         emailEnabled: pref ? pref.emailEnabled : true,
         inAppEnabled: pref ? pref.inAppEnabled : true,
         sseEnabled: pref ? pref.sseEnabled : true,
+        pushEnabled: pref ? pref.pushEnabled : true,
       };
     });
   }
@@ -305,6 +314,7 @@ export class NotificationsService {
       emailEnabled?: boolean;
       inAppEnabled?: boolean;
       sseEnabled?: boolean;
+      pushEnabled?: boolean;
     }[],
   ) {
     return Promise.all(

@@ -1,4 +1,4 @@
-import { Controller, Get, Patch, Delete, Param, Query, UseGuards, Res, Body } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Query, UseGuards, Res, Body, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery, ApiParam, ApiResponse } from '@nestjs/swagger';
 import { NotificationsService } from './notifications.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -8,6 +8,8 @@ import { UserJwtSubThrottlerGuard } from '../../common/guards/user-jwt-sub-throt
 import { Response } from 'express';
 import { UpdateNotificationPreferencesDto } from './dto/update-notification-preferences.dto';
 import { UpdateDigestPreferenceDto } from './dto/update-digest-preference.dto';
+import { CreatePushSubscriptionDto, DeletePushSubscriptionDto } from './dto/push-subscription.dto';
+import { WebPushService } from './web-push.service';
 
 @ApiTags('notifications')
 @ApiBearerAuth()
@@ -16,7 +18,10 @@ import { UpdateDigestPreferenceDto } from './dto/update-digest-preference.dto';
 @Throttle({ default: { limit: 100, ttl: 60 } })
 @Controller('notifications')
 export class NotificationsController {
-  constructor(private readonly notificationsService: NotificationsService) { }
+  constructor(
+    private readonly notificationsService: NotificationsService,
+    private readonly webPush: WebPushService,
+  ) { }
 
   @Get()
   @ApiOperation({ summary: 'Get notifications for the authenticated user' })
@@ -74,6 +79,46 @@ export class NotificationsController {
     @Body() dto: UpdateDigestPreferenceDto,
   ) {
     return this.notificationsService.setDigestPreference(userId, dto.digestEnabled);
+  }
+
+  @Get('push/vapid-public-key')
+  @ApiOperation({ summary: 'Get the VAPID public key used as applicationServerKey when subscribing to web push (#392)' })
+  @ApiResponse({ status: 200, description: 'VAPID public key returned' })
+  @ApiResponse({ status: 503, description: 'Web push is not configured' })
+  getVapidPublicKey() {
+    return this.webPush.getPublicKey();
+  }
+
+  @Get('push/subscriptions')
+  @ApiOperation({ summary: 'List browser push subscriptions registered by the current user (#392)' })
+  @ApiResponse({ status: 200, description: 'Push subscriptions returned' })
+  listPushSubscriptions(@CurrentUser('id') userId: string) {
+    return this.webPush.listForUser(userId);
+  }
+
+  @Post('push/subscriptions')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Register a browser push subscription for the current user (#392)' })
+  @ApiResponse({ status: 201, description: 'Push subscription registered' })
+  @ApiResponse({ status: 400, description: 'Validation failed' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  subscribePush(
+    @CurrentUser('id') userId: string,
+    @Body() dto: CreatePushSubscriptionDto,
+  ) {
+    return this.webPush.subscribe(userId, dto);
+  }
+
+  @Delete('push/subscriptions')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Unregister a browser push subscription by endpoint (#392)' })
+  @ApiResponse({ status: 200, description: 'Push subscription removed' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  unsubscribePush(
+    @CurrentUser('id') userId: string,
+    @Body() dto: DeletePushSubscriptionDto,
+  ) {
+    return this.webPush.unsubscribe(userId, dto.endpoint);
   }
 
   @Get('unread-count')
