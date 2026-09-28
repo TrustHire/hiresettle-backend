@@ -2,7 +2,7 @@ import {
   Controller, Get, Post, Body, Param,
   Query, UseGuards, HttpCode, HttpStatus,
   Patch, Put, UseInterceptors,
-  UploadedFile,
+  UploadedFile, Delete,
 } from '@nestjs/common';
 import {
   ApiTags, ApiOperation, ApiResponse,
@@ -35,6 +35,10 @@ import { SavedFiltersService } from './saved-filters.service';
 import { CreateSavedFilterDto } from './dto/create-saved-filter.dto';
 import { ActivityFeedService } from './activity-feed.service';
 import { EngagementActivityQueryDto } from './dto/engagement-activity-query.dto';
+import { CreateCommentDto } from './dto/create-comment.dto';
+import { UpdateCommentDto } from './dto/update-comment.dto';
+import { AddWatcherDto } from './dto/add-watcher.dto';
+import { UpdateCandidateDetailsDto } from './dto/update-candidate-details.dto';
 
 @ApiTags('engagements')
 @ApiBearerAuth()
@@ -230,6 +234,171 @@ export class EngagementsController {
     @CurrentUser() user: any,
   ) {
     return this.engagementsService.findNotes(id, user);
+  }
+
+  /**
+   * POST /api/v1/engagements/:id/comments
+   * Add a comment visible to both company and recruiter (#368).
+   */
+  @Post(':id/comments')
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_WRITE)
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Add a comment visible to both sides (participants only) (#368)' })
+  @ApiParam({ name: 'id', description: 'Engagement ID' })
+  @ApiResponse({ status: 201, description: 'Comment created' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Not a participant of this engagement' })
+  @ApiResponse({ status: 404, description: 'Engagement not found' })
+  createComment(
+    @Param('id') id: string,
+    @Body() dto: CreateCommentDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.engagementsService.createComment(id, user, dto.body);
+  }
+
+  /**
+   * GET /api/v1/engagements/:id/comments
+   * List comments on an engagement (participants only).
+   */
+  @Get(':id/comments')
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_READ)
+  @ApiOperation({ summary: 'List comments on an engagement (participants only) (#368)' })
+  @ApiParam({ name: 'id', description: 'Engagement ID' })
+  @ApiResponse({ status: 200, description: 'Comments retrieved' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Not a participant of this engagement' })
+  @ApiResponse({ status: 404, description: 'Engagement not found' })
+  getComments(
+    @Param('id') id: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.engagementsService.listComments(id, user);
+  }
+
+  /**
+   * PATCH /api/v1/engagements/:engagementId/comments/:commentId
+   * Edit a comment within 15 minutes of creation.
+   */
+  @Patch(':engagementId/comments/:commentId')
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_WRITE)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Edit a comment within 15 minutes (author only) (#368)' })
+  @ApiParam({ name: 'engagementId', description: 'Engagement ID' })
+  @ApiParam({ name: 'commentId', description: 'Comment ID' })
+  @ApiResponse({ status: 200, description: 'Comment updated' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Can only edit own comments within 15 minutes' })
+  @ApiResponse({ status: 404, description: 'Comment not found' })
+  updateComment(
+    @Param('commentId') commentId: string,
+    @Body() dto: UpdateCommentDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.engagementsService.updateComment(commentId, user, dto.body);
+  }
+
+  /**
+   * POST /api/v1/engagements/:id/watch
+   * Add a company member as a watcher for this engagement (#369).
+   */
+  @Post(':id/watch')
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_WRITE)
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Add a watcher to this engagement (participants only) (#369)' })
+  @ApiParam({ name: 'id', description: 'Engagement ID' })
+  @ApiResponse({ status: 201, description: 'Watcher added' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Not authorized to add watchers' })
+  @ApiResponse({ status: 404, description: 'Engagement or user not found' })
+  @ApiResponse({ status: 409, description: 'User is already watching' })
+  addWatcher(
+    @Param('id') id: string,
+    @Body() dto: AddWatcherDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.engagementsService.addWatcher(id, user, dto.userId);
+  }
+
+  /**
+   * DELETE /api/v1/engagements/:id/watch/:userId
+   * Remove a watcher from this engagement (#369).
+   */
+  @Delete(':id/watch/:userId')
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_WRITE)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Remove a watcher from this engagement (#369)' })
+  @ApiParam({ name: 'id', description: 'Engagement ID' })
+  @ApiParam({ name: 'userId', description: 'User ID of the watcher to remove' })
+  @ApiResponse({ status: 200, description: 'Watcher removed' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Not authorized to remove watchers' })
+  @ApiResponse({ status: 404, description: 'Watcher not found' })
+  removeWatcher(
+    @Param('id') id: string,
+    @Param('userId') userId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.engagementsService.removeWatcher(id, user, userId);
+  }
+
+  /**
+   * GET /api/v1/engagements/:id/watchers
+   * List watchers for this engagement (#369).
+   */
+  @Get(':id/watchers')
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_READ)
+  @ApiOperation({ summary: 'List watchers for this engagement (participants only) (#369)' })
+  @ApiParam({ name: 'id', description: 'Engagement ID' })
+  @ApiResponse({ status: 200, description: 'Watchers retrieved' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Not a participant' })
+  @ApiResponse({ status: 404, description: 'Engagement not found' })
+  getWatchers(
+    @Param('id') id: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.engagementsService.listWatchers(id, user);
+  }
+
+  /**
+   * PUT /api/v1/engagements/:id/candidate-details
+   * Update placed candidate details (PII) (#368).
+   */
+  @Put(':id/candidate-details')
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_WRITE)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Update placed candidate details (participants only) (#368)' })
+  @ApiParam({ name: 'id', description: 'Engagement ID' })
+  @ApiResponse({ status: 200, description: 'Candidate details updated' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Not a participant' })
+  @ApiResponse({ status: 404, description: 'Engagement not found' })
+  updateCandidateDetails(
+    @Param('id') id: string,
+    @Body() dto: UpdateCandidateDetailsDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.engagementsService.updateCandidateDetails(id, user, dto);
+  }
+
+  /**
+   * GET /api/v1/engagements/:id/candidate-details
+   * Get placed candidate details (participants only) (#368).
+   */
+  @Get(':id/candidate-details')
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_READ)
+  @ApiOperation({ summary: 'Get placed candidate details (participants only) (#368)' })
+  @ApiParam({ name: 'id', description: 'Engagement ID' })
+  @ApiResponse({ status: 200, description: 'Candidate details retrieved' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Not a participant' })
+  @ApiResponse({ status: 404, description: 'Engagement not found' })
+  getCandidateDetails(
+    @Param('id') id: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.engagementsService.getCandidateDetails(id, user);
   }
 
   /**

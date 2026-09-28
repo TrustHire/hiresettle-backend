@@ -44,7 +44,7 @@ export class GdprService {
       );
     }
 
-    const [engagements, notifications] = await Promise.all([
+    const [engagements, notifications, comments] = await Promise.all([
       this.prisma.engagement.findMany({
         where: {
           OR: [
@@ -67,6 +67,16 @@ export class GdprService {
               updatedAt: true,
             },
           },
+          comments: {
+            select: {
+              id: true,
+              body: true,
+              authorId: true,
+              editedAt: true,
+              createdAt: true,
+              updatedAt: true,
+            },
+          },
         },
         orderBy: { createdAt: 'desc' },
       }),
@@ -83,6 +93,18 @@ export class GdprService {
           createdAt: true,
         },
       }),
+      this.prisma.engagementComment.findMany({
+        where: { authorId: userId },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          engagementId: true,
+          body: true,
+          editedAt: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      }),
     ]);
 
     const { id: _id, createdAt, updatedAt, ...profile } = user;
@@ -97,12 +119,31 @@ export class GdprService {
         totalAmount: e.totalAmount.toString(),
         releasedAmount: e.releasedAmount.toString(),
         escrowBalance: e.escrowBalance?.toString() ?? null,
+        // Include placed candidate details in GDPR export (#368)
+        candidateName: e.candidateName,
+        candidateEmail: e.candidateEmail,
+        candidatePhone: e.candidatePhone,
+        candidateStartDate: e.candidateStartDate?.toISOString() ?? null,
+        candidateRole: e.candidateRole,
+        placedAt: e.placedAt?.toISOString() ?? null,
         milestones: e.milestones.map((m) => ({
           ...m,
           amount: m.amount?.toString() ?? null,
         })),
+        comments: e.comments.map((c) => ({
+          ...c,
+          editedAt: c.editedAt?.toISOString() ?? null,
+          createdAt: c.createdAt.toISOString(),
+          updatedAt: c.updatedAt.toISOString(),
+        })),
       })),
       notifications,
+      comments: comments.map((c) => ({
+        ...c,
+        editedAt: c.editedAt?.toISOString() ?? null,
+        createdAt: c.createdAt.toISOString(),
+        updatedAt: c.updatedAt.toISOString(),
+      })),
     };
   }
 

@@ -1156,3 +1156,316 @@ export class EngagementsService {
     return this.findOne(engagementId);
   }
 }
+
+  // ----------------------------------------------------------
+  // ENGAGEMENT COMMENTS (#368)
+  // ----------------------------------------------------------
+
+  async createComment(engagementId: string, user: { id: string; stellarAddress?: string; role: string }, body: string) {
+    const engagement = await this.prisma.engagement.findUnique({ where: { id: engagementId } });
+    if (!engagement) throw new NotFoundException(`Engagement ${engagementId} not found`);
+    this.checkParticipant(engagement, user);
+
+    const comment = await this.prisma.engagementComment.create({
+      data: { engagementId, authorId: user.id, body },
+      include: { author: { select: { id: true, name: true } } },
+    });
+
+    // Notify the other party (not the author)
+    const otherPartyAddress = engagement.companyAddress === user.stellarAddress 
+      ? engagement.recruiterAddress 
+      : engagement.companyAddress;
+
+    await this.notifications.notifyUser(
+      otherPartyAddress,
+      NotificationType.COMMENT_ADDED,
+      `New comment on engagement: ${engagement.jobTitle}`,
+      `${comment.author.name || 'A participant'} added a comment: "${body.substring(0, 100)}${body.length > 100 ? '...' : ''}"`,
+      { engagementId, commentId: comment.id },
+    );
+
+    // Also notify watchers
+    await this.notifyWatchers(engagementId, NotificationType.COMMENT_ADDED, 
+      `New comment on engagement: ${engagement.jobTitle}`,
+      `${comment.author.name || 'A participant'} added a comment`,
+      { engagementId, commentId: comment.id },
+      user.id // exclude the author
+    );
+
+    return this.serializeComment(comment, user.id);
+  }
+
+  async listComments(engagementId: string, user: { id: string; stellarAddress?: string; role: string }) {
+    const engagement = await this.prisma.engagement.findUnique({ where: { id: engagementId } });
+    if (!engagement) throw new NotFoundException(`Engagement ${engagementId} not found`);
+    this.checkParticipant(engagement, user);
+
+    const comments = await this.prisma.engagementComment.findMany({
+      where: { engagementId },
+      include: { author: { select: { id: true, name: true } } },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    return comments.map(c => this.serializeComment(c, user.id));
+  }
+
+  async updateComment(commentId: string, user: { id: string; role: string }, body: string) {
+    const comment = await this.prisma.engagementComment.findUnique({
+      where: { id: commentId },
+      include: { engagement: true, author: { select: { id: true, name: true } } },
+    });
+
+    if (!comment) throw new NotFoundException(`Comment ${commentId} not found`);
+    
+    // Only the author can edit
+    if (comment.authorId !== user.id) {
+      throw new ForbiddenException('You can only edit your own comments');
+    }
+
+    // Check 15-minute edit window
+    const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
+    if (comment.createdAt < fifteenMinutesAgo) {
+      throw new ForbiddenException('Comments can only be edited within 15 minutes of creation');
+    }
+
+    const updated = await this.prisma.engagementComment.update({
+      where: { id: commentId },
+      data: { body, editedAt: new Date() },
+      include: { author: { select: { id: true, name: true } } },
+    });
+
+    return this.serializeComment(updated, user.id);
+  }
+
+  private serializeComment(comment: any, currentUserId: string) {
+    const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
+    const canEdit = comment.authorId === currentUserId && comment.createdAt >= fifteenMinutesAgo;
+
+    return {
+      id: comment.id,
+      engagementId: comment.engagementId,
+      authorId: comment.authorId,
+      authorName: comment.author?.name || 'Unknown',
+      body: comment.body,
+      editedAt: comment.editedAt?.toISOString() ?? null,
+      canEdit,
+      createdAt: comment.createdAt.toISOString(),
+      updatedAt: comment.updatedAt.toISOString(),
+    };
+  }
+
+  // ----------------------------------------------------------
+  // ENGAGEMENT WATCHERS (#369)
+  // ----------------------------------------------------------
+
+  async addWatcher(engagementId: string, requestingUser: { id: string; stellarAddress?: string; role: string }, targetUserId: string) {
+    const engagement = await this.prisma.engagement.findUnique({ where: { id: engagementId } });
+    if (!engagement) throw new NotFoundException(`Engagement ${engagementId} not found`);
+    
+    // Only participants can add watchers
+    this.checkParticipant(engagement, requestingUser);
+
+    // Check if the target user exists and is part of the same company
+    const targetUser = await this.prisma.user.findUnique({ where: { id: targetUserId } });
+    if (!targetUser) throw new NotFoundException(`User ${targetUserId} not found`);
+
+    // Verify the target user is a company member (same companyOwnerId or is the owner)
+    const requestingFullUser = await this.prisma.user.findUnique({ where: { id: requestingUser.id } });
+    if (requestingFullUser.role === UserRole.COMPANY) {
+      const isOwner = requestingFullUser.companyOwnerId === null;
+      const targetIsTeamMember = 
+        targetUser.id === requestingFullUser.id ||
+        targetUser.companyOwnerId === requestingFullUser.id ||
+        (requestingFullUser.companyOwnerId && targetUser.companyOwnerId === requestingFullUser.companyOwnerId);
+
+      if (!targetIsTeamMember && requestingUser.role !== UserRole.ADMIN) {
+        throw new ForbiddenException('Can only add watchers from your company team');
+      }
+    }
+
+    // Check if already watching
+    const existing = await this.prisma.engagementWatcher.findUnique({
+      where: { engagementId_userId: { engagementId, userId: targetUserId } },
+    });
+    if (existing) {
+      throw new ConflictException('User is already watching this engagement');
+    }
+
+    const watcher = await this.prisma.engagementWatcher.create({
+      data: { engagementId, userId: targetUserId, addedBy: requestingUser.id },
+      include: {
+        user: { select: { id: true, name: true, email: true } },
+        adder: { select: { id: true, name: true } },
+      },
+    });
+
+    // Notify the newly added watcher
+    await this.notifications.notifyUserById(
+      targetUserId,
+      NotificationType.WATCHER_ADDED,
+      `Added as watcher: ${engagement.jobTitle}`,
+      `${watcher.adder.name || 'A team member'} added you as a watcher to the engagement "${engagement.jobTitle}"`,
+      { engagementId },
+    );
+
+    return this.serializeWatcher(watcher);
+  }
+
+  async removeWatcher(engagementId: string, requestingUser: { id: string; stellarAddress?: string; role: string }, targetUserId: string) {
+    const engagement = await this.prisma.engagement.findUnique({ where: { id: engagementId } });
+    if (!engagement) throw new NotFoundException(`Engagement ${engagementId} not found`);
+
+    const watcher = await this.prisma.engagementWatcher.findUnique({
+      where: { engagementId_userId: { engagementId, userId: targetUserId } },
+    });
+    if (!watcher) throw new NotFoundException('Watcher not found');
+
+    // Users can remove themselves, or participants can remove any watcher
+    const canRemove = 
+      watcher.userId === requestingUser.id || 
+      requestingUser.role === UserRole.ADMIN ||
+      this.isParticipant(engagement, requestingUser);
+
+    if (!canRemove) {
+      throw new ForbiddenException('Not authorized to remove this watcher');
+    }
+
+    await this.prisma.engagementWatcher.delete({
+      where: { id: watcher.id },
+    });
+
+    return { message: 'Watcher removed successfully' };
+  }
+
+  async listWatchers(engagementId: string, user: { id: string; stellarAddress?: string; role: string }) {
+    const engagement = await this.prisma.engagement.findUnique({ where: { id: engagementId } });
+    if (!engagement) throw new NotFoundException(`Engagement ${engagementId} not found`);
+    this.checkParticipant(engagement, user);
+
+    const watchers = await this.prisma.engagementWatcher.findMany({
+      where: { engagementId },
+      include: {
+        user: { select: { id: true, name: true, email: true } },
+        adder: { select: { id: true, name: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return watchers.map(w => this.serializeWatcher(w));
+  }
+
+  private serializeWatcher(watcher: any) {
+    return {
+      id: watcher.id,
+      engagementId: watcher.engagementId,
+      userId: watcher.userId,
+      userName: watcher.user?.name || 'Unknown',
+      userEmail: watcher.user?.email || '',
+      addedBy: watcher.addedBy,
+      addedByName: watcher.adder?.name || 'Unknown',
+      createdAt: watcher.createdAt.toISOString(),
+    };
+  }
+
+  private async notifyWatchers(
+    engagementId: string, 
+    type: NotificationType, 
+    title: string, 
+    message: string, 
+    data: Record<string, any>,
+    excludeUserId?: string
+  ) {
+    const watchers = await this.prisma.engagementWatcher.findMany({
+      where: { engagementId },
+      select: { userId: true },
+    });
+
+    const notifyPromises = watchers
+      .filter(w => w.userId !== excludeUserId)
+      .map(w => this.notifications.notifyUserById(w.userId, type, title, message, data));
+
+    await Promise.allSettled(notifyPromises);
+  }
+
+  private isParticipant(
+    engagement: { companyAddress: string; recruiterAddress: string; arbiterAddress: string },
+    user: { stellarAddress?: string; role: string },
+  ): boolean {
+    if (user.role === UserRole.ADMIN) return true;
+    const parties = [engagement.companyAddress, engagement.recruiterAddress, engagement.arbiterAddress];
+    return user.stellarAddress ? parties.includes(user.stellarAddress) : false;
+  }
+
+  // ----------------------------------------------------------
+  // PLACED CANDIDATE DETAILS (#368)
+  // ----------------------------------------------------------
+
+  async updateCandidateDetails(
+    engagementId: string, 
+    user: { id: string; stellarAddress?: string; role: string },
+    details: {
+      candidateName?: string;
+      candidateEmail?: string;
+      candidatePhone?: string;
+      candidateStartDate?: string;
+      candidateRole?: string;
+    }
+  ) {
+    const engagement = await this.prisma.engagement.findUnique({ where: { id: engagementId } });
+    if (!engagement) throw new NotFoundException(`Engagement ${engagementId} not found`);
+    this.checkParticipant(engagement, user);
+
+    const updateData: any = {};
+    if (details.candidateName !== undefined) updateData.candidateName = details.candidateName;
+    if (details.candidateEmail !== undefined) updateData.candidateEmail = details.candidateEmail;
+    if (details.candidatePhone !== undefined) updateData.candidatePhone = details.candidatePhone;
+    if (details.candidateStartDate !== undefined) updateData.candidateStartDate = details.candidateStartDate ? new Date(details.candidateStartDate) : null;
+    if (details.candidateRole !== undefined) updateData.candidateRole = details.candidateRole;
+
+    // Set placedAt if this is the first time candidate details are being added
+    if (!engagement.placedAt && Object.keys(updateData).length > 0) {
+      updateData.placedAt = new Date();
+    }
+
+    const updated = await this.prisma.engagement.update({
+      where: { id: engagementId },
+      data: updateData,
+    });
+
+    return this.serializeCandidateDetails(updated);
+  }
+
+  async getCandidateDetails(engagementId: string, user: { id: string; stellarAddress?: string; role: string }) {
+    const engagement = await this.prisma.engagement.findUnique({ 
+      where: { id: engagementId },
+      select: {
+        id: true,
+        candidateName: true,
+        candidateEmail: true,
+        candidatePhone: true,
+        candidateStartDate: true,
+        candidateRole: true,
+        placedAt: true,
+        companyAddress: true,
+        recruiterAddress: true,
+        arbiterAddress: true,
+      }
+    });
+
+    if (!engagement) throw new NotFoundException(`Engagement ${engagementId} not found`);
+    this.checkParticipant(engagement, user);
+
+    return this.serializeCandidateDetails(engagement);
+  }
+
+  private serializeCandidateDetails(engagement: any) {
+    return {
+      candidateName: engagement.candidateName ?? null,
+      candidateEmail: engagement.candidateEmail ?? null,
+      candidatePhone: engagement.candidatePhone ?? null,
+      candidateStartDate: engagement.candidateStartDate?.toISOString() ?? null,
+      candidateRole: engagement.candidateRole ?? null,
+      placedAt: engagement.placedAt?.toISOString() ?? null,
+    };
+  }
+}
