@@ -195,6 +195,32 @@ export class PiiAnonymizationSchedulerService {
         where: { userId },
         data: { ip: null, userAgent: null },
       });
+
+      // 6. Null placed candidate PII fields on engagements where user is a participant (#368).
+      //    This wipes candidate details from engagements owned by the deleted user.
+      const userRecord = await tx.user.findUnique({
+        where: { id: userId },
+        select: { stellarAddress: true },
+      });
+
+      if (userRecord?.stellarAddress) {
+        await tx.engagement.updateMany({
+          where: {
+            OR: [
+              { companyAddress: userRecord.stellarAddress },
+              { recruiterAddress: userRecord.stellarAddress },
+            ],
+          },
+          data: {
+            candidateName: null,
+            candidateEmail: null,
+            candidatePhone: null,
+            candidateStartDate: null,
+            candidateRole: null,
+            // Keep placedAt for audit purposes (when, not who)
+          },
+        });
+      }
     });
 
     this.logger.log(`Anonymized PII for user ${userId}`);

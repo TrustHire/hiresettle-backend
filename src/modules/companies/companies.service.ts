@@ -262,3 +262,84 @@ export class CompaniesService {
     return userId;
   }
 }
+
+  // ----------------------------------------------------------
+  // COMPANY ENGAGEMENT STATS (#374)
+  // ----------------------------------------------------------
+
+  async getEngagementStats(
+    userId: string,
+    dateFrom?: string,
+    dateTo?: string,
+  ) {
+    const companyId = await this.resolveCompanyId(userId);
+
+    // Build date filter
+    const dateFilter: any = {};
+    if (dateFrom) dateFilter.gte = new Date(dateFrom);
+    if (dateTo) dateFilter.lte = new Date(dateTo);
+
+    const whereClause: any = {
+      companyId,
+      ...(Object.keys(dateFilter).length > 0 ? { createdAt: dateFilter } : {}),
+    };
+
+    // Fetch all engagements matching the criteria
+    const engagements = await this.prisma.engagement.findMany({
+      where: whereClause,
+      select: {
+        id: true,
+        status: true,
+        totalAmount: true,
+        releasedAmount: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    // Calculate stats
+    const totalEngagements = engagements.length;
+    const byStatus: Record<string, number> = {
+      ACTIVE: 0,
+      COMPLETED: 0,
+      CANCELLED: 0,
+      PENDING_ACCEPTANCE: 0,
+      REPLACEMENT_REQUESTED: 0,
+      ACCOUNT_MERGED: 0,
+    };
+
+    let totalEscrowed = BigInt(0);
+    let totalReleased = BigInt(0);
+    let completedEngagements = 0;
+    let totalCompletionDays = 0;
+
+    for (const eng of engagements) {
+      byStatus[eng.status] = (byStatus[eng.status] || 0) + 1;
+      totalEscrowed += eng.totalAmount;
+      totalReleased += eng.releasedAmount;
+
+      if (eng.status === 'COMPLETED') {
+        completedEngagements++;
+        const daysToComplete = Math.floor(
+          (eng.updatedAt.getTime() - eng.createdAt.getTime()) / (1000 * 60 * 60 * 24)
+        );
+        totalCompletionDays += daysToComplete;
+      }
+    }
+
+    const avgTimeToPlacement = completedEngagements > 0 
+      ? Math.round((totalCompletionDays / completedEngagements) * 10) / 10
+      : 0;
+
+    return {
+      totalEngagements,
+      byStatus,
+      totalEscrowed: totalEscrowed.toString(),
+      totalReleased: totalReleased.toString(),
+      avgTimeToPlacement,
+      ...(dateFrom ? { dateFrom: new Date(dateFrom).toISOString() } : {}),
+      ...(dateTo ? { dateTo: new Date(dateTo).toISOString() } : {}),
+      generatedAt: new Date().toISOString(),
+    };
+  }
+}

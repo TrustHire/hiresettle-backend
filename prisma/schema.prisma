@@ -65,6 +65,8 @@ enum NotificationType {
   DISPUTE_SLA_OVERDUE
   DISPUTE_APPEALED
   DISPUTE_APPEAL_DECIDED
+  COMMENT_ADDED
+  WATCHER_ADDED
 }
 
 enum UserRole {
@@ -203,6 +205,9 @@ model User {
   idempotencyKeys      IdempotencyKey[]
   webhookDeliveries    WebhookDelivery[]
   engagementNotes      EngagementNote[]
+  engagementComments   EngagementComment[]
+  watchedEngagements   EngagementWatcher[]      @relation("EngagementWatchers")
+  addedWatchers        EngagementWatcher[]      @relation("EngagementWatcherAdders")
   apiKeys              ApiKey[]
   milestoneApprovals   MilestoneApproval[]
   recruiterReviews     RecruiterReview[]        @relation("RecruiterReviews")
@@ -294,6 +299,13 @@ model Engagement {
   tags             String[]          @default([])  // free-form labels for dashboard filtering (#252)
   archivedAt       DateTime?         // soft-archive timestamp — excluded from default list views
   requiredApprovals Int              @default(1) // number of distinct approvals required before a milestone can be confirmed
+  // Placed candidate details (PII) (#368)
+  candidateName     String?
+  candidateEmail    String?
+  candidatePhone    String?
+  candidateStartDate DateTime?
+  candidateRole     String?
+  placedAt          DateTime?         // when candidate was placed
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
@@ -306,6 +318,8 @@ model Engagement {
   events          ChainEvent[]
   auditLogs       EngagementAuditLog[]
   notes           EngagementNote[]
+  comments        EngagementComment[]
+  watchers        EngagementWatcher[]
   review          RecruiterReview?
   disputes        Dispute[]
   arbiterRecusals ArbiterRecusal[]
@@ -370,6 +384,43 @@ model EngagementNote {
 
   @@index([engagementId])
   @@map("engagement_notes")
+}
+
+// Comments visible to both company and recruiter on an engagement (#368).
+// Can be edited within 15 minutes of creation.
+model EngagementComment {
+  id           String   @id @default(uuid())
+  engagementId String
+  authorId     String
+  body         String
+  editedAt     DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  engagement Engagement @relation(fields: [engagementId], references: [id], onDelete: Cascade)
+  author     User       @relation(fields: [authorId], references: [id])
+
+  @@index([engagementId, createdAt])
+  @@index([authorId])
+  @@map("engagement_comments")
+}
+
+// Engagement watchers — company members who receive notifications about an engagement (#369).
+model EngagementWatcher {
+  id           String   @id @default(uuid())
+  engagementId String
+  userId       String
+  addedBy      String   // user who added this watcher
+  createdAt    DateTime @default(now())
+
+  engagement Engagement @relation(fields: [engagementId], references: [id], onDelete: Cascade)
+  user       User       @relation("EngagementWatchers", fields: [userId], references: [id], onDelete: Cascade)
+  adder      User       @relation("EngagementWatcherAdders", fields: [addedBy], references: [id])
+
+  @@unique([engagementId, userId])
+  @@index([userId])
+  @@index([engagementId])
+  @@map("engagement_watchers")
 }
 
 model EngagementAuditLog {

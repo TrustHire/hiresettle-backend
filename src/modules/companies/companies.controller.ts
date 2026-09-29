@@ -9,12 +9,14 @@ import {
   Put,
   UseGuards,
   Request,
+  Query,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiOperation,
   ApiResponse,
   ApiTags,
+  ApiQuery,
 } from '@nestjs/swagger';
 import { CompanyRole, UserRole } from '@prisma/client';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -25,6 +27,7 @@ import { CompanyRoles } from '../../common/decorators/company-roles.decorator';
 import { CompaniesService } from './companies.service';
 import { InitiateTransferDto } from './dto/initiate-transfer.dto';
 import { UpdateProofSlaSettingsDto } from './dto/proof-sla-settings.dto';
+import { CompanyStatsQueryDto } from './dto/company-stats-query.dto';
 
 @ApiTags('companies')
 @Controller('companies')
@@ -155,5 +158,24 @@ export class CompaniesController {
   @ApiResponse({ status: 403, description: 'Caller is not the company OWNER' })
   getPendingTransfer(@Request() req: any) {
     return this.companiesService.getPendingTransfer(req.user.id);
+  }
+}
+
+  // ── Issue #374: Company engagement stats ─────────────────────────────────
+
+  @Get('me/engagement-stats')
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.COMPANY)
+  @ApiOperation({ 
+    summary: 'Get engagement statistics for your company (#374)',
+    description: 'Returns counts by status, total escrowed, total released, and average time to placement. Optional date range filters.'
+  })
+  @ApiQuery({ name: 'dateFrom', required: false, description: 'Filter engagements from this date (ISO 8601)' })
+  @ApiQuery({ name: 'dateTo', required: false, description: 'Filter engagements to this date (ISO 8601)' })
+  @ApiResponse({ status: 200, description: 'Engagement statistics' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  getEngagementStats(@Request() req: any, @Query() query: CompanyStatsQueryDto) {
+    return this.companiesService.getEngagementStats(req.user.id, query.dateFrom, query.dateTo);
   }
 }
