@@ -245,7 +245,7 @@ export class ReconciliationService {
         admin.stellarAddress
           ? this.notifications.notifyUser(
               admin.stellarAddress,
-              NotificationType.SYSTEM_ALERT,
+              NotificationType.FUNDING_SHORTFALL_DETECTED,
               'Reconciliation Drift Detected',
               summary,
               {

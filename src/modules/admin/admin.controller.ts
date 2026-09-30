@@ -50,6 +50,9 @@ import { CreateApiKeyDto } from '../auth/dto/create-api-key.dto';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { ArbiterAssignmentService } from '../disputes/arbiter-assignment.service';
 import { ReconciliationService } from './reconciliation.service';
+import { UnmatchedPaymentsService } from './unmatched-payments.service';
+import { IncomingPaymentPollerService } from './incoming-payment-poller.service';
+import { MatchPaymentDto, RefundPaymentDto, IgnorePaymentDto } from './unmatched-payments.service';
 
 import { SetCompanyPlanDto } from './dto/set-company-plan.dto';
 
@@ -75,6 +78,8 @@ export class AdminController {
     private readonly disputeStats: AdminDisputeStatsService,
     private readonly arbiterAssignment: ArbiterAssignmentService,
     private readonly reconciliation: ReconciliationService,
+    private readonly unmatchedPayments: UnmatchedPaymentsService,
+    private readonly paymentPoller: IncomingPaymentPollerService,
   ) {}
 
   @Get('disputes/stats')
@@ -558,5 +563,83 @@ export class AdminController {
   @ApiResponse({ status: 200, description: 'Reconciliation complete — report returned' })
   async triggerReconciliation() {
     return this.reconciliation.runReconciliation();
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Unmatched incoming Stellar payments
+  // ────────────────────────────────────────────────────────────────
+
+  @Get('unmatched-payments')
+  @ApiOperation({ summary: 'List incoming Stellar payments that could not be matched to an engagement (ADMIN only)' })
+  @ApiQuery({ name: 'status', required: false, enum: ['PENDING', 'MATCHED', 'REFUNDED', 'IGNORED'], description: 'Filter by review status' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'Unmatched payments list' })
+  listUnmatchedPayments(
+    @Query('status') status?: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.unmatchedPayments.list(status as any, Number(page) || 1, Number(limit) || 20);
+  }
+
+  @Get('unmatched-payments/:id')
+  @ApiOperation({ summary: 'Get a single unmatched payment record (ADMIN only)' })
+  @ApiParam({ name: 'id', description: 'UnmatchedPayment ID' })
+  @ApiResponse({ status: 200, description: 'Unmatched payment record' })
+  @ApiResponse({ status: 404, description: 'Not found' })
+  getUnmatchedPayment(@Param('id') id: string) {
+    return this.unmatchedPayments.findOne(id);
+  }
+
+  @Post('unmatched-payments/:id/match')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Manually match an unmatched payment to an engagement (ADMIN only)' })
+  @ApiParam({ name: 'id', description: 'UnmatchedPayment ID' })
+  @ApiResponse({ status: 200, description: 'Payment matched to engagement' })
+  @ApiResponse({ status: 404, description: 'Payment or engagement not found' })
+  @ApiResponse({ status: 409, description: 'Payment is not in PENDING status' })
+  matchUnmatchedPayment(
+    @Param('id') id: string,
+    @Body() dto: MatchPaymentDto,
+    @Req() req: Request,
+  ) {
+    return this.unmatchedPayments.match(id, (req as any).user?.id, dto);
+  }
+
+  @Post('unmatched-payments/:id/refund')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Mark an unmatched payment as refunded off-platform (ADMIN only)' })
+  @ApiParam({ name: 'id', description: 'UnmatchedPayment ID' })
+  @ApiResponse({ status: 200, description: 'Payment marked as refunded' })
+  @ApiResponse({ status: 409, description: 'Payment is not in PENDING status' })
+  refundUnmatchedPayment(
+    @Param('id') id: string,
+    @Body() dto: RefundPaymentDto,
+    @Req() req: Request,
+  ) {
+    return this.unmatchedPayments.refund(id, (req as any).user?.id, dto);
+  }
+
+  @Post('unmatched-payments/:id/ignore')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Dismiss an unmatched payment (e.g. dust/spam) — sets status to IGNORED (ADMIN only)' })
+  @ApiParam({ name: 'id', description: 'UnmatchedPayment ID' })
+  @ApiResponse({ status: 200, description: 'Payment ignored' })
+  @ApiResponse({ status: 409, description: 'Payment is not in PENDING status' })
+  ignoreUnmatchedPayment(
+    @Param('id') id: string,
+    @Body() dto: IgnorePaymentDto,
+    @Req() req: Request,
+  ) {
+    return this.unmatchedPayments.ignore(id, (req as any).user?.id, dto);
+  }
+
+  @Post('unmatched-payments/poll')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Trigger an on-demand Horizon payment poll (ADMIN only)' })
+  @ApiResponse({ status: 200, description: 'Poll complete — returns { checked, unmatched }' })
+  triggerPaymentPoll() {
+    return this.paymentPoller.poll();
   }
 }
