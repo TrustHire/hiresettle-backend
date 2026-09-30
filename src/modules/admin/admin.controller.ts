@@ -49,6 +49,7 @@ import { ApiKeysService } from '../auth/api-keys.service';
 import { CreateApiKeyDto } from '../auth/dto/create-api-key.dto';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { ArbiterAssignmentService } from '../disputes/arbiter-assignment.service';
+import { ReconciliationService } from './reconciliation.service';
 
 import { SetCompanyPlanDto } from './dto/set-company-plan.dto';
 
@@ -73,6 +74,7 @@ export class AdminController {
     private readonly prisma: PrismaService,
     private readonly disputeStats: AdminDisputeStatsService,
     private readonly arbiterAssignment: ArbiterAssignmentService,
+    private readonly reconciliation: ReconciliationService,
   ) {}
 
   @Get('disputes/stats')
@@ -523,5 +525,38 @@ export class AdminController {
   @ApiResponse({ status: 404, description: 'User or plan not found' })
   setCompanyPlan(@Param('id') id: string, @Body() dto: SetCompanyPlanDto) {
     return this.adminUsers.setCompanyPlan(id, dto.planId ?? null);
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Nightly on-chain/off-chain reconciliation
+  // ────────────────────────────────────────────────────────────────
+
+  @Get('reconciliation/report')
+  @ApiOperation({
+    summary:
+      'Get the latest reconciliation report comparing DB escrow state with Stellar contract state (ADMIN only). ' +
+      'Does not auto-fix any drift — read-only.',
+  })
+  @ApiResponse({ status: 200, description: 'Reconciliation report from the most recent run' })
+  @ApiResponse({ status: 404, description: 'No reconciliation has been run yet' })
+  getReconciliationReport() {
+    const report = this.reconciliation.getLastReport();
+    if (!report) {
+      return { message: 'No reconciliation report available yet. Run POST /admin/reconciliation/run to generate one.' };
+    }
+    return report;
+  }
+
+  @Post('reconciliation/run')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Trigger an on-demand reconciliation run (ADMIN only). ' +
+      'Compares DB escrow state with Stellar contract state for all active engagements. ' +
+      'Does not auto-fix any drift.',
+  })
+  @ApiResponse({ status: 200, description: 'Reconciliation complete — report returned' })
+  async triggerReconciliation() {
+    return this.reconciliation.runReconciliation();
   }
 }

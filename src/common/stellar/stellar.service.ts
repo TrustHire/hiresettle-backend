@@ -18,6 +18,7 @@ import {
 } from "@stellar/stellar-sdk";
 import { StellarError, StellarErrorCode } from "./stellar.error";
 import { CacheService } from "../cache/cache.service";
+import { HorizonFailoverService } from "./horizon-failover.service";
 
 /**
  * StellarService
@@ -58,7 +59,6 @@ export class StellarService implements OnModuleInit {
   private rpcClient: SorobanRpc.Server;
   private networkName: string;
   private networkPassphrase: string;
-  private horizonUrl: string;
   private contractId: string;
   private backendKeypair: Keypair;
   private allowedTokens: TokenConfig[];
@@ -67,6 +67,7 @@ export class StellarService implements OnModuleInit {
   constructor(
     private readonly config: ConfigService,
     private readonly cache: CacheService,
+    private readonly horizonFailover: HorizonFailoverService,
   ) {}
 
   async onModuleInit() {
@@ -75,7 +76,6 @@ export class StellarService implements OnModuleInit {
       ({} as StellarRuntimeConfig);
 
     this.networkName = stellarConfig.network;
-    this.horizonUrl = stellarConfig.horizonUrl;
     this.networkPassphrase = stellarConfig.networkPassphrase;
     this.contractId = stellarConfig.contractAddress;
     this.rpcClient = new SorobanRpc.Server(stellarConfig.rpcUrl, { allowHttp: true });
@@ -96,7 +96,7 @@ export class StellarService implements OnModuleInit {
 
     this.logger.log(`Active Stellar network: ${this.networkName}`);
     this.logger.log(`Stellar RPC: ${stellarConfig.rpcUrl}`);
-    this.logger.log(`Stellar Horizon: ${this.horizonUrl}`);
+    this.logger.log(`Stellar Horizon (active): ${this.horizonFailover.activeUrl}`);
     this.logger.log(`Contract: ${this.contractId}`);
     this.logger.log(`Allowed tokens: ${this.allowedTokens.map(t => `${t.symbol} (${t.address})`).join(', ')}`);
 
@@ -152,7 +152,7 @@ export class StellarService implements OnModuleInit {
     return this.networkPassphrase;
   }
   getHorizonUrl(): string {
-    return this.horizonUrl;
+    return this.horizonFailover.activeUrl;
   }
   getContractId(): string {
     return this.contractId;
@@ -837,9 +837,8 @@ export class StellarService implements OnModuleInit {
     try {
       const isNative = tokenAddress === "native" || tokenAddress === "XLM";
       if (!isNative) this.getTokenConfig(tokenAddress);
-      const response = await fetch(`${this.horizonUrl}/accounts/${accountAddress}`);
+      const response = await this.horizonFailover.fetch(`/accounts/${accountAddress}`);
       if (!response.ok) {
-        // For balance endpoint and validations we want a hard failure.
         throw new BadRequestException(
           `Stellar account not found or not accessible: ${accountAddress}`,
         );
@@ -936,7 +935,7 @@ export class StellarService implements OnModuleInit {
     requireFunded = true,
   ): Promise<boolean> {
     try {
-      const response = await fetch(`${this.horizonUrl}/accounts/${accountAddress}`);
+      const response = await this.horizonFailover.fetch(`/accounts/${accountAddress}`);
       if (!response.ok) return false;
       if (!requireFunded) return true;
 

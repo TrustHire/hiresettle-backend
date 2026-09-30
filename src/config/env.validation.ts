@@ -70,6 +70,11 @@ export const envValidationSchema = Joi.object({
   STELLAR_BREAKER_ROLLING_COUNT_TIMEOUT: Joi.number().integer().min(1000).max(60000).default(10000),
   STELLAR_BREAKER_ROLLING_COUNT_BUCKETS: Joi.number().integer().min(1).max(20).default(10),
 
+  // Horizon failover
+  HORIZON_URLS: Joi.string().allow('').optional(),
+  HORIZON_FAILOVER_THRESHOLD: Joi.number().integer().min(1).max(20).default(3),
+  HORIZON_RECOVERY_INTERVAL_MS: Joi.number().integer().min(5000).default(60000),
+
   // Web push / VAPID (optional, #392) — push is disabled when keys are unset.
   // Generate a key pair with: npx web-push generate-vapid-keys
   VAPID_PUBLIC_KEY: Joi.string().allow('').optional(),
