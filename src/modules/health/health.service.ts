@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { HealthIndicatorResult } from '@nestjs/terminus';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
+import { HorizonFailoverService } from '../../common/stellar/horizon-failover.service';
 
 @Injectable()
 export class HealthService {
@@ -10,6 +11,7 @@ export class HealthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly stellar: StellarService,
+    private readonly horizonFailover: HorizonFailoverService,
   ) {}
 
   async isDatabaseHealthy(): Promise<HealthIndicatorResult> {
@@ -25,10 +27,24 @@ export class HealthService {
   async isStellarHorizonHealthy(): Promise<HealthIndicatorResult> {
     try {
       await this.stellar.getLatestLedger();
-      return { stellarHorizon: { status: 'up' } };
+      const endpoints = this.horizonFailover.endpointStatus;
+      return {
+        stellarHorizon: {
+          status: 'up',
+          activeEndpoint: this.horizonFailover.activeUrl,
+          endpoints,
+        },
+      };
     } catch (e) {
       this.logger.warn('Stellar Horizon health check degraded', e.message);
-      return { stellarHorizon: { status: 'down', message: e.message } };
+      return {
+        stellarHorizon: {
+          status: 'down',
+          message: e.message,
+          activeEndpoint: this.horizonFailover.activeUrl,
+          endpoints: this.horizonFailover.endpointStatus,
+        },
+      };
     }
   }
 }
