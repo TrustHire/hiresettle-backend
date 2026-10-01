@@ -67,6 +67,7 @@ enum NotificationType {
   DISPUTE_APPEAL_DECIDED
   COMMENT_ADDED
   WATCHER_ADDED
+  UNMATCHED_PAYMENT_ALERT
 }
 
 enum UserRole {
@@ -1062,4 +1063,40 @@ model ArbiterRecusal {
   @@unique([engagementId, arbiterId])
   @@index([arbiterId])
   @@map("arbiter_recusals")
+}
+
+// ============================================================
+// UNMATCHED PAYMENTS — incoming Stellar deposits that could not
+// be reconciled to an engagement (wrong or missing memo).
+// ============================================================
+
+enum UnmatchedPaymentStatus {
+  PENDING   // awaiting admin review
+  MATCHED   // admin manually linked to an engagement
+  REFUNDED  // admin marked as refunded off-platform
+  IGNORED   // admin dismissed (e.g. known spam)
+}
+
+model UnmatchedPayment {
+  id                   String                 @id @default(uuid())
+  txHash               String                 @unique
+  sender               String                 // Stellar account that sent the payment
+  assetCode            String                 // e.g. "USDC"
+  assetIssuer          String?                // issuer account; null for native XLM
+  amount               String                 // human-readable amount from Horizon
+  memo                 String?                // raw memo value; null if absent
+  memoType             String?                // 'text' | 'id' | 'hash' | 'return' | null
+  ledger               Int                    @default(0)
+  status               UnmatchedPaymentStatus @default(PENDING)
+  matchedEngagementId  String?                // set when admin manually matches
+  resolvedBy           String?                // admin userId who resolved
+  resolvedAt           DateTime?
+  notes                String?
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+
+  @@index([status])
+  @@index([sender])
+  @@index([createdAt])
+  @@map("unmatched_payments")
 }

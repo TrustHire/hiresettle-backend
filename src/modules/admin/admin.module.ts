@@ -16,6 +16,8 @@ import { AdminDisputeStatsService } from './admin-dispute-stats.service';
 import { StellarBalanceAlertService } from './stellar-balance-alert.service';
 import { DisputesModule } from '../disputes/disputes.module';
 import { ReconciliationService } from './reconciliation.service';
+import { IncomingPaymentPollerService } from './incoming-payment-poller.service';
+import { UnmatchedPaymentsService } from './unmatched-payments.service';
 
 @Module({
   imports: [NotificationsModule, PrismaModule, UsersModule, WebhooksModule, AuthModule, MaintenanceModeModule, DisputesModule],
@@ -30,6 +32,8 @@ import { ReconciliationService } from './reconciliation.service';
     StellarBalanceAlertService,
     AdminDisputeStatsService,
     ReconciliationService,
+    IncomingPaymentPollerService,
+    UnmatchedPaymentsService,
   ],
   exports: [AdminUsersService],
 })

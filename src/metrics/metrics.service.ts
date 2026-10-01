@@ -83,6 +83,22 @@ export class MetricsService {
     registers: [this.registry],
   });
 
+  // ----------------------------------------------------------
+  // Unmatched payment metrics
+  // ----------------------------------------------------------
+
+  readonly unmatchedPaymentsPending = new Gauge({
+    name: 'unmatched_payments_pending_total',
+    help: 'Number of incoming Stellar payments currently pending admin review',
+    registers: [this.registry],
+  });
+
+  readonly unmatchedPaymentsTotal = new Counter({
+    name: 'unmatched_payments_detected_total',
+    help: 'Cumulative incoming Stellar payments that could not be matched to an engagement',
+    registers: [this.registry],
+  });
+
   constructor() {
     collectDefaultMetrics({ register: this.registry });
     // Initialize circuit breaker state to closed
