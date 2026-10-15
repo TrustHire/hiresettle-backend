@@ -43,6 +43,7 @@ import stellarConfig from './config/stellar.config';
 import { MaintenanceModeModule } from './common/maintenance/maintenance-mode.module';
 import { FeatureFlagsModule } from './modules/feature-flags/feature-flags.module';
 import { DevModule } from './modules/dev/dev.module';
+import { shouldSkipThrottling } from "./common/utils/throttler.util";
 
 @Module({
   imports: [
@@ -52,7 +53,8 @@ import { DevModule } from './modules/dev/dev.module';
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
         throttlers: [{ ttl: config.get<number>('THROTTLE_TTL', 60), limit: config.get<number>('THROTTLE_LIMIT', 100) }],
-        skipIf: (context) => context.switchToHttp().getRequest().url === '/health',
+        skipIf: (context) =>
+          shouldSkipThrottling(context.switchToHttp().getRequest().path),
       }),
     }),
     ScheduleModule.forRoot(),
