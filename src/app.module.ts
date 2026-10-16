@@ -54,7 +54,10 @@ import { shouldSkipThrottling } from "./common/utils/throttler.util";
       useFactory: (config: ConfigService) => ({
         throttlers: [{ ttl: config.get<number>('THROTTLE_TTL', 60), limit: config.get<number>('THROTTLE_LIMIT', 100) }],
         skipIf: (context) =>
-          shouldSkipThrottling(context.switchToHttp().getRequest().path),
+          shouldSkipThrottling(
+            context.switchToHttp().getRequest().path,
+            config.get<string>('API_PREFIX', 'api/v1'),
+          ),
       }),
     }),
     ScheduleModule.forRoot(),
