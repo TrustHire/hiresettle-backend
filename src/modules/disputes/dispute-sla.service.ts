@@ -6,6 +6,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { SystemConfigService } from '../../common/system-config/system-config.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { ACTIVE_DISPUTE_STATUSES } from './dispute.constants';
+import { DistributedLockService } from '../../common/lock/distributed-lock.service';
 
 /** Runtime-tunable SLA settings per stage (#503). */
 const STAGE_SYSTEM_CONFIG_KEYS: Record<DisputeStage, string> = {
@@ -37,6 +38,7 @@ export class DisputeSlaService {
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
     private readonly config: ConfigService,
+    private readonly lock: DistributedLockService,
     @Optional() private readonly systemConfig?: SystemConfigService,
   ) {
     this.stageHours = {
@@ -82,51 +84,57 @@ export class DisputeSlaService {
 
   @Cron(CronExpression.EVERY_10_MINUTES)
   async flagOverdueDisputes(now: Date = new Date()): Promise<number> {
-    const overdue = await this.prisma.dispute.findMany({
-      where: {
-        status: { in: ACTIVE_DISPUTE_STATUSES },
-        slaStatus: DisputeSlaStatus.ON_TRACK,
-        responseDeadline: { lte: now },
-      },
-      select: { id: true, engagementId: true, stage: true, arbiterId: true, responseDeadline: true },
-    });
-    if (!overdue.length) return 0;
-
-    const admins = await this.prisma.user.findMany({
-      where: { role: UserRole.ADMIN, deactivatedAt: null },
-      select: { id: true },
-    });
-
-    let flagged = 0;
-    for (const dispute of overdue) {
-      // Conditional update so concurrent job runs escalate each dispute only once.
-      const { count } = await this.prisma.dispute.updateMany({
-        where: { id: dispute.id, slaStatus: DisputeSlaStatus.ON_TRACK, status: { in: ACTIVE_DISPUTE_STATUSES } },
-        data: { slaStatus: DisputeSlaStatus.OVERDUE, slaEscalatedAt: now },
+    const token = await this.lock.tryAcquireLock('cron:dispute-sla-overdue', 600_000);
+    if (!token) return 0;
+    try {
+      const overdue = await this.prisma.dispute.findMany({
+        where: {
+          status: { in: ACTIVE_DISPUTE_STATUSES },
+          slaStatus: DisputeSlaStatus.ON_TRACK,
+          responseDeadline: { lte: now },
+        },
+        select: { id: true, engagementId: true, stage: true, arbiterId: true, responseDeadline: true },
       });
-      if (!count) continue;
-      flagged++;
+      if (!overdue.length) return 0;
 
-      for (const admin of admins) {
-        await this.notifications.notifyUserById(
-          admin.id,
-          NotificationType.DISPUTE_SLA_OVERDUE,
-          'Dispute SLA breached',
-          `Dispute ${dispute.id} on engagement ${dispute.engagementId} missed its ${dispute.stage} ` +
-            `deadline (${dispute.responseDeadline!.toISOString()}).`,
-          {
-            disputeId: dispute.id,
-            engagementId: dispute.engagementId,
-            stage: dispute.stage,
-            arbiterId: dispute.arbiterId,
-            responseDeadline: dispute.responseDeadline,
-          },
-        );
+      const admins = await this.prisma.user.findMany({
+        where: { role: UserRole.ADMIN, deactivatedAt: null },
+        select: { id: true },
+      });
+
+      let flagged = 0;
+      for (const dispute of overdue) {
+        // Conditional update so concurrent job runs escalate each dispute only once.
+        const { count } = await this.prisma.dispute.updateMany({
+          where: { id: dispute.id, slaStatus: DisputeSlaStatus.ON_TRACK, status: { in: ACTIVE_DISPUTE_STATUSES } },
+          data: { slaStatus: DisputeSlaStatus.OVERDUE, slaEscalatedAt: now },
+        });
+        if (!count) continue;
+        flagged++;
+
+        for (const admin of admins) {
+          await this.notifications.notifyUserById(
+            admin.id,
+            NotificationType.DISPUTE_SLA_OVERDUE,
+            'Dispute SLA breached',
+            `Dispute ${dispute.id} on engagement ${dispute.engagementId} missed its ${dispute.stage} ` +
+              `deadline (${dispute.responseDeadline!.toISOString()}).`,
+            {
+              disputeId: dispute.id,
+              engagementId: dispute.engagementId,
+              stage: dispute.stage,
+              arbiterId: dispute.arbiterId,
+              responseDeadline: dispute.responseDeadline,
+            },
+          );
+        }
       }
-    }
 
-    this.logger.warn(`Flagged ${flagged} overdue dispute(s)`);
-    return flagged;
+      this.logger.warn(`Flagged ${flagged} overdue dispute(s)`);
+      return flagged;
+    } finally {
+      await this.lock.releaseLock('cron:dispute-sla-overdue', token);
+    }
   }
 
   /**
@@ -137,45 +145,51 @@ export class DisputeSlaService {
    */
   @Cron(CronExpression.EVERY_10_MINUTES)
   async notifyEvidenceDeadlinesClosing(now: Date = new Date()): Promise<number> {
-    const warnFrom = new Date(now.getTime() + this.evidenceWarningHours * HOUR_MS);
+    const token = await this.lock.tryAcquireLock('cron:dispute-sla-evidence', 600_000);
+    if (!token) return 0;
+    try {
+      const warnFrom = new Date(now.getTime() + this.evidenceWarningHours * HOUR_MS);
 
-    const closingSoon = await this.prisma.dispute.findMany({
-      where: {
-        status: { in: ACTIVE_DISPUTE_STATUSES },
-        evidenceDeadlineWarnedAt: null,
-        evidenceDeadline: { not: null, lte: warnFrom, gt: now },
-      },
-      select: { id: true, engagementId: true, evidenceDeadline: true },
-    });
-    if (!closingSoon.length) return 0;
-
-    let warned = 0;
-    for (const dispute of closingSoon) {
-      // Conditional update so concurrent job runs warn each dispute only once.
-      const { count } = await this.prisma.dispute.updateMany({
-        where: { id: dispute.id, evidenceDeadlineWarnedAt: null },
-        data: { evidenceDeadlineWarnedAt: now },
+      const closingSoon = await this.prisma.dispute.findMany({
+        where: {
+          status: { in: ACTIVE_DISPUTE_STATUSES },
+          evidenceDeadlineWarnedAt: null,
+          evidenceDeadline: { not: null, lte: warnFrom, gt: now },
+        },
+        select: { id: true, engagementId: true, evidenceDeadline: true },
       });
-      if (!count) continue;
-      warned++;
+      if (!closingSoon.length) return 0;
 
-      const engagement = await this.prisma.engagement.findUnique({ where: { id: dispute.engagementId } });
-      if (!engagement) continue;
+      let warned = 0;
+      for (const dispute of closingSoon) {
+        // Conditional update so concurrent job runs warn each dispute only once.
+        const { count } = await this.prisma.dispute.updateMany({
+          where: { id: dispute.id, evidenceDeadlineWarnedAt: null },
+          data: { evidenceDeadlineWarnedAt: now },
+        });
+        if (!count) continue;
+        warned++;
 
-      for (const userId of [engagement.companyId, engagement.recruiterId]) {
-        if (!userId) continue;
-        await this.notifications.notifyUserById(
-          userId,
-          NotificationType.DISPUTE_EVIDENCE_WINDOW_CLOSING,
-          'Dispute evidence window closing soon',
-          `The evidence submission window for dispute ${dispute.id} closes at ` +
-            `${dispute.evidenceDeadline!.toISOString()}. Submit any remaining evidence before then.`,
-          { disputeId: dispute.id, engagementId: dispute.engagementId, evidenceDeadline: dispute.evidenceDeadline },
-        );
+        const engagement = await this.prisma.engagement.findUnique({ where: { id: dispute.engagementId } });
+        if (!engagement) continue;
+
+        for (const userId of [engagement.companyId, engagement.recruiterId]) {
+          if (!userId) continue;
+          await this.notifications.notifyUserById(
+            userId,
+            NotificationType.DISPUTE_EVIDENCE_WINDOW_CLOSING,
+            'Dispute evidence window closing soon',
+            `The evidence submission window for dispute ${dispute.id} closes at ` +
+              `${dispute.evidenceDeadline!.toISOString()}. Submit any remaining evidence before then.`,
+            { disputeId: dispute.id, engagementId: dispute.engagementId, evidenceDeadline: dispute.evidenceDeadline },
+          );
+        }
       }
-    }
 
-    this.logger.log(`Warned ${warned} dispute(s) of a closing evidence window`);
-    return warned;
+      this.logger.log(`Warned ${warned} dispute(s) of a closing evidence window`);
+      return warned;
+    } finally {
+      await this.lock.releaseLock('cron:dispute-sla-evidence', token);
+    }
   }
 }

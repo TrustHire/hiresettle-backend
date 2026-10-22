@@ -3,6 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { S3Service } from '../../common/s3/s3.service';
+import { DistributedLockService } from '../../common/lock/distributed-lock.service';
 
 /**
  * How many accounts are processed per scheduler run.
@@ -53,6 +54,7 @@ export class PiiAnonymizationSchedulerService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     private readonly s3: S3Service,
+    private readonly lock: DistributedLockService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -61,21 +63,27 @@ export class PiiAnonymizationSchedulerService {
 
   @Cron('0 4 * * *', { timeZone: 'UTC', name: 'pii-anonymization' })
   async handleScheduledAnonymization(): Promise<void> {
-    if (this.isRunning) {
-      this.logger.warn('PII anonymization job already running — skipping this tick');
-      return;
-    }
-    this.isRunning = true;
-
-    this.logger.log('PII anonymization job started');
-
+    const token = await this.lock.tryAcquireLock('cron:pii-anonymization', 3_600_000);
+    if (!token) return;
     try {
-      const processed = await this.anonymizeDueAccounts();
-      this.logger.log(`PII anonymization job completed — ${processed} account(s) anonymized`);
-    } catch (err) {
-      this.logger.error('PII anonymization job failed with an unhandled error', err);
+      if (this.isRunning) {
+        this.logger.warn('PII anonymization job already running — skipping this tick');
+        return;
+      }
+      this.isRunning = true;
+
+      this.logger.log('PII anonymization job started');
+
+      try {
+        const processed = await this.anonymizeDueAccounts();
+        this.logger.log(`PII anonymization job completed — ${processed} account(s) anonymized`);
+      } catch (err) {
+        this.logger.error('PII anonymization job failed with an unhandled error', err);
+      } finally {
+        this.isRunning = false;
+      }
     } finally {
-      this.isRunning = false;
+      await this.lock.releaseLock('cron:pii-anonymization', token);
     }
   }
 

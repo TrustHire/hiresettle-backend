@@ -1,7 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
+import { DistributedLockService } from '../lock/distributed-lock.service';
 
 // ---------------------------------------------------------------------------
 // Per-category retention configuration
@@ -47,6 +48,7 @@ export class DataRetentionService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly lock: DistributedLockService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -59,20 +61,26 @@ export class DataRetentionService {
 
   @Cron('0 3 * * *', { timeZone: 'UTC', name: 'data-retention' })
   async handleScheduledRetention(): Promise<void> {
-    if (this.isRunning) {
-      this.logger.warn('Data retention job already running — skipping this tick');
-      return;
-    }
-    this.isRunning = true;
-    this.logger.log('Data retention job started');
-
+    const token = await this.lock.tryAcquireLock('cron:data-retention', 3_600_000);
+    if (!token) return;
     try {
-      const summary = await this.enforceRetention();
-      this.logSummary(summary);
-    } catch (err) {
-      this.logger.error('Data retention job failed with an unhandled error', err);
+      if (this.isRunning) {
+        this.logger.warn('Data retention job already running — skipping this tick');
+        return;
+      }
+      this.isRunning = true;
+      this.logger.log('Data retention job started');
+
+      try {
+        const summary = await this.enforceRetention();
+        this.logSummary(summary);
+      } catch (err) {
+        this.logger.error('Data retention job failed with an unhandled error', err);
+      } finally {
+        this.isRunning = false;
+      }
     } finally {
-      this.isRunning = false;
+      await this.lock.releaseLock('cron:data-retention', token);
     }
   }
 

@@ -5,6 +5,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MilestonesService } from './milestones.service';
+import { DistributedLockService } from '../../common/lock/distributed-lock.service';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_PROOF_SLA_DAYS = 7;
@@ -36,6 +37,7 @@ export class MilestoneProofSlaService {
     private readonly stellar: StellarService,
     private readonly notifications: NotificationsService,
     private readonly milestones: MilestonesService,
+    private readonly lock: DistributedLockService,
   ) {}
 
   static elapsedFraction(submittedAt: Date, slaDays: number, now: Date): number {
@@ -48,36 +50,42 @@ export class MilestoneProofSlaService {
 
   @Cron(CronExpression.EVERY_HOUR)
   async runProofSlaChecks(now: Date = new Date()): Promise<ProofSlaRunSummary> {
-    const summary: ProofSlaRunSummary = { reminders50: 0, reminders90: 0, autoApproved: 0, escalated: 0 };
+    const token = await this.lock.tryAcquireLock('cron:milestone-proof-sla', 600_000);
+    if (!token) return { reminders50: 0, reminders90: 0, autoApproved: 0, escalated: 0 };
+    try {
+      const summary: ProofSlaRunSummary = { reminders50: 0, reminders90: 0, autoApproved: 0, escalated: 0 };
 
-    const pending = await this.prisma.milestoneProofVersion.findMany({
-      where: {
-        status: ProofVersionStatus.SUBMITTED,
-        slaExpiredAt: null,
-        milestone: { status: MilestoneStatus.PROOF_SUBMITTED },
-      },
-      include: {
-        milestone: {
-          include: {
-            engagement: {
-              include: { company: { select: { id: true, proofSlaDays: true, proofSlaAction: true } } },
+      const pending = await this.prisma.milestoneProofVersion.findMany({
+        where: {
+          status: ProofVersionStatus.SUBMITTED,
+          slaExpiredAt: null,
+          milestone: { status: MilestoneStatus.PROOF_SUBMITTED },
+        },
+        include: {
+          milestone: {
+            include: {
+              engagement: {
+                include: { company: { select: { id: true, proofSlaDays: true, proofSlaAction: true } } },
+              },
             },
           },
         },
-      },
-    });
+      });
 
-    for (const version of pending) {
-      try {
-        await this.evaluate(version, now, summary);
-      } catch (error) {
-        this.logger.error(
-          `Proof SLA check failed for version ${version.id}`,
-          error instanceof Error ? error.message : error,
-        );
+      for (const version of pending) {
+        try {
+          await this.evaluate(version, now, summary);
+        } catch (error) {
+          this.logger.error(
+            `Proof SLA check failed for version ${version.id}`,
+            error instanceof Error ? error.message : error,
+          );
+        }
       }
+      return summary;
+    } finally {
+      await this.lock.releaseLock('cron:milestone-proof-sla', token);
     }
-    return summary;
   }
 
   private async evaluate(version: PendingVersion, now: Date, summary: ProofSlaRunSummary) {

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { EventsService } from './events.service';
+import { DistributedLockService } from '../../common/lock/distributed-lock.service';
 
 const MAX_RETRIES = 5;
 
@@ -16,24 +17,31 @@ export class ChainEventRetryService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly events: EventsService,
+    private readonly lock: DistributedLockService,
   ) {}
 
   @Cron(CronExpression.EVERY_30_SECONDS)
   async retryUnprocessed(): Promise<void> {
-    const candidates = await this.prisma.chainEvent.findMany({
-      where: { processed: false, retryCount: { lt: MAX_RETRIES } },
-      orderBy: { ledger: 'asc' },
-    });
+    const token = await this.lock.tryAcquireLock('cron:chain-event-retry', 60_000);
+    if (!token) return;
+    try {
+      const candidates = await this.prisma.chainEvent.findMany({
+        where: { processed: false, retryCount: { lt: MAX_RETRIES } },
+        orderBy: { ledger: 'asc' },
+      });
 
-    for (const event of candidates) {
-      if (!this.isEligible(event.retryCount, event.lastErrorAt)) continue;
+      for (const event of candidates) {
+        if (!this.isEligible(event.retryCount, event.lastErrorAt)) continue;
 
-      try {
-        await this.events.processChainEventRecord(event);
-        this.logger.log(`Processed event ${event.id} (${event.eventName})`);
-      } catch (error) {
-        await this.recordFailure(event.id, event.retryCount, error);
+        try {
+          await this.events.processChainEventRecord(event);
+          this.logger.log(`Processed event ${event.id} (${event.eventName})`);
+        } catch (error) {
+          await this.recordFailure(event.id, event.retryCount, error);
+        }
       }
+    } finally {
+      await this.lock.releaseLock('cron:chain-event-retry', token);
     }
   }
 

@@ -6,6 +6,7 @@ import { ScheduleModule } from "@nestjs/schedule";
 import { TerminusModule } from "@nestjs/terminus";
 import { BullModule } from "@nestjs/bullmq";
 import { AppCacheModule } from "./common/cache/cache.module";
+import { DistributedLockModule } from "./common/lock/distributed-lock.module";
 import { envValidationSchema } from "./config/env.validation";
 import { AppLoggerModule } from "./common/logger/logger.module";
 import { RequestIdMiddleware } from "./common/middleware/request-id.middleware";
@@ -47,7 +48,7 @@ import { DevModuleFactory } from "./modules/dev/dev-module.factory";
 
 export function shouldSkipThrottle(req: { path?: string; url?: string; originalUrl?: string }): boolean {
   const path = req.path ?? req.originalUrl?.split('?')[0] ?? req.url?.split('?')[0] ?? '';
-  return path === '/health' || path === '/status';
+  return path === '/health' || path === '/health/live' || path === '/health/ready' || path === '/status';
 }
 
 @Module({
@@ -64,6 +65,7 @@ export function shouldSkipThrottle(req: { path?: string; url?: string; originalU
     ScheduleModule.forRoot(),
     TerminusModule,
     AppCacheModule,
+    DistributedLockModule,
     AppLoggerModule,
     SecurityEventsModule,
     BullModule.forRootAsync({

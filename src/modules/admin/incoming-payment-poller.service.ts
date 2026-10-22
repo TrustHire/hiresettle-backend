@@ -6,6 +6,7 @@ import { HorizonFailoverService } from '../../common/stellar/horizon-failover.se
 import { MetricsService } from '../../metrics/metrics.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '@prisma/client';
+import { DistributedLockService } from '../../common/lock/distributed-lock.service';
 
 /** Horizon payment record (simplified — only what we need) */
 interface HorizonPayment {
@@ -60,6 +61,7 @@ export class IncomingPaymentPollerService implements OnModuleInit {
     private readonly config: ConfigService,
     private readonly metrics: MetricsService,
     private readonly notifications: NotificationsService,
+    private readonly lock: DistributedLockService,
   ) {
     this.alertThreshold = this.config.get<number>(
       'UNMATCHED_PAYMENT_ALERT_THRESHOLD',
@@ -93,10 +95,14 @@ export class IncomingPaymentPollerService implements OnModuleInit {
   async pollIncomingPayments(): Promise<void> {
     if (!this.contractAddress) return;
 
+    const token = await this.lock.tryAcquireLock('cron:incoming-payment-poller', 60_000);
+    if (!token) return;
     try {
       await this.poll();
     } catch (err) {
       this.logger.error('Incoming payment poll failed', err?.message);
+    } finally {
+      await this.lock.releaseLock('cron:incoming-payment-poller', token);
     }
   }
 

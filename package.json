@@ -21,6 +21,7 @@
     "prepare": "husky install",
     "generate:openapi": "ts-node --project tsconfig.json -r tsconfig-paths/register scripts/generate-openapi.ts",
     "diff:openapi": "ts-node --project tsconfig.json -r tsconfig-paths/register scripts/diff-openapi.ts",
+    "generate:client": "openapi-ts --input docs/openapi.json --output src/client --client axios",
     "admin:cli": "ts-node --project tsconfig.json src/cli/admin.ts",
     "friendbot:fund": "ts-node --project tsconfig.json scripts/friendbot-fund.ts"
   },
@@ -87,6 +88,7 @@
   "devDependencies": {
     "@commitlint/cli": "^21.1.0",
     "@commitlint/config-conventional": "^21.1.0",
+    "@hey-api/openapi-ts": "^0.99.0",
     "@humanwhocodes/object-schema": "^2.0.3",
     "@nestjs/cli": "^10.0.0",
     "@nestjs/schematics": "^10.0.0",

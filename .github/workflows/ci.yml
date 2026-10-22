@@ -62,6 +62,13 @@ jobs:
         env:
           DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db
 
+      - name: Generate OpenAPI spec
+        run: npm run generate:openapi
+        env:
+          NODE_ENV: ci
+          JWT_SECRET: ci-generate-openapi-dummy-secret-32chars!!
+          DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db
+
       - name: Lint
         run: npm run lint
 
@@ -85,3 +92,15 @@ jobs:
       - name: E2E tests
         # Runs against the migrated test Postgres above; Stellar and notifications are mocked.
         run: npm run test:e2e
+
+      - name: Generate TypeScript SDK from OpenAPI
+        run: npm run generate:client
+        env:
+          NODE_ENV: ci
+
+      - name: Upload SDK as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: typescript-sdk
+          path: src/client
+          retention-days: 30

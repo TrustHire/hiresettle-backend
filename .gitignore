@@ -8,5 +8,8 @@ coverage/
 # Temporary OpenAPI spec produced during CI diff — never commit this file
 docs/openapi.head.json
 
+# Generated TypeScript SDK (published as CI artifact, not committed)
+src/client/
+
 # Local changes summary (not for VCS)
 CHANGES.md

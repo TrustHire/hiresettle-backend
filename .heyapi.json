@@ -1,0 +1,5 @@
+{
+  "input": "docs/openapi.json",
+  "output": "src/client",
+  "client": "axios"
+}

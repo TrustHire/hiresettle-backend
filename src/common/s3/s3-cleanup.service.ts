@@ -3,6 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { S3Service } from './s3.service';
+import { DistributedLockService } from '../lock/distributed-lock.service';
 
 /**
  * S3CleanupService
@@ -28,37 +29,44 @@ export class S3CleanupService {
     private readonly s3: S3Service,
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly lock: DistributedLockService,
   ) {
     this.gracePeriodHours = this.config.get<number>('S3_CLEANUP_GRACE_PERIOD_HOURS', 24);
   }
 
   @Cron(CronExpression.EVERY_DAY_AT_3AM, { timeZone: 'UTC' })
   async cleanupOrphanedUploads() {
-    this.logger.log('Starting orphaned S3 uploads cleanup job...');
-
-    const cutoffDate = new Date();
-    cutoffDate.setHours(cutoffDate.getHours() - this.gracePeriodHours);
-
-    let totalDeleted = 0;
-
+    const token = await this.lock.tryAcquireLock('cron:s3-cleanup', 3_600_000);
+    if (!token) return;
     try {
-      // Cleanup orphaned avatars
-      const deletedAvatars = await this.cleanupOrphanedAvatars(cutoffDate);
-      totalDeleted += deletedAvatars;
+      this.logger.log('Starting orphaned S3 uploads cleanup job...');
 
-      // Cleanup orphaned evidence uploads
-      const deletedEvidence = await this.cleanupOrphanedEvidence(cutoffDate);
-      totalDeleted += deletedEvidence;
+      const cutoffDate = new Date();
+      cutoffDate.setHours(cutoffDate.getHours() - this.gracePeriodHours);
 
-      // Cleanup orphaned KYC uploads
-      const deletedKyc = await this.cleanupOrphanedKyc(cutoffDate);
-      totalDeleted += deletedKyc;
+      let totalDeleted = 0;
 
-      this.logger.log(
-        `Cleanup completed. Deleted ${totalDeleted} orphaned objects (grace period: ${this.gracePeriodHours}h)`,
-      );
-    } catch (error) {
-      this.logger.error('Failed to cleanup orphaned S3 uploads:', error.message);
+      try {
+        // Cleanup orphaned avatars
+        const deletedAvatars = await this.cleanupOrphanedAvatars(cutoffDate);
+        totalDeleted += deletedAvatars;
+
+        // Cleanup orphaned evidence uploads
+        const deletedEvidence = await this.cleanupOrphanedEvidence(cutoffDate);
+        totalDeleted += deletedEvidence;
+
+        // Cleanup orphaned KYC uploads
+        const deletedKyc = await this.cleanupOrphanedKyc(cutoffDate);
+        totalDeleted += deletedKyc;
+
+        this.logger.log(
+          `Cleanup completed. Deleted ${totalDeleted} orphaned objects (grace period: ${this.gracePeriodHours}h)`,
+        );
+      } catch (error) {
+        this.logger.error('Failed to cleanup orphaned S3 uploads:', error.message);
+      }
+    } finally {
+      await this.lock.releaseLock('cron:s3-cleanup', token);
     }
   }
 

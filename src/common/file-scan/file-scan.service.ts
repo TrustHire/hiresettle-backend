@@ -7,6 +7,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { S3Service } from '../s3/s3.service';
 import { NotificationsService } from '../../modules/notifications/notifications.service';
 import { ClamAvScannerService } from './clamav-scanner.service';
+import { DistributedLockService } from '../lock/distributed-lock.service';
 import {
   QUEUE_FILE_SCAN,
   QUARANTINE_PREFIX,
@@ -35,6 +36,7 @@ export class FileScanService {
     private readonly scanner: ClamAvScannerService,
     private readonly notifications: NotificationsService,
     @InjectQueue(QUEUE_FILE_SCAN) private readonly queue: Queue,
+    private readonly lock: DistributedLockService,
   ) {}
 
   /** Queue a malware scan for a newly uploaded file. */
@@ -46,8 +48,10 @@ export class FileScanService {
   /** Re-enqueue uploads that have been PENDING for a while. */
   @Cron(CronExpression.EVERY_10_MINUTES)
   async sweepPending(): Promise<void> {
-    const before = new Date(Date.now() - STALE_PENDING_MS);
+    const token = await this.lock.tryAcquireLock('cron:file-scan-sweep', 600_000);
+    if (!token) return;
     try {
+      const before = new Date(Date.now() - STALE_PENDING_MS);
       const [evidence, messages] = await Promise.all([
         this.prisma.disputeEvidence.findMany({
           where: { scanStatus: FileScanStatus.PENDING, uploadedAt: { lt: before } },
@@ -67,6 +71,8 @@ export class FileScanService {
       }
     } catch (error: any) {
       this.logger.error('Pending malware scan sweep failed', error?.message);
+    } finally {
+      await this.lock.releaseLock('cron:file-scan-sweep', token);
     }
   }
 

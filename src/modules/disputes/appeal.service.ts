@@ -21,6 +21,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { ArbiterAssignmentService } from './arbiter-assignment.service';
 import { DisputeSlaService } from './dispute-sla.service';
 import { DisputeActor, DisputesService } from './disputes.service';
+import { DistributedLockService } from '../../common/lock/distributed-lock.service';
 
 /**
  * AppealService (#382)
@@ -40,6 +41,7 @@ export class AppealService {
     private readonly disputes: DisputesService,
     private readonly arbiters: ArbiterAssignmentService,
     private readonly sla: DisputeSlaService,
+    private readonly lock: DistributedLockService,
   ) {}
 
   async openAppeal(disputeId: string, user: DisputeActor, reason: string, now: Date = new Date()) {
@@ -191,27 +193,33 @@ export class AppealService {
    */
   @Cron(CronExpression.EVERY_10_MINUTES)
   async finalizeExpiredAppealWindows(now: Date = new Date()): Promise<number> {
-    const expired = await this.prisma.dispute.findMany({
-      where: { status: DisputeStatus.RESOLVED, appealDeadline: { lt: now } },
-      select: { id: true, isFinal: true },
-    });
+    const token = await this.lock.tryAcquireLock('cron:appeal-finalize', 600_000);
+    if (!token) return 0;
+    try {
+      const expired = await this.prisma.dispute.findMany({
+        where: { status: DisputeStatus.RESOLVED, appealDeadline: { lt: now } },
+        select: { id: true, isFinal: true },
+      });
 
-    let settled = 0;
-    for (const dispute of expired) {
-      if (!dispute.isFinal) {
-        const { count } = await this.prisma.dispute.updateMany({
-          where: { id: dispute.id, status: DisputeStatus.RESOLVED, isFinal: false, appealDeadline: { lt: now } },
-          data: { isFinal: true },
-        });
-        if (!count) continue;
+      let settled = 0;
+      for (const dispute of expired) {
+        if (!dispute.isFinal) {
+          const { count } = await this.prisma.dispute.updateMany({
+            where: { id: dispute.id, status: DisputeStatus.RESOLVED, isFinal: false, appealDeadline: { lt: now } },
+            data: { isFinal: true },
+          });
+          if (!count) continue;
+        }
+        try {
+          await this.disputes.settle(dispute.id);
+          settled++;
+        } catch (error) {
+          this.logger.error(`Failed to settle dispute ${dispute.id}`, error instanceof Error ? error.message : error);
+        }
       }
-      try {
-        await this.disputes.settle(dispute.id);
-        settled++;
-      } catch (error) {
-        this.logger.error(`Failed to settle dispute ${dispute.id}`, error instanceof Error ? error.message : error);
-      }
+      return settled;
+    } finally {
+      await this.lock.releaseLock('cron:appeal-finalize', token);
     }
-    return settled;
   }
 }

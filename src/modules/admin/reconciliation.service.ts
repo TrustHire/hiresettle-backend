@@ -5,6 +5,7 @@ import { StellarService } from '../../common/stellar/stellar.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MetricsService } from '../../metrics/metrics.service';
 import { EngagementStatus, NotificationType } from '@prisma/client';
+import { DistributedLockService } from '../../common/lock/distributed-lock.service';
 
 export interface ReconciliationMismatch {
   engagementId: string;
@@ -52,6 +53,7 @@ export class ReconciliationService {
     private readonly stellar: StellarService,
     private readonly notifications: NotificationsService,
     private readonly metrics: MetricsService,
+    private readonly lock: DistributedLockService,
   ) {}
 
   // ----------------------------------------------------------
@@ -60,19 +62,25 @@ export class ReconciliationService {
 
   @Cron('0 2 * * *', { name: 'nightly-reconciliation', timeZone: 'UTC' })
   async runNightly() {
-    this.logger.log('Starting nightly on-chain/off-chain reconciliation');
+    const token = await this.lock.tryAcquireLock('cron:nightly-reconciliation', 3_600_000);
+    if (!token) return;
     try {
-      const report = await this.runReconciliation();
-      this.logger.log(
-        `Reconciliation complete — checked: ${report.totalChecked}, ` +
-          `matched: ${report.totalMatched}, mismatched: ${report.totalMismatched}`,
-      );
+      this.logger.log('Starting nightly on-chain/off-chain reconciliation');
+      try {
+        const report = await this.runReconciliation();
+        this.logger.log(
+          `Reconciliation complete — checked: ${report.totalChecked}, ` +
+            `matched: ${report.totalMatched}, mismatched: ${report.totalMismatched}`,
+        );
 
-      if (report.totalMismatched > 0) {
-        await this.notifyAdmins(report);
+        if (report.totalMismatched > 0) {
+          await this.notifyAdmins(report);
+        }
+      } catch (err) {
+        this.logger.error('Nightly reconciliation failed', err.message);
       }
-    } catch (err) {
-      this.logger.error('Nightly reconciliation failed', err.message);
+    } finally {
+      await this.lock.releaseLock('cron:nightly-reconciliation', token);
     }
   }
 

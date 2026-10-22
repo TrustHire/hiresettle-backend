@@ -3,6 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
+import { DistributedLockService } from '../../common/lock/distributed-lock.service';
 
 const CURSOR_KEY = 'horizon_last_ledger';
 const MAX_BACKOFF_ATTEMPTS = 3;
@@ -17,19 +18,26 @@ export class HorizonIndexerService {
     private readonly prisma: PrismaService,
     private readonly stellar: StellarService,
     private readonly config: ConfigService,
+    private readonly lock: DistributedLockService,
   ) {}
 
   @Cron(CronExpression.EVERY_30_SECONDS)
   async indexEvents(): Promise<void> {
-    if (this.isRunning) {
-      this.logger.debug('Horizon indexer already running — skipping tick');
-      return;
-    }
-    this.isRunning = true;
+    const token = await this.lock.tryAcquireLock('cron:horizon-indexer', 60_000);
+    if (!token) return;
     try {
-      await this.runWithBackoff();
+      if (this.isRunning) {
+        this.logger.debug('Horizon indexer already running — skipping tick');
+        return;
+      }
+      this.isRunning = true;
+      try {
+        await this.runWithBackoff();
+      } finally {
+        this.isRunning = false;
+      }
     } finally {
-      this.isRunning = false;
+      await this.lock.releaseLock('cron:horizon-indexer', token);
     }
   }
 

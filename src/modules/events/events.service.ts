@@ -8,6 +8,7 @@ import { EngagementsService } from '../engagements/engagements.service';
 import { WebhooksService } from '../webhooks/webhooks.service';
 import { NotificationType } from '@prisma/client';
 import { cursorPage } from '../../common/pagination/cursor-pagination';
+import { DistributedLockService } from '../../common/lock/distributed-lock.service';
 
 /**
  * EventsService
@@ -32,6 +33,7 @@ export class EventsService implements OnModuleInit {
     private readonly notifications: NotificationsService,
     private readonly engagements: EngagementsService,
     private readonly webhooks: WebhooksService,
+    private readonly lock: DistributedLockService,
   ) {}
 
   async onModuleInit() {
@@ -51,6 +53,8 @@ export class EventsService implements OnModuleInit {
 
   @Cron(CronExpression.EVERY_5_SECONDS)
   async pollEvents() {
+    const token = await this.lock.tryAcquireLock('cron:poll-events', 10_000);
+    if (!token) return;
     try {
       const events = await this.stellar.fetchContractEvents(this.lastProcessedLedger);
       if (!events.length) return;
@@ -63,6 +67,8 @@ export class EventsService implements OnModuleInit {
       }
     } catch (error) {
       this.logger.error('Event polling failed', error.message);
+    } finally {
+      await this.lock.releaseLock('cron:poll-events', token);
     }
   }
 

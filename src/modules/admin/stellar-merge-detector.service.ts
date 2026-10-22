@@ -3,6 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { DistributedLockService } from '../../common/lock/distributed-lock.service';
 
 const MERGE_CURSOR_KEY = 'stellar_merge_last_paging_token';
 
@@ -15,21 +16,28 @@ export class StellarMergeDetectorService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     private readonly notifications: NotificationsService,
+    private readonly lock: DistributedLockService,
   ) {}
 
   @Cron(CronExpression.EVERY_5_MINUTES)
   async detectMergedAccounts(): Promise<void> {
-    if (this.isRunning) {
-      this.logger.debug('Merge detector already running — skipping tick');
-      return;
-    }
-    this.isRunning = true;
+    const token = await this.lock.tryAcquireLock('cron:stellar-merge-detector', 300_000);
+    if (!token) return;
     try {
-      await this.run();
-    } catch (err) {
-      this.logger.error('Merge detection failed', err?.message ?? err);
+      if (this.isRunning) {
+        this.logger.debug('Merge detector already running — skipping tick');
+        return;
+      }
+      this.isRunning = true;
+      try {
+        await this.run();
+      } catch (err) {
+        this.logger.error('Merge detection failed', err?.message ?? err);
+      } finally {
+        this.isRunning = false;
+      }
     } finally {
-      this.isRunning = false;
+      await this.lock.releaseLock('cron:stellar-merge-detector', token);
     }
   }
 
