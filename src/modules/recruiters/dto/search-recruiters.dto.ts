@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsInt, MaxLength, Min, Max } from 'class-validator';
+import { IsOptional, IsString, IsInt, IsNumber, MaxLength, Min, Max } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -14,6 +14,29 @@ export class SearchRecruitersDto {
   @IsString()
   @MaxLength(100)
   search?: string;
+
+  @ApiPropertyOptional({
+    description: 'Minimum average recruiter rating (1–5)',
+    example: 4,
+    minimum: 1,
+    maximum: 5,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @Max(5)
+  minRating?: number;
+
+  @ApiPropertyOptional({
+    description: 'Filter recruiters by geographic region (case-insensitive)',
+    example: 'US',
+    maxLength: 100,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  region?: string;
 
   @ApiPropertyOptional({
     description: 'Page number (1-based)',

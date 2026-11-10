@@ -248,6 +248,9 @@ model User {
   // Company proof review SLA settings (#377)
   proofSlaDays               Int            @default(7)
   proofSlaAction             ProofSlaAction @default(ESCALATE_TO_ADMIN)
+  // Recruiter directory filtering (#475)
+  region                     String?        // geographic region (e.g. "US", "EU", "APAC")
+  averageRating              Float?         // denormalized/indexed average rating across recruiter reviews
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
@@ -293,6 +296,8 @@ model User {
   arbiterRecusals      ArbiterRecusal[]
   milestoneComments    MilestoneComment[]
   creditLedgerEntries  CreditLedger[]           @relation("CompanyCreditLedger")
+  disputeMessages      DisputeMessage[]
+  companySsoConfig     CompanySsoConfig?        @relation("CompanySsoConfig")
 
   @@index([role, deactivatedAt])
   @@index([deletedAt, anonymizedAt]) // Used by PiiAnonymizationSchedulerService
@@ -300,6 +305,9 @@ model User {
   @@index([email])                   // #474 — admin user search by email
   @@index([stellarAddress])          // #474 — admin user search by Stellar address
   @@index([company])                 // #474 — admin user search by company name
+  @@index([region])                  // #475 — recruiter filter by region
+  @@index([averageRating])           // #475 — recruiter filter by minRating
+  @@index([role, deactivatedAt, region, averageRating]) // #475 — composite index for GET /recruiters
   @@map("users")
 }
 
@@ -427,6 +435,8 @@ model RecruiterReview {
   reviewer   User       @relation("ReviewerReviews", fields: [reviewerId], references: [id])
 
   @@index([recruiterId])
+  @@index([recruiterId, rating])     // #475 — average rating filter by recruiter
+  @@index([rating])                  // #475 — rating index
   @@index([reviewerId])
   @@map("recruiter_reviews")
 }
@@ -1389,4 +1399,108 @@ model MultisigSignature {
   @@unique([pendingTxId, signerId])
   @@index([pendingTxId])
   @@map("multisig_signatures")
+}
+
+model RecruiterPortfolioEntry {
+  id          String   @id @default(uuid())
+  recruiterId String
+  role        String
+  industry    String
+  year        Int
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  recruiter User @relation("RecruiterPortfolio", fields: [recruiterId], references: [id])
+
+  @@index([recruiterId])
+  @@map("recruiter_portfolio_entries")
+}
+
+model MilestoneProofVersion {
+  id               String             @id @default(uuid())
+  milestoneId      String
+  versionNumber    Int
+  proofUrl         String?
+  content          String?
+  proofHash        String?
+  submittedById    String?
+  submittedAt      DateTime           @default(now())
+  status           ProofVersionStatus @default(SUBMITTED)
+  reviewedById     String?
+  reviewedAt       DateTime?
+  rejectionReason  String?
+  reminder50SentAt DateTime?
+  reminder90SentAt DateTime?
+  slaExpiredAt     DateTime?
+
+  milestone Milestone @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+
+  @@unique([milestoneId, versionNumber])
+  @@index([status, submittedAt])
+  @@map("milestone_proof_versions")
+}
+
+model MilestonePartialRelease {
+  id                  String                 @id @default(uuid())
+  milestoneId         String
+  engagementId        String
+  proposedById        String
+  releaseAmount       BigInt
+  remainderAmount     BigInt
+  remainderAction     PartialRemainderAction
+  reason              String?
+  status              PartialReleaseStatus   @default(PROPOSED)
+  companyApproverId   String?
+  companyApprovedAt   DateTime?
+  recruiterApproverId String?
+  recruiterApprovedAt DateTime?
+  txHash              String?
+  executedAt          DateTime?
+  failureReason       String?
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+
+  milestone Milestone @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+
+  @@index([milestoneId, status])
+  @@index([engagementId])
+  @@map("milestone_partial_releases")
+}
+
+model MilestoneComment {
+  id           String   @id @default(uuid())
+  milestoneId  String
+  engagementId String
+  authorId     String
+  body         String
+  createdAt    DateTime @default(now())
+
+  milestone Milestone @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+  author    User      @relation(fields: [authorId], references: [id])
+
+  @@index([milestoneId, createdAt])
+  @@index([engagementId, createdAt])
+  @@map("milestone_comments")
+}
+
+model CreditLedger {
+  id             String                @id @default(uuid())
+  companyId      String
+  sequence       Int
+  type           CreditLedgerEntryType
+  amount         BigInt
+  balanceAfter   BigInt
+  description    String?
+  reference      String?
+  idempotencyKey String?
+  createdById    String?
+  createdAt      DateTime              @default(now())
+
+  company User @relation("CompanyCreditLedger", fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@unique([companyId, sequence])
+  @@unique([companyId, idempotencyKey])
+  @@index([companyId, createdAt])
+  @@index([reference])
+  @@map("credit_ledger")
 }

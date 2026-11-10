@@ -54,7 +54,7 @@ export class RecruiterReviewsService {
     }
 
     try {
-      return await this.prisma.recruiterReview.create({
+      const created = await this.prisma.recruiterReview.create({
         data: {
           engagementId,
           recruiterId: recruiter.id,
@@ -63,6 +63,19 @@ export class RecruiterReviewsService {
           comment: dto.comment,
         },
       });
+
+      if (
+        typeof this.prisma.recruiterReview?.aggregate === 'function' &&
+        typeof this.prisma.user?.update === 'function'
+      ) {
+        const avgRating = await this.getAverageRating(recruiter.id);
+        await this.prisma.user.update({
+          where: { id: recruiter.id },
+          data: { averageRating: avgRating },
+        });
+      }
+
+      return created;
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&

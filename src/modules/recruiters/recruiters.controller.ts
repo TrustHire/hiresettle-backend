@@ -37,8 +37,10 @@ export class RecruitersController {
 
   @Get()
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'List recruiters with optional name search and pagination' })
+  @ApiOperation({ summary: 'List recruiters with optional name search, rating/region filters, and pagination' })
   @ApiQuery({ name: 'search', required: false, type: String, description: 'Case-insensitive partial match on recruiter name' })
+  @ApiQuery({ name: 'minRating', required: false, type: Number, description: 'Minimum average rating (1–5)' })
+  @ApiQuery({ name: 'region', required: false, type: String, description: 'Filter by recruiter region (case-insensitive)' })
   @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number (default: 1)' })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Results per page (default: 20, max: 100)' })
   @ApiQuery({ name: 'cursor', required: false, type: String, description: 'ID of the last recruiter from the previous page' })

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, Inject } from '@nestjs/common';
+import { Injectable, NotFoundException, Inject, Optional } from '@nestjs/common';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
 import { Prisma } from '@prisma/client';
@@ -19,16 +19,64 @@ export class RecruitersService {
   constructor(
     private readonly prisma: PrismaService,
     @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
-    private readonly reviewsService: RecruiterReviewsService,
+    @Optional() private readonly reviewsService?: RecruiterReviewsService,
   ) {}
 
-  async listRecruiters({ search, page = 1, limit = 20, cursor }: SearchRecruitersDto = {}) {
+  async listRecruiters({
+    search,
+    minRating,
+    region,
+    page = 1,
+    limit = 20,
+    cursor,
+  }: SearchRecruitersDto = {}) {
+    const trimmedSearch = search?.trim();
+    const trimmedRegion = region?.trim();
+
+    let ratingFilter: Prisma.UserWhereInput = {};
+    if (minRating !== undefined && minRating !== null) {
+      const numericMinRating = Number(minRating);
+      if (typeof (this.prisma as any).recruiterReview?.groupBy === 'function') {
+        const grouped = await this.prisma.recruiterReview.groupBy({
+          by: ['recruiterId'],
+          _avg: { rating: true },
+          having: {
+            rating: {
+              _avg: { gte: numericMinRating },
+            },
+          },
+        });
+        if (Array.isArray(grouped)) {
+          const qualifiedIds = grouped
+            .filter((row: any) => (row._avg?.rating ?? numericMinRating) >= numericMinRating)
+            .map((row: any) => row.recruiterId);
+          ratingFilter =
+            qualifiedIds.length > 0
+              ? {
+                  OR: [
+                    { averageRating: { gte: numericMinRating } },
+                    { id: { in: qualifiedIds } },
+                  ],
+                }
+              : { averageRating: { gte: numericMinRating } };
+        } else {
+          ratingFilter = { averageRating: { gte: numericMinRating } };
+        }
+      } else {
+        ratingFilter = { averageRating: { gte: numericMinRating } };
+      }
+    }
+
     const where: Prisma.UserWhereInput = {
       role: UserRole.RECRUITER,
       deactivatedAt: null,
-      ...(search && search.trim()
-        ? { name: { contains: search.trim(), mode: 'insensitive' } }
+      ...(trimmedSearch
+        ? { name: { contains: trimmedSearch, mode: 'insensitive' } }
         : {}),
+      ...(trimmedRegion
+        ? { region: { equals: trimmedRegion, mode: 'insensitive' } }
+        : {}),
+      ...ratingFilter,
     };
 
     if (cursor) {
@@ -39,6 +87,8 @@ export class RecruitersService {
           name: true,
           stellarAddress: true,
           avatarUrl: true,
+          region: true,
+          averageRating: true,
           createdAt: true,
         },
         cursor: { id: cursor },
@@ -58,6 +108,8 @@ export class RecruitersService {
           name: true,
           stellarAddress: true,
           avatarUrl: true,
+          region: true,
+          averageRating: true,
           kycStatus: true,
           createdAt: true,
         },
@@ -68,10 +120,22 @@ export class RecruitersService {
       this.prisma.user.count({ where }),
     ]);
 
+    if (!this.reviewsService) {
+      return {
+        data,
+        meta: {
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit),
+        },
+      };
+    }
+
     const ratings = await this.reviewsService.getAverageRatings(data.map((r) => r.id));
     const withRatings = data.map((r) => ({
       ...r,
-      averageRating: ratings.get(r.id) ?? null,
+      averageRating: ratings.get(r.id) ?? (r as any).averageRating ?? null,
     }));
 
     return {
@@ -136,7 +200,7 @@ export class RecruitersService {
     const averageRetentionRate = completedWithRetention > 0 ?
       Math.round((retentionSuccessCount / completedWithRetention) * 100) : 0;
 
-    const averageRating = await this.reviewsService.getAverageRating(user.id);
+    const averageRating = (await this.reviewsService?.getAverageRating(user.id)) ?? null;
 
     const result = {
       totalEngagements,

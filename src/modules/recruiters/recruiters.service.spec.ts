@@ -3,7 +3,7 @@ import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { UserRole } from '@prisma/client';
 import { RecruitersService } from './recruiters.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { buildUser } from '../../../../test/factories';
+import { buildUser } from '../../../test/factories';
 
 const makeRecruiter = (overrides: Partial<{ id: string; name: string }> = {}) => {
   const u = buildUser({ role: UserRole.RECRUITER, ...overrides });
@@ -172,6 +172,111 @@ describe('RecruitersService', () => {
       expect(result.meta).toHaveProperty('page');
       expect(result.meta).toHaveProperty('limit');
       expect(result.meta).toHaveProperty('totalPages');
+    });
+
+    // ----------------------------------------------------------------
+    // Rating and region filters (#475)
+    // ----------------------------------------------------------------
+
+    it('filters by region (case-insensitive, trimmed)', async () => {
+      const euRecruiter = makeRecruiter({ id: 'rec-eu', name: 'Eva Muller' });
+      setupTransaction([euRecruiter], 1);
+
+      const result = await service.listRecruiters({ region: '  eu  ' });
+
+      expect(mockPrisma.user.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            role: UserRole.RECRUITER,
+            deactivatedAt: null,
+            region: { equals: 'eu', mode: 'insensitive' },
+          },
+        }),
+      );
+      expect(result.data).toEqual([euRecruiter]);
+      expect(result.meta.total).toBe(1);
+    });
+
+    it('filters by minRating', async () => {
+      const topRecruiter = makeRecruiter({ id: 'rec-top', name: 'Top Recruiter' });
+      setupTransaction([topRecruiter], 1);
+
+      const result = await service.listRecruiters({ minRating: 4.5 });
+
+      expect(mockPrisma.user.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            role: UserRole.RECRUITER,
+            deactivatedAt: null,
+            averageRating: { gte: 4.5 },
+          },
+        }),
+      );
+      expect(result.data).toEqual([topRecruiter]);
+    });
+
+    it('combines minRating, region, search, and pagination', async () => {
+      const matched = [makeRecruiter({ id: 'rec-combo', name: 'Alice US' })];
+      setupTransaction(matched, 15);
+
+      const result = await service.listRecruiters({
+        search: 'alice',
+        region: 'US',
+        minRating: 4,
+        page: 2,
+        limit: 5,
+      });
+
+      expect(mockPrisma.user.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            role: UserRole.RECRUITER,
+            deactivatedAt: null,
+            name: { contains: 'alice', mode: 'insensitive' },
+            region: { equals: 'US', mode: 'insensitive' },
+            averageRating: { gte: 4 },
+          },
+          skip: 5,
+          take: 5,
+        }),
+      );
+      expect(result).toEqual({
+        data: matched,
+        meta: { total: 15, page: 2, limit: 5, totalPages: 3 },
+      });
+    });
+
+    it('applies minRating and region filters with cursor pagination', async () => {
+      const r1 = makeRecruiter({ id: 'rec-10', name: 'Diana' });
+      const r2 = makeRecruiter({ id: 'rec-11', name: 'Elena' });
+      mockPrisma.user.findMany.mockResolvedValueOnce([r1, r2]);
+
+      const result = await service.listRecruiters({
+        search: 'e',
+        region: 'APAC',
+        minRating: 3.5,
+        cursor: 'rec-09',
+        limit: 1,
+      });
+
+      expect(mockPrisma.user.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            role: UserRole.RECRUITER,
+            deactivatedAt: null,
+            name: { contains: 'e', mode: 'insensitive' },
+            region: { equals: 'APAC', mode: 'insensitive' },
+            averageRating: { gte: 3.5 },
+          },
+          cursor: { id: 'rec-09' },
+          skip: 1,
+          take: 2,
+        }),
+      );
+      expect(result).toEqual({
+        data: [r1],
+        meta: { limit: 1, nextCursor: 'rec-10' },
+      });
     });
   });
 });
