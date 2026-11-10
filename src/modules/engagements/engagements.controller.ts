@@ -2,8 +2,9 @@ import {
   Controller, Get, Post, Body, Param,
   Query, UseGuards, HttpCode, HttpStatus,
   Patch, Put, UseInterceptors,
-  UploadedFile, Delete,
+  UploadedFile, Delete, Res,
 } from '@nestjs/common';
+import { Response } from 'express';
 import {
   ApiTags, ApiOperation, ApiResponse,
   ApiBearerAuth, ApiQuery, ApiParam, ApiSecurity,
@@ -155,6 +156,60 @@ export class EngagementsController {
       includeArchived,
       overdue,
     });
+  }
+
+  /**
+   * GET /api/v1/engagements/export.csv
+   * Stream a CSV export of the caller's company engagements reusing the list filters (#465).
+   */
+  @Get('export.csv')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.COMPANY)
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_READ)
+  @ApiOperation({ summary: 'Export caller company engagements as CSV (streamed, reuses list filters) (#465)' })
+  @ApiQuery({ name: 'recruiterAddress', required: false, description: 'Filter by recruiter Stellar address' })
+  @ApiQuery({ name: 'status', required: false, description: 'Single value or comma-separated (e.g., ACTIVE,COMPLETED)' })
+  @ApiQuery({ name: 'search', required: false, description: 'Case-insensitive partial match on jobTitle' })
+  @ApiQuery({ name: 'createdFrom', required: false, description: 'ISO date string (e.g., 2026-01-01)' })
+  @ApiQuery({ name: 'createdTo', required: false, description: 'ISO date string (e.g., 2026-12-31)' })
+  @ApiQuery({ name: 'tags', required: false, description: 'Comma-separated tags; returns engagements that have ALL listed tags' })
+  @ApiQuery({ name: 'sortBy', required: false, enum: ['createdAt', 'amount', 'status', 'jobTitle', 'totalAmount', 'updatedAt'], description: 'Field to sort by (default: createdAt)' })
+  @ApiQuery({ name: 'sortOrder', required: false, enum: ['asc', 'desc'], description: 'Sort direction (default: desc)' })
+  @ApiQuery({ name: 'includeArchived', required: false, type: Boolean, description: 'Include archived engagements (default: false)' })
+  @ApiQuery({ name: 'overdue', required: false, type: Boolean, description: 'true → only open engagements past their targetStartDate' })
+  @ApiResponse({ status: 200, description: 'CSV stream of company engagements' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Forbidden — COMPANY role required' })
+  exportCsv(
+    @CurrentUser() user: User,
+    @Res() res: Response,
+    @Query('recruiterAddress') recruiterAddress?: string,
+    @Query('status') status?: string,
+    @Query('search') search?: string,
+    @Query('createdFrom') createdFrom?: string,
+    @Query('createdTo') createdTo?: string,
+    @Query('tags') tags?: string,
+    @Query('sortBy') sortBy?: string,
+    @Query('sortOrder') sortOrder?: string,
+    @Query('includeArchived') includeArchived?: boolean,
+    @Query('overdue') overdue?: string,
+  ) {
+    return this.engagementsService.streamCompanyEngagementsCsv(
+      user,
+      {
+        recruiterAddress,
+        status,
+        search,
+        createdFrom,
+        createdTo,
+        tags,
+        sortBy,
+        sortOrder,
+        includeArchived,
+        overdue,
+      },
+      res,
+    );
   }
 
   /**

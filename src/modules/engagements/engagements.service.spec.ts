@@ -1,5 +1,4 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { Test, TestingModule } from '@nestjs/testing';
 import { EngagementsService } from './engagements.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
@@ -393,6 +392,158 @@ describe('EngagementsService', () => {
     it('throws NotFoundException when engagement does not exist', async () => {
       mockPrisma.engagement.findUnique.mockResolvedValue(null);
       await expect(service.findOne('MISSING')).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  // ----------------------------------------------------------
+  // streamCompanyEngagementsCsv() (#465)
+  // ----------------------------------------------------------
+
+  describe('streamCompanyEngagementsCsv() (#465)', () => {
+    const makeMockRes = () => {
+      const chunks: string[] = [];
+      const headers: Record<string, string> = {};
+      return {
+        chunks,
+        headers,
+        setHeader: jest.fn((name: string, value: string) => {
+          headers[name] = value;
+        }),
+        write: jest.fn((chunk: string) => {
+          chunks.push(chunk);
+          return true;
+        }),
+        end: jest.fn(),
+        getBody: () => chunks.join(''),
+      };
+    };
+
+    it('streams only the caller company engagements and respects applied filters', async () => {
+      const companyUser = {
+        id: 'company-1',
+        stellarAddress: 'GCOMPANY1',
+        role: 'COMPANY',
+      };
+      mockPrisma.engagement.findMany.mockResolvedValueOnce([
+        {
+          id: 'ENG-101',
+          status: 'ACTIVE',
+          jobTitle: 'Staff Rust Engineer, "Core"',
+          companyAddress: 'GCOMPANY1',
+          recruiterAddress: 'GREC1',
+          arbiterAddress: 'GARB1',
+          tokenAddress: 'CTOK1',
+          totalAmount: 5_000_000_000n,
+          releasedAmount: 1_500_000_000n,
+          location: 'Remote',
+          salaryRange: '$180k-$220k',
+          tags: ['rust', 'soroban'],
+          targetStartDate: new Date('2026-08-01T00:00:00.000Z'),
+          placedAt: null,
+          txHash: 'tx-101',
+          createdAt: new Date('2026-06-01T00:00:00.000Z'),
+          updatedAt: new Date('2026-06-02T00:00:00.000Z'),
+        },
+      ]);
+
+      const res = makeMockRes();
+      await service.streamCompanyEngagementsCsv(
+        companyUser,
+        {
+          status: 'ACTIVE,COMPLETED',
+          search: 'Rust',
+          tags: 'rust,soroban',
+          createdFrom: '2026-05-01',
+          createdTo: '2026-07-01',
+          sortBy: 'amount',
+          sortOrder: 'asc',
+        },
+        res,
+      );
+
+      expect(res.headers['Content-Type']).toBe('text/csv; charset=utf-8');
+      expect(res.headers['Content-Disposition']).toBe('attachment; filename="engagements.csv"');
+      expect(res.end).toHaveBeenCalledTimes(1);
+
+      expect(mockPrisma.engagement.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            archivedAt: null,
+            status: { in: ['ACTIVE', 'COMPLETED'] },
+            jobTitle: { contains: 'Rust', mode: 'insensitive' },
+            tags: { hasEvery: ['rust', 'soroban'] },
+            OR: [{ companyId: 'company-1' }, { companyAddress: 'GCOMPANY1' }],
+          }),
+          orderBy: { totalAmount: 'asc' },
+          take: 200,
+        }),
+      );
+
+      const csv = res.getBody();
+      const lines = csv.trim().split('\n');
+      expect(lines).toHaveLength(2);
+      expect(lines[0]).toContain('id,status,jobTitle,companyAddress,recruiterAddress');
+      expect(lines[1]).toContain('ENG-101,ACTIVE,"Staff Rust Engineer, ""Core""",GCOMPANY1,GREC1');
+      expect(lines[1]).toContain('rust;soroban');
+    });
+
+    it('streams across multiple cursor-paginated batches for large sets', async () => {
+      const companyUser = {
+        id: 'company-1',
+        stellarAddress: 'GCOMPANY1',
+        role: 'COMPANY',
+      };
+      const firstBatch = Array.from({ length: 200 }, (_, i) => ({
+        id: `ENG-B1-${i + 1}`,
+        status: 'ACTIVE',
+        jobTitle: `Role ${i + 1}`,
+        companyAddress: 'GCOMPANY1',
+        recruiterAddress: 'GREC1',
+        arbiterAddress: 'GARB1',
+        tokenAddress: 'CTOK1',
+        totalAmount: 100n,
+        releasedAmount: 0n,
+        tags: [],
+        createdAt: new Date('2026-06-01T00:00:00.000Z'),
+        updatedAt: new Date('2026-06-01T00:00:00.000Z'),
+      }));
+      const secondBatch = [
+        {
+          id: 'ENG-B2-201',
+          status: 'COMPLETED',
+          jobTitle: 'Role 201',
+          companyAddress: 'GCOMPANY1',
+          recruiterAddress: 'GREC1',
+          arbiterAddress: 'GARB1',
+          tokenAddress: 'CTOK1',
+          totalAmount: 200n,
+          releasedAmount: 200n,
+          tags: [],
+          createdAt: new Date('2026-06-02T00:00:00.000Z'),
+          updatedAt: new Date('2026-06-02T00:00:00.000Z'),
+        },
+      ];
+
+      mockPrisma.engagement.findMany
+        .mockResolvedValueOnce(firstBatch)
+        .mockResolvedValueOnce(secondBatch);
+
+      const res = makeMockRes();
+      await service.streamCompanyEngagementsCsv(companyUser, {}, res);
+
+      expect(mockPrisma.engagement.findMany).toHaveBeenCalledTimes(2);
+      expect(mockPrisma.engagement.findMany).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          cursor: { id: 'ENG-B1-200' },
+          skip: 1,
+          take: 200,
+        }),
+      );
+
+      const lines = res.getBody().trim().split('\n');
+      expect(lines).toHaveLength(202); // 1 header + 201 rows
+      expect(res.end).toHaveBeenCalledTimes(1);
     });
   });
 });

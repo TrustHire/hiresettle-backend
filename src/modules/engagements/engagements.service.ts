@@ -17,7 +17,23 @@ const ENGAGEMENT_SORTABLE_FIELDS: Record<string, string> = {
   status: 'status',
   jobTitle: 'jobTitle',
   totalAmount: 'totalAmount',
+  amount: 'totalAmount',
 };
+
+const ENGAGEMENT_CSV_BATCH_SIZE = 200;
+
+function escapeCsvCell(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  const text = String(value);
+  if (text.includes(',') || text.includes('"') || text.includes('\n') || text.includes('\r')) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+  return text;
+}
+
+function formatCsvRow(values: unknown[]): string {
+  return `${values.map(escapeCsvCell).join(',')}\n`;
+}
 
 // Statuses in which a role is still unfilled, so a passed targetStartDate makes it overdue (#470).
 const OPEN_ROLE_STATUSES: EngagementStatus[] = ['PENDING_ACCEPTANCE', 'ACTIVE', 'REPLACEMENT_REQUESTED'];
@@ -229,37 +245,7 @@ export class EngagementsService {
       };
     });
 
-    // Persist engagement as PENDING_ACCEPTANCE — on-chain submission happens on recruiter accept
-    const engagement = await this.prisma.engagement.create({
-      data: {
-        id: mergedData.engagementId,
-        companyAddress: mergedData.companyAddress,
-        recruiterAddress: mergedData.recruiterAddress,
-        arbiterAddress: mergedData.arbiterAddress,
-        tokenAddress: mergedData.tokenAddress,
-        totalAmount: BigInt(mergedData.totalAmount),
-        jobTitle: mergedData.jobTitle,
-        jobDescription: mergedData.jobDescription,
-        salaryRange: mergedData.salaryRange,
-        location: mergedData.location,
-        status: EngagementStatus.PENDING_ACCEPTANCE,
-        templateVersionId: templateVersion?.id,
-        milestones: { create: milestoneData },
-      },
-      include: { milestones: { orderBy: { milestoneIndex: 'asc' } } },
-    });
-
-    this.logger.log(`Engagement invite created (PENDING_ACCEPTANCE): ${engagement.id}`);
-
-    await this.notifications.notifyUser(
-      mergedData.recruiterAddress,
-      NotificationType.ENGAGEMENT_CREATED,
-      `New engagement invite: ${mergedData.jobTitle}`,
-      `You have a new engagement invite for "${mergedData.jobTitle}". Please accept or decline.`,
-      { engagementId: engagement.id },
-    );
-
-    return this.serialize(engagement);
+    return { mergedData, templateVersion, milestoneData };
   }
 
   // ----------------------------------------------------------
@@ -453,37 +439,34 @@ export class EngagementsService {
   // READ
   // ----------------------------------------------------------
 
-  async findAll(filters: {
+  private buildListWhereAndOrder(filters: {
     companyAddress?: string;
     recruiterAddress?: string;
-    status?: string;       // single value or comma-separated list
-    search?: string;       // partial case-insensitive match on jobTitle
-    createdFrom?: string;  // ISO date string
-    createdTo?: string;    // ISO date string
-    tags?: string;         // comma-separated tag values — matches any engagement that has ALL listed tags
-    page?: number;
-    limit?: number;
-    cursor?: string;
-    sortBy?: string;       // one of ENGAGEMENT_SORTABLE_FIELDS
-    sortOrder?: string;    // 'asc' | 'desc'
-    includeArchived?: boolean;
-    overdue?: boolean | string; // true → only engagements past their targetStartDate (#470)
-  }) {
+    status?: string;
+    search?: string;
+    createdFrom?: string;
+    createdTo?: string;
+    tags?: string;
+    sortBy?: string;
+    sortOrder?: string;
+    includeArchived?: boolean | string;
+    overdue?: boolean | string;
+  }): { where: any; orderBy: Record<string, 'asc' | 'desc'> } {
     const {
       companyAddress, recruiterAddress, status, search, createdFrom, createdTo, tags,
-      page = 1, limit = 20, cursor, sortBy, sortOrder, includeArchived, overdue,
+      sortBy, sortOrder, includeArchived, overdue,
     } = filters;
 
     const where: any = {};
     if (companyAddress) where.companyAddress = companyAddress;
     if (recruiterAddress) where.recruiterAddress = recruiterAddress;
 
-    if (!includeArchived) {
+    if (includeArchived !== true && includeArchived !== 'true') {
       where.archivedAt = null;
     }
 
     if (status) {
-      const statuses = status.split(',').map((s) => s.trim()) as EngagementStatus[];
+      const statuses = status.split(',').map((s) => s.trim()).filter(Boolean) as EngagementStatus[];
       where.status = statuses.length === 1 ? statuses[0] : { in: statuses };
     }
 
@@ -497,7 +480,6 @@ export class EngagementsService {
       if (createdTo) where.createdAt.lte = new Date(createdTo);
     }
 
-    // tags filter: matches any engagement that contains ALL of the requested tags
     if (tags) {
       const tagList = tags.split(',').map((t) => t.trim()).filter(Boolean);
       if (tagList.length > 0) {
@@ -505,7 +487,6 @@ export class EngagementsService {
       }
     }
 
-    // overdue filter (#470): deadline passed, nobody placed, role still open
     if (overdue === true || overdue === 'true') {
       where.AND = [
         { targetStartDate: { lt: new Date() } },
@@ -527,6 +508,64 @@ export class EngagementsService {
       }
       orderBy = { [field]: sortOrder === 'asc' ? 'asc' : 'desc' };
     }
+
+    return { where, orderBy };
+  }
+
+  private async resolveCallerCompanyScope(user: {
+    id: string;
+    stellarAddress?: string | null;
+    companyOwnerId?: string | null;
+    role?: string;
+  }): Promise<{ companyId: string; companyAddresses: string[] }> {
+    let companyId = user.companyOwnerId || user.id;
+
+    if (!user.companyOwnerId && (this.prisma as any).companyMember?.findFirst) {
+      const membership = await (this.prisma as any).companyMember.findFirst({
+        where: { memberId: user.id },
+        select: { companyId: true },
+      });
+      if (membership?.companyId) {
+        companyId = membership.companyId;
+      }
+    }
+
+    const addresses = new Set<string>();
+    if (user.stellarAddress) {
+      addresses.add(user.stellarAddress);
+    }
+
+    if (companyId !== user.id && (this.prisma.user as any)?.findUnique) {
+      const owner = await (this.prisma.user as any).findUnique({
+        where: { id: companyId },
+        select: { stellarAddress: true },
+      });
+      if (owner?.stellarAddress) {
+        addresses.add(owner.stellarAddress);
+      }
+    }
+
+    return { companyId, companyAddresses: [...addresses] };
+  }
+
+  async findAll(filters: {
+    companyAddress?: string;
+    recruiterAddress?: string;
+    status?: string;       // single value or comma-separated list
+    search?: string;       // partial case-insensitive match on jobTitle
+    createdFrom?: string;  // ISO date string
+    createdTo?: string;    // ISO date string
+    tags?: string;         // comma-separated tag values — matches any engagement that has ALL listed tags
+    page?: number;
+    limit?: number;
+    cursor?: string;
+    sortBy?: string;       // one of ENGAGEMENT_SORTABLE_FIELDS
+    sortOrder?: string;    // 'asc' | 'desc'
+    includeArchived?: boolean;
+    overdue?: boolean | string; // true → only engagements past their targetStartDate (#470)
+  }) {
+    const { page = 1, limit = 20, cursor } = filters;
+    const { where, orderBy } = this.buildListWhereAndOrder(filters);
 
     if (cursor) {
       const engagements = await this.prisma.engagement.findMany({
@@ -559,6 +598,130 @@ export class EngagementsService {
       data: engagements.map(this.serialize),
       meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
+  }
+
+  /**
+   * Issue #465: Company-scoped streaming CSV export of engagements that reuses list filters.
+   * Strictly scopes to the caller's company (ignoring any external companyAddress parameter)
+   * and streams rows in cursor-paginated batches for large datasets.
+   */
+  async streamCompanyEngagementsCsv(
+    user: { id: string; stellarAddress?: string | null; companyOwnerId?: string | null; role?: string },
+    filters: {
+      recruiterAddress?: string;
+      status?: string;
+      search?: string;
+      createdFrom?: string;
+      createdTo?: string;
+      tags?: string;
+      sortBy?: string;
+      sortOrder?: string;
+      includeArchived?: boolean | string;
+      overdue?: boolean | string;
+    },
+    res: {
+      setHeader: (name: string, value: string) => void;
+      write: (chunk: string) => boolean;
+      once?: (event: string, listener: () => void) => void;
+      end: () => void;
+    },
+  ): Promise<void> {
+    if (user.role && user.role !== UserRole.COMPANY) {
+      throw new ForbiddenException('Only company users can export company engagements');
+    }
+
+    const { where, orderBy } = this.buildListWhereAndOrder(filters);
+    const { companyId, companyAddresses } = await this.resolveCallerCompanyScope(user);
+
+    // Enforce strict company scope on where clause
+    delete where.companyAddress;
+    const scopeClauses: any[] = [{ companyId }];
+    if (companyAddresses.length === 1) {
+      scopeClauses.push({ companyAddress: companyAddresses[0] });
+    } else if (companyAddresses.length > 1) {
+      scopeClauses.push({ companyAddress: { in: companyAddresses } });
+    }
+
+    if (where.AND) {
+      where.AND.push({ OR: scopeClauses });
+    } else {
+      where.OR = scopeClauses;
+    }
+
+    const headers = [
+      'id',
+      'status',
+      'jobTitle',
+      'companyAddress',
+      'recruiterAddress',
+      'arbiterAddress',
+      'tokenAddress',
+      'totalAmount',
+      'releasedAmount',
+      'location',
+      'salaryRange',
+      'tags',
+      'targetStartDate',
+      'placedAt',
+      'txHash',
+      'createdAt',
+      'updatedAt',
+    ];
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="engagements.csv"');
+
+    const writeChunk = async (chunk: string) => {
+      const ok = res.write(chunk);
+      if (!ok && typeof res.once === 'function') {
+        await new Promise<void>((resolve) => res.once!('drain', resolve));
+      }
+    };
+
+    await writeChunk(formatCsvRow(headers));
+
+    let cursor: string | undefined;
+    while (true) {
+      const batch: any[] = await this.prisma.engagement.findMany({
+        where,
+        orderBy,
+        take: ENGAGEMENT_CSV_BATCH_SIZE,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      });
+
+      if (!batch || batch.length === 0) break;
+
+      for (const eng of batch) {
+        await writeChunk(
+          formatCsvRow([
+            eng.id,
+            eng.status,
+            eng.jobTitle,
+            eng.companyAddress,
+            eng.recruiterAddress,
+            eng.arbiterAddress,
+            eng.tokenAddress,
+            eng.totalAmount?.toString() ?? '0',
+            eng.releasedAmount?.toString() ?? '0',
+            eng.location ?? '',
+            eng.salaryRange ?? '',
+            Array.isArray(eng.tags) ? eng.tags.join(';') : '',
+            eng.targetStartDate instanceof Date ? eng.targetStartDate.toISOString() : (eng.targetStartDate ?? ''),
+            eng.placedAt instanceof Date ? eng.placedAt.toISOString() : (eng.placedAt ?? ''),
+            eng.txHash ?? '',
+            eng.createdAt instanceof Date ? eng.createdAt.toISOString() : (eng.createdAt ?? ''),
+            eng.updatedAt instanceof Date ? eng.updatedAt.toISOString() : (eng.updatedAt ?? ''),
+          ]),
+        );
+      }
+
+      if (batch.length < ENGAGEMENT_CSV_BATCH_SIZE) {
+        break;
+      }
+      cursor = batch[batch.length - 1].id;
+    }
+
+    res.end();
   }
 
   /**
@@ -937,6 +1100,14 @@ export class EngagementsService {
 
     if (userRole !== UserRole.ARBITER || !engagement.arbiter || engagement.arbiter.id !== userId) {
       throw new ForbiddenException('Only the assigned arbiter can recuse themselves');
+    }
+
+    if ((this.prisma as any).arbiterRecusal?.upsert) {
+      await this.prisma.arbiterRecusal.upsert({
+        where: { engagementId_arbiterId: { engagementId, arbiterId: userId } },
+        update: {},
+        create: { engagementId, arbiterId: userId },
+      });
     }
 
     // Notify all admins
