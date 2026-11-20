@@ -1,0 +1,28 @@
+name: Feature request
+description: Suggest a new feature or enhancement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What problem does this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: tasks
+    attributes:
+      label: Proposed solution / tasks
+      placeholder: "- [ ] ..."
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
