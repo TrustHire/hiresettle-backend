@@ -50,6 +50,22 @@ export interface PaginatedPayoutHistory {
   totalPages: number;
 }
 
+export interface ListRecruitersQuery {
+  search?: string;
+  minRating?: number;
+  region?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface PaginatedRecruiters {
+  data: Recruiter[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
 interface LeaderboardCacheEntry {
   expiresAt: number;
   entries: LeaderboardEntry[];
@@ -57,6 +73,8 @@ interface LeaderboardCacheEntry {
 
 const DEFAULT_PAYOUT_PAGE_SIZE = 20;
 const MAX_PAYOUT_PAGE_SIZE = 100;
+const DEFAULT_RECRUITERS_PAGE_SIZE = 20;
+const MAX_RECRUITERS_PAGE_SIZE = 100;
 
 @Injectable()
 export class RecruitersService {
@@ -72,6 +90,49 @@ export class RecruitersService {
     @InjectRepository(MilestonePayment)
     private readonly milestonePayments: Repository<MilestonePayment>,
   ) {}
+
+  /**
+   * Lists recruiters with optional search, minimum-rating and region filters.
+   * Filters combine with each other and with pagination.
+   */
+  async listRecruiters(query: ListRecruitersQuery = {}): Promise<PaginatedRecruiters> {
+    const page = Math.max(1, Math.floor(query.page ?? 1));
+    const pageSize = Math.min(
+      MAX_RECRUITERS_PAGE_SIZE,
+      Math.max(1, Math.floor(query.pageSize ?? DEFAULT_RECRUITERS_PAGE_SIZE)),
+    );
+
+    const qb = this.recruiters.createQueryBuilder('recruiter');
+
+    if (query.search) {
+      qb.andWhere(
+        '(recruiter.name ILIKE :search OR recruiter.email ILIKE :search)',
+        { search: `%${query.search}%` },
+      );
+    }
+
+    if (query.minRating !== undefined && query.minRating !== null) {
+      qb.andWhere('recruiter.rating >= :minRating', { minRating: query.minRating });
+    }
+
+    if (query.region) {
+      qb.andWhere('recruiter.region = :region', { region: query.region });
+    }
+
+    qb.orderBy('recruiter.createdAt', 'DESC')
+      .skip((page - 1) * pageSize)
+      .take(pageSize);
+
+    const [data, total] = await qb.getManyAndCount();
+
+    return {
+      data,
+      total,
+      page,
+      pageSize,
+      totalPages: Math.ceil(total / pageSize),
+    };
+  }
 
   async getStats(recruiterId: string): Promise<RecruiterStats> {
     const responseTime = await this.computeResponseTime(recruiterId);
