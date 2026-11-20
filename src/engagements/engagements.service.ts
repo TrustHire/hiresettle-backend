@@ -1,6 +1,11 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, MoreThan, Not, Repository } from 'typeorm';
 import { Engagement, EngagementStatus } from './entities/engagement.entity';
 import { Milestone } from './entities/milestone.entity';
 import { CreateEngagementDto } from './dto/create-engagement.dto';
@@ -32,6 +37,41 @@ export interface FindAllOptions {
   offset?: number;
 }
 
+export interface ExportOptions {
+  q?: string;
+  status?: EngagementStatus;
+  companyId: string;
+}
+
+export interface ExclusivityStatus {
+  active: boolean;
+  exclusiveUntil: Date | null;
+}
+
+const EXCLUSIVITY_NOTICE_DAYS = 3;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const CSV_COLUMNS = [
+  'id',
+  'title',
+  'status',
+  'amount',
+  'token',
+  'createdAt',
+  'updatedAt',
+] as const;
+
+function escapeCsvValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  const str = value instanceof Date ? value.toISOString() : String(value);
+  if (/[",\n\r]/.test(str)) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
 @Injectable()
 export class EngagementsService {
   constructor(
@@ -42,11 +82,96 @@ export class EngagementsService {
   ) {}
 
   async create(createEngagementDto: CreateEngagementDto): Promise<Engagement> {
+    await this.assertNoActiveExclusivity(createEngagementDto);
+
     const engagement = this.engagementRepository.create({
       ...createEngagementDto,
       status: EngagementStatus.DRAFT,
     });
     return this.engagementRepository.save(engagement);
+  }
+
+  /**
+   * Rejects a new engagement when another recruiter already holds an active
+   * exclusivity window for the same company + job title.
+   */
+  private async assertNoActiveExclusivity(
+    dto: CreateEngagementDto,
+  ): Promise<void> {
+    const companyId = (dto as any).companyId;
+    const title = (dto as any).title;
+    const recruiterId = (dto as any).recruiterId;
+
+    if (!companyId || !title) {
+      return;
+    }
+
+    const conflicting = await this.engagementRepository.findOne({
+      where: {
+        companyId,
+        title,
+        exclusiveUntil: MoreThan(new Date()),
+        ...(recruiterId ? { recruiterId: Not(recruiterId) } : {}),
+      } as any,
+    });
+
+    if (conflicting) {
+      throw new ConflictException({
+        statusCode: 409,
+        error: 'ENGAGEMENT_EXCLUSIVITY_CONFLICT',
+        message: `An exclusive engagement for "${title}" is active until ${new Date(
+          conflicting.exclusiveUntil as Date,
+        ).toISOString()}`,
+      });
+    }
+  }
+
+  /**
+   * Exclusivity end date may only be shortened without recruiter consent.
+   */
+  private assertExclusivityChangeAllowed(
+    current: Date | null | undefined,
+    next: Date | null | undefined,
+    recruiterConsent: boolean,
+  ): void {
+    if (!current || !next || recruiterConsent) {
+      return;
+    }
+    if (new Date(next).getTime() > new Date(current).getTime()) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        error: 'ENGAGEMENT_EXCLUSIVITY_EXTENSION_FORBIDDEN',
+        message:
+          'Exclusivity end date can only be shortened without recruiter consent',
+      });
+    }
+  }
+
+  getExclusivityStatus(engagement: Engagement): ExclusivityStatus {
+    const exclusiveUntil = (engagement as any).exclusiveUntil ?? null;
+    return {
+      active: !!exclusiveUntil && new Date(exclusiveUntil).getTime() > Date.now(),
+      exclusiveUntil,
+    };
+  }
+
+  /**
+   * Returns engagements whose exclusivity ends within the next 3 days so both
+   * parties can be notified ahead of expiry.
+   */
+  async findExclusivityExpiringSoon(): Promise<Engagement[]> {
+    const now = new Date();
+    const horizon = new Date(now.getTime() + EXCLUSIVITY_NOTICE_DAYS * DAY_MS);
+    return this.engagementRepository.find({
+      where: {
+        exclusiveUntil: MoreThan(now),
+      } as any,
+    }).then((rows) =>
+      rows.filter((row) => {
+        const until = (row as any).exclusiveUntil;
+        return until && new Date(until).getTime() <= horizon.getTime();
+      }),
+    );
   }
 
   async findAll(options: FindAllOptions = {}): Promise<Engagement[]> {
@@ -92,6 +217,65 @@ export class EngagementsService {
     return queryBuilder.getMany();
   }
 
+  /**
+   * Streams a CSV export of the caller's company engagements, reusing the
+   * same list filters (q, status) as findAll. Scoped strictly to companyId
+   * so no cross-company rows can leak. Rows are streamed in batches to keep
+   * memory bounded for large sets.
+   */
+  async *exportCsv(options: ExportOptions): AsyncGenerator<string> {
+    const { q, status, companyId } = options;
+
+    const queryBuilder = this.engagementRepository
+      .createQueryBuilder('engagement')
+      .where('engagement.companyId = :companyId', { companyId });
+
+    if (q && q.trim()) {
+      queryBuilder.andWhere(
+        'engagement.search_vector @@ plainto_tsquery(\'english\', :q)',
+        { q: q.trim() },
+      );
+    }
+
+    if (status) {
+      queryBuilder.andWhere('engagement.status = :status', { status });
+    }
+
+    queryBuilder.orderBy('engagement.createdAt', 'DESC');
+
+    yield CSV_COLUMNS.join(',') + '\n';
+
+    const batchSize = 500;
+    let offset = 0;
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const rows = await queryBuilder
+        .clone()
+        .skip(offset)
+        .take(batchSize)
+        .getMany();
+
+      if (rows.length === 0) {
+        break;
+      }
+
+      for (const row of rows) {
+        yield (
+          CSV_COLUMNS.map((column) =>
+            escapeCsvValue((row as any)[column]),
+          ).join(',') + '\n'
+        );
+      }
+
+      if (rows.length < batchSize) {
+        break;
+      }
+
+      offset += batchSize;
+    }
+  }
+
   async findOne(id: string): Promise<Engagement> {
     const engagement = await this.engagementRepository.findOne({
       where: { id },
@@ -108,6 +292,15 @@ export class EngagementsService {
     updateEngagementDto: UpdateEngagementDto,
   ): Promise<Engagement> {
     const engagement = await this.findOne(id);
+
+    if ((updateEngagementDto as any).exclusiveUntil !== undefined) {
+      this.assertExclusivityChangeAllowed(
+        (engagement as any).exclusiveUntil,
+        (updateEngagementDto as any).exclusiveUntil,
+        !!(updateEngagementDto as any).recruiterConsent,
+      );
+    }
+
     Object.assign(engagement, updateEngagementDto);
     return this.engagementRepository.save(engagement);
   }
@@ -205,31 +398,20 @@ export class EngagementsService {
       });
     }
 
-    // Respect visibility: internal notes only for company
-    const visible = options.isCompany
-      ? items
-      : items.filter((item) => item.visibility !== 'internal');
+    items.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
 
-    // Sort by time descending across all merged sources
-    visible.sort(
-      (a, b) =>
-        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
-    );
-
-    // Cursor pagination
     let startIndex = 0;
     if (options.cursor) {
-      const decoded = Buffer.from(options.cursor, 'base64').toString('utf8');
-      const cursorIndex = visible.findIndex((item) => item.id === decoded);
+      const cursorIndex = items.findIndex((item) => item.id === options.cursor);
       startIndex = cursorIndex >= 0 ? cursorIndex + 1 : 0;
     }
 
-    const page = visible.slice(startIndex, startIndex + limit);
-    const hasMore = startIndex + limit < visible.length;
-    const nextCursor = hasMore
-      ? Buffer.from(page[page.length - 1].id, 'utf8').toString('base64')
-      : null;
+    const page = items.slice(startIndex, startIndex + limit);
+    const hasMore = startIndex + limit < items.length;
 
-    return { items: page, nextCursor };
+    return {
+      items: page,
+      nextCursor: hasMore ? page[page.length - 1]?.id ?? null : null,
+    };
   }
 }
