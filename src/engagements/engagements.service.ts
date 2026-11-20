@@ -32,6 +32,33 @@ export interface FindAllOptions {
   offset?: number;
 }
 
+export interface ExportOptions {
+  q?: string;
+  status?: EngagementStatus;
+  companyId: string;
+}
+
+const CSV_COLUMNS = [
+  'id',
+  'title',
+  'status',
+  'amount',
+  'token',
+  'createdAt',
+  'updatedAt',
+] as const;
+
+function escapeCsvValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  const str = value instanceof Date ? value.toISOString() : String(value);
+  if (/[",\n\r]/.test(str)) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
 @Injectable()
 export class EngagementsService {
   constructor(
@@ -90,6 +117,65 @@ export class EngagementsService {
     }
 
     return queryBuilder.getMany();
+  }
+
+  /**
+   * Streams a CSV export of the caller's company engagements, reusing the
+   * same list filters (q, status) as findAll. Scoped strictly to companyId
+   * so no cross-company rows can leak. Rows are streamed in batches to keep
+   * memory bounded for large sets.
+   */
+  async *exportCsv(options: ExportOptions): AsyncGenerator<string> {
+    const { q, status, companyId } = options;
+
+    const queryBuilder = this.engagementRepository
+      .createQueryBuilder('engagement')
+      .where('engagement.companyId = :companyId', { companyId });
+
+    if (q && q.trim()) {
+      queryBuilder.andWhere(
+        'engagement.search_vector @@ plainto_tsquery(\'english\', :q)',
+        { q: q.trim() },
+      );
+    }
+
+    if (status) {
+      queryBuilder.andWhere('engagement.status = :status', { status });
+    }
+
+    queryBuilder.orderBy('engagement.createdAt', 'DESC');
+
+    yield CSV_COLUMNS.join(',') + '\n';
+
+    const batchSize = 500;
+    let offset = 0;
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const rows = await queryBuilder
+        .clone()
+        .skip(offset)
+        .take(batchSize)
+        .getMany();
+
+      if (rows.length === 0) {
+        break;
+      }
+
+      for (const row of rows) {
+        yield (
+          CSV_COLUMNS.map((column) =>
+            escapeCsvValue((row as any)[column]),
+          ).join(',') + '\n'
+        );
+      }
+
+      if (rows.length < batchSize) {
+        break;
+      }
+
+      offset += batchSize;
+    }
   }
 
   async findOne(id: string): Promise<Engagement> {
