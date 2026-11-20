@@ -48,4 +48,9 @@ export class EngagementsController {
 
     stream.pipe(res);
   }
+
+  @Get(':id')
+  async detail(@Req() req, @Param('id') id: string) {
+    return this.engagementsService.getDetail(req.user.companyId, id);
+  }
 }
