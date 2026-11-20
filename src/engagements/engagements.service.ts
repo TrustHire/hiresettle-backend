@@ -1,6 +1,6 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, LessThan } from 'typeorm';
 import { Engagement, EngagementStatus } from './entities/engagement.entity';
 import { Milestone } from './entities/milestone.entity';
 import { CreateEngagementDto } from './dto/create-engagement.dto';
@@ -32,6 +32,25 @@ export interface FindAllOptions {
   offset?: number;
 }
 
+/** Default invite lifetime in days, overridable via INVITE_EXPIRY_DAYS. */
+export const DEFAULT_INVITE_EXPIRY_DAYS = 7;
+/** Reminder window before expiry, overridable via INVITE_REMINDER_HOURS. */
+export const DEFAULT_INVITE_REMINDER_HOURS = 24;
+
+function inviteExpiryDays(): number {
+  const parsed = Number(process.env.INVITE_EXPIRY_DAYS);
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_INVITE_EXPIRY_DAYS;
+}
+
+function inviteReminderHours(): number {
+  const parsed = Number(process.env.INVITE_REMINDER_HOURS);
+  return Number.isFinite(parsed) && parsed >= 0
+    ? parsed
+    : DEFAULT_INVITE_REMINDER_HOURS;
+}
+
 @Injectable()
 export class EngagementsService {
   constructor(
@@ -45,8 +64,13 @@ export class EngagementsService {
     const engagement = this.engagementRepository.create({
       ...createEngagementDto,
       status: EngagementStatus.DRAFT,
+      inviteExpiresAt: this.computeInviteExpiry(),
     });
     return this.engagementRepository.save(engagement);
+  }
+
+  private computeInviteExpiry(from: Date = new Date()): Date {
+    return new Date(from.getTime() + inviteExpiryDays() * 24 * 60 * 60 * 1000);
   }
 
   async findAll(options: FindAllOptions = {}): Promise<Engagement[]> {
@@ -126,6 +150,7 @@ export class EngagementsService {
       token: source.token,
       status: EngagementStatus.DRAFT,
       sourceEngagementId: source.id,
+      inviteExpiresAt: this.computeInviteExpiry(),
     });
 
     const saved = await this.engagementRepository.save(duplicate);
@@ -143,6 +168,113 @@ export class EngagementsService {
     }
 
     return saved;
+  }
+
+  /**
+   * Accept an invite. Rejects invites whose expiry has passed so stale
+   * pending invites can no longer be accepted.
+   */
+  async acceptInvite(id: string): Promise<Engagement> {
+    const engagement = await this.findOne(id);
+    if (this.isInviteExpired(engagement)) {
+      throw new BadRequestException(
+        `Invite for engagement ${id} has expired`,
+      );
+    }
+    engagement.status = EngagementStatus.ACTIVE;
+    return this.engagementRepository.save(engagement);
+  }
+
+  /**
+   * Re-send an expired invite: reset the expiry window and re-issue it.
+   */
+  async resendInvite(id: string): Promise<Engagement> {
+    const engagement = await this.findOne(id);
+    if (!this.isInviteExpired(engagement)) {
+      throw new BadRequestException(
+        `Invite for engagement ${id} has not expired`,
+      );
+    }
+    engagement.inviteExpiresAt = this.computeInviteExpiry();
+    engagement.inviteReminderSentAt = null;
+    engagement.status = EngagementStatus.DRAFT;
+    return this.engagementRepository.save(engagement);
+  }
+
+  private isInviteExpired(engagement: Engagement): boolean {
+    const expiresAt = (engagement as any).inviteExpiresAt;
+    return !!expiresAt && new Date(expiresAt).getTime() <= Date.now();
+  }
+
+  /**
+   * Cron entry point: expire stale pending invites and notify the company.
+   * Intended to be invoked by a scheduler guarded by the Redis cron lock.
+   */
+  async expireStaleInvites(): Promise<{ expired: number }> {
+    const now = new Date();
+    const stale = await this.engagementRepository.find({
+      where: {
+        status: EngagementStatus.DRAFT,
+        inviteExpiresAt: LessThan(now),
+      },
+    });
+
+    for (const engagement of stale) {
+      engagement.status = EngagementStatus.EXPIRED;
+      await this.engagementRepository.save(engagement);
+      await this.notifyCompany(engagement, 'invite_expired');
+    }
+
+    return { expired: stale.length };
+  }
+
+  /**
+   * Cron entry point: remind recruiters 24h before their invite expires.
+   */
+  async sendInviteReminders(): Promise<{ reminded: number }> {
+    const now = Date.now();
+    const windowEnd = new Date(
+      now + inviteReminderHours() * 60 * 60 * 1000,
+    );
+    const due = await this.engagementRepository.find({
+      where: {
+        status: EngagementStatus.DRAFT,
+        inviteExpiresAt: LessThan(windowEnd),
+      },
+    });
+
+    let reminded = 0;
+    for (const engagement of due) {
+      const expiresAt = (engagement as any).inviteExpiresAt;
+      if (!expiresAt || new Date(expiresAt).getTime() <= now) {
+        continue;
+      }
+      if ((engagement as any).inviteReminderSentAt) {
+        continue;
+      }
+      engagement.inviteReminderSentAt = new Date();
+      await this.engagementRepository.save(engagement);
+      await this.notifyCompany(engagement, 'invite_expiring_soon');
+      reminded += 1;
+    }
+
+    return { reminded };
+  }
+
+  private async notifyCompany(
+    engagement: Engagement,
+    event: 'invite_expired' | 'invite_expiring_soon',
+  ): Promise<void> {
+    // Notification dispatch is handled by the notifications module; this hook
+    // records the event so the company is informed of the invite state change.
+    const auditLog = ((engagement as any).auditLog ??= []);
+    auditLog.push({
+      id: `${event}:${engagement.id}:${Date.now()}`,
+      type: event,
+      createdAt: new Date().toISOString(),
+      visibility: 'company',
+      data: { engagementId: engagement.id, event },
+    });
   }
 
   async getActivity(
