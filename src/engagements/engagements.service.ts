@@ -37,6 +37,26 @@ export const DEFAULT_INVITE_EXPIRY_DAYS = 7;
 /** Reminder window before expiry, overridable via INVITE_REMINDER_HOURS. */
 export const DEFAULT_INVITE_REMINDER_HOURS = 24;
 
+/**
+ * Notification events that must always be delivered, even when the recipient
+ * has muted the engagement (disputes, funds released, etc.).
+ */
+export const CRITICAL_NOTIFICATION_EVENTS: ReadonlySet<string> = new Set([
+  'dispute_opened',
+  'dispute_resolved',
+  'funds_released',
+]);
+
+/**
+ * Per-user, per-engagement mute state. Keyed by `${userId}:${engagementId}` so
+ * muting is scoped to a single user rather than the engagement as a whole.
+ */
+const mutedEngagements = new Map<string, Set<string>>();
+
+function muteKey(userId: string, engagementId: string): string {
+  return `${userId}:${engagementId}`;
+}
+
 function inviteExpiryDays(): number {
   const parsed = Number(process.env.INVITE_EXPIRY_DAYS);
   return Number.isFinite(parsed) && parsed > 0
@@ -127,6 +147,18 @@ export class EngagementsService {
     return engagement;
   }
 
+  /**
+   * Engagement detail for a specific user, including their per-user mute
+   * state for this engagement.
+   */
+  async findOneForUser(
+    id: string,
+    userId: string,
+  ): Promise<Engagement & { muted: boolean }> {
+    const engagement = await this.findOne(id);
+    return Object.assign(engagement, { muted: this.isMuted(userId, id) });
+  }
+
   async update(
     id: string,
     updateEngagementDto: UpdateEngagementDto,
@@ -168,6 +200,50 @@ export class EngagementsService {
     }
 
     return saved;
+  }
+
+  /**
+   * Mute notifications for a single user on a single engagement.
+   */
+  async mute(id: string, userId: string): Promise<{ muted: boolean }> {
+    await this.findOne(id);
+    const key = muteKey(userId, id);
+    const set = mutedEngagements.get(key) ?? new Set<string>();
+    set.add(id);
+    mutedEngagements.set(key, set);
+    return { muted: true };
+  }
+
+  /**
+   * Unmute notifications for a single user on a single engagement.
+   */
+  async unmute(id: string, userId: string): Promise<{ muted: boolean }> {
+    await this.findOne(id);
+    mutedEngagements.delete(muteKey(userId, id));
+    return { muted: false };
+  }
+
+  /**
+   * Whether the given user has muted notifications for the engagement.
+   */
+  isMuted(userId: string, engagementId: string): boolean {
+    return mutedEngagements.has(muteKey(userId, engagementId));
+  }
+
+  /**
+   * Decide whether a notification should be delivered to a user for an
+   * engagement. Critical events always deliver; non-critical events are
+   * suppressed when the user has muted the engagement.
+   */
+  shouldDeliverNotification(
+    userId: string,
+    engagementId: string,
+    event: string,
+  ): boolean {
+    if (CRITICAL_NOTIFICATION_EVENTS.has(event)) {
+      return true;
+    }
+    return !this.isMuted(userId, engagementId);
   }
 
   /**
@@ -254,114 +330,6 @@ export class EngagementsService {
       }
       engagement.inviteReminderSentAt = new Date();
       await this.engagementRepository.save(engagement);
-      await this.notifyCompany(engagement, 'invite_expiring_soon');
-      reminded += 1;
-    }
+      await this.notifyCompany(engagement, 'invite_exp
 
-    return { reminded };
-  }
-
-  private async notifyCompany(
-    engagement: Engagement,
-    event: 'invite_expired' | 'invite_expiring_soon',
-  ): Promise<void> {
-    // Notification dispatch is handled by the notifications module; this hook
-    // records the event so the company is informed of the invite state change.
-    const auditLog = ((engagement as any).auditLog ??= []);
-    auditLog.push({
-      id: `${event}:${engagement.id}:${Date.now()}`,
-      type: event,
-      createdAt: new Date().toISOString(),
-      visibility: 'company',
-      data: { engagementId: engagement.id, event },
-    });
-  }
-
-  async getActivity(
-    id: string,
-    options: { cursor?: string; limit?: number; isCompany?: boolean } = {},
-  ): Promise<ActivityFeed> {
-    const engagement = await this.findOne(id);
-    const limit = Math.min(Math.max(options.limit ?? 20, 1), 100);
-
-    const items: ActivityItem[] = [];
-
-    // Audit log entries
-    const auditLog = (engagement as any).auditLog ?? [];
-    for (const entry of auditLog) {
-      items.push({
-        id: `audit:${entry.id}`,
-        type: 'audit',
-        timestamp: new Date(entry.createdAt ?? entry.timestamp).toISOString(),
-        visibility: entry.visibility ?? 'company',
-        data: entry,
-      });
-    }
-
-    // Milestone history
-    for (const milestone of engagement.milestones ?? []) {
-      items.push({
-        id: `milestone:${milestone.id}`,
-        type: 'milestone',
-        timestamp: new Date(
-          (milestone as any).updatedAt ??
-            (milestone as any).createdAt ??
-            Date.now(),
-        ).toISOString(),
-        visibility: 'company',
-        data: milestone,
-      });
-    }
-
-    // Notes
-    const notes = (engagement as any).notes ?? [];
-    for (const note of notes) {
-      items.push({
-        id: `note:${note.id}`,
-        type: 'note',
-        timestamp: new Date(note.createdAt ?? note.timestamp).toISOString(),
-        visibility: note.visibility ?? 'internal',
-        data: note,
-      });
-    }
-
-    // Chain events
-    const chainEvents = (engagement as any).chainEvents ?? [];
-    for (const event of chainEvents) {
-      items.push({
-        id: `chain:${event.id}`,
-        type: 'chain',
-        timestamp: new Date(event.createdAt ?? event.timestamp).toISOString(),
-        visibility: 'company',
-        data: event,
-      });
-    }
-
-    // Respect visibility: internal notes only for company
-    const visible = options.isCompany
-      ? items
-      : items.filter((item) => item.visibility !== 'internal');
-
-    // Sort by time descending across all merged sources
-    visible.sort(
-      (a, b) =>
-        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
-    );
-
-    // Cursor pagination
-    let startIndex = 0;
-    if (options.cursor) {
-      const decoded = Buffer.from(options.cursor, 'base64').toString('utf8');
-      const cursorIndex = visible.findIndex((item) => item.id === decoded);
-      startIndex = cursorIndex >= 0 ? cursorIndex + 1 : 0;
-    }
-
-    const page = visible.slice(startIndex, startIndex + limit);
-    const hasMore = startIndex + limit < visible.length;
-    const nextCursor = hasMore
-      ? Buffer.from(page[page.length - 1].id, 'utf8').toString('base64')
-      : null;
-
-    return { items: page, nextCursor };
-  }
-}
+/* … truncated 3328 chars — edit only what you need near the top … */
