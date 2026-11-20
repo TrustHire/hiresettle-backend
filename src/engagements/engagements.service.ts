@@ -32,6 +32,40 @@ export interface FindAllOptions {
   offset?: number;
 }
 
+/**
+ * Configurable risk-scoring rules. Values are sourced from SystemConfig
+ * (see `getRiskConfig`) so admins can tune thresholds without a deploy.
+ */
+export interface RiskScoringConfig {
+  /** Score at or above which an engagement is flagged for admin review. */
+  flagThreshold: number;
+  /** Window (ms) used to detect rapid creation/cancellation velocity. */
+  velocityWindowMs: number;
+  /** Number of same-party engagements within the window that triggers a hit. */
+  velocityCountThreshold: number;
+  /** Points added per velocity hit. */
+  velocityWeight: number;
+  /** Account age (days) below which the account is considered new. */
+  newAccountDays: number;
+  /** Points added for a new account. */
+  newAccountWeight: number;
+  /** Points added when KYC is not verified. */
+  kycUnverifiedWeight: number;
+  /** Points added per prior dispute. */
+  priorDisputeWeight: number;
+}
+
+export const DEFAULT_RISK_CONFIG: RiskScoringConfig = {
+  flagThreshold: 60,
+  velocityWindowMs: 24 * 60 * 60 * 1000,
+  velocityCountThreshold: 3,
+  velocityWeight: 30,
+  newAccountDays: 7,
+  newAccountWeight: 20,
+  kycUnverifiedWeight: 25,
+  priorDisputeWeight: 15,
+};
+
 @Injectable()
 export class EngagementsService {
   constructor(
@@ -46,7 +80,104 @@ export class EngagementsService {
       ...createEngagementDto,
       status: EngagementStatus.DRAFT,
     });
+
+    const { score, flagged } = await this.computeRiskScore(engagement);
+    (engagement as any).riskScore = score;
+    (engagement as any).riskFlagged = flagged;
+
     return this.engagementRepository.save(engagement);
+  }
+
+  /**
+   * Resolve risk-scoring rules from SystemConfig, falling back to defaults.
+   * SystemConfig is read defensively so this works even when the config
+   * repository is not wired into this service.
+   */
+  private async getRiskConfig(): Promise<RiskScoringConfig> {
+    const configRepo = (this.engagementRepository.manager as any)?.getRepository?.(
+      'SystemConfig',
+    );
+    if (!configRepo) {
+      return DEFAULT_RISK_CONFIG;
+    }
+    try {
+      const rows: Array<{ key: string; value: any }> = await configRepo.find({
+        where: { key: 'riskScoring' },
+      });
+      const stored = rows?.[0]?.value;
+      if (stored && typeof stored === 'object') {
+        return { ...DEFAULT_RISK_CONFIG, ...stored };
+      }
+    } catch {
+      // Fall through to defaults if SystemConfig is unavailable.
+    }
+    return DEFAULT_RISK_CONFIG;
+  }
+
+  /**
+   * Compute a risk score (0-100) from velocity, account age, KYC status and
+   * prior disputes. Returns the score and whether it exceeds the flag
+   * threshold. Flagging never blocks the engagement; admins decide.
+   */
+  async computeRiskScore(
+    engagement: Partial<Engagement>,
+  ): Promise<{ score: number; flagged: boolean }> {
+    const config = await this.getRiskConfig();
+    let score = 0;
+
+    // Velocity: rapid creation/cancellation between the same parties.
+    const companyId = (engagement as any).companyId;
+    const recruiterId = (engagement as any).recruiterId;
+    if (companyId && recruiterId) {
+      const since = new Date(Date.now() - config.velocityWindowMs);
+      const recent = await this.engagementRepository
+        .createQueryBuilder('engagement')
+        .where('engagement.companyId = :companyId', { companyId })
+        .andWhere('engagement.recruiterId = :recruiterId', { recruiterId })
+        .andWhere('engagement.createdAt >= :since', { since })
+        .getCount();
+      if (recent >= config.velocityCountThreshold) {
+        score += config.velocityWeight;
+      }
+    }
+
+    // Account age: newer accounts carry more risk.
+    const accountCreatedAt = (engagement as any).accountCreatedAt;
+    if (accountCreatedAt) {
+      const ageDays =
+        (Date.now() - new Date(accountCreatedAt).getTime()) /
+        (24 * 60 * 60 * 1000);
+      if (ageDays < config.newAccountDays) {
+        score += config.newAccountWeight;
+      }
+    }
+
+    // KYC status: unverified parties add risk.
+    const kycStatus = (engagement as any).kycStatus;
+    if (kycStatus && kycStatus !== 'verified') {
+      score += config.kycUnverifiedWeight;
+    }
+
+    // Prior disputes between the parties.
+    const priorDisputes = Number((engagement as any).priorDisputes ?? 0);
+    if (priorDisputes > 0) {
+      score += priorDisputes * config.priorDisputeWeight;
+    }
+
+    score = Math.max(0, Math.min(100, Math.round(score)));
+    return { score, flagged: score >= config.flagThreshold };
+  }
+
+  /**
+   * List engagements flagged for admin review. Flagged engagements remain
+   * fully operational unless an admin explicitly blocks them.
+   */
+  async findFlagged(): Promise<Engagement[]> {
+    return this.engagementRepository.find({
+      where: { riskFlagged: true } as any,
+      relations: ['milestones'],
+      order: { riskScore: 'DESC' } as any,
+    });
   }
 
   async findAll(options: FindAllOptions = {}): Promise<Engagement[]> {
