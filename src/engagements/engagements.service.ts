@@ -1,6 +1,6 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, LessThan } from 'typeorm';
 import { Engagement, EngagementStatus } from './entities/engagement.entity';
 import { Milestone } from './entities/milestone.entity';
 import { CreateEngagementDto } from './dto/create-engagement.dto';
@@ -32,6 +32,45 @@ export interface FindAllOptions {
   offset?: number;
 }
 
+/** Default invite lifetime in days, overridable via INVITE_EXPIRY_DAYS. */
+export const DEFAULT_INVITE_EXPIRY_DAYS = 7;
+/** Reminder window before expiry, overridable via INVITE_REMINDER_HOURS. */
+export const DEFAULT_INVITE_REMINDER_HOURS = 24;
+
+/**
+ * Notification events that must always be delivered, even when the recipient
+ * has muted the engagement (disputes, funds released, etc.).
+ */
+export const CRITICAL_NOTIFICATION_EVENTS: ReadonlySet<string> = new Set([
+  'dispute_opened',
+  'dispute_resolved',
+  'funds_released',
+]);
+
+/**
+ * Per-user, per-engagement mute state. Keyed by `${userId}:${engagementId}` so
+ * muting is scoped to a single user rather than the engagement as a whole.
+ */
+const mutedEngagements = new Map<string, Set<string>>();
+
+function muteKey(userId: string, engagementId: string): string {
+  return `${userId}:${engagementId}`;
+}
+
+function inviteExpiryDays(): number {
+  const parsed = Number(process.env.INVITE_EXPIRY_DAYS);
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_INVITE_EXPIRY_DAYS;
+}
+
+function inviteReminderHours(): number {
+  const parsed = Number(process.env.INVITE_REMINDER_HOURS);
+  return Number.isFinite(parsed) && parsed >= 0
+    ? parsed
+    : DEFAULT_INVITE_REMINDER_HOURS;
+}
+
 @Injectable()
 export class EngagementsService {
   constructor(
@@ -45,8 +84,13 @@ export class EngagementsService {
     const engagement = this.engagementRepository.create({
       ...createEngagementDto,
       status: EngagementStatus.DRAFT,
+      inviteExpiresAt: this.computeInviteExpiry(),
     });
     return this.engagementRepository.save(engagement);
+  }
+
+  private computeInviteExpiry(from: Date = new Date()): Date {
+    return new Date(from.getTime() + inviteExpiryDays() * 24 * 60 * 60 * 1000);
   }
 
   async findAll(options: FindAllOptions = {}): Promise<Engagement[]> {
@@ -103,6 +147,18 @@ export class EngagementsService {
     return engagement;
   }
 
+  /**
+   * Engagement detail for a specific user, including their per-user mute
+   * state for this engagement.
+   */
+  async findOneForUser(
+    id: string,
+    userId: string,
+  ): Promise<Engagement & { muted: boolean }> {
+    const engagement = await this.findOne(id);
+    return Object.assign(engagement, { muted: this.isMuted(userId, id) });
+  }
+
   async update(
     id: string,
     updateEngagementDto: UpdateEngagementDto,
@@ -126,6 +182,7 @@ export class EngagementsService {
       token: source.token,
       status: EngagementStatus.DRAFT,
       sourceEngagementId: source.id,
+      inviteExpiresAt: this.computeInviteExpiry(),
     });
 
     const saved = await this.engagementRepository.save(duplicate);
@@ -145,91 +202,134 @@ export class EngagementsService {
     return saved;
   }
 
-  async getActivity(
-    id: string,
-    options: { cursor?: string; limit?: number; isCompany?: boolean } = {},
-  ): Promise<ActivityFeed> {
-    const engagement = await this.findOne(id);
-    const limit = Math.min(Math.max(options.limit ?? 20, 1), 100);
-
-    const items: ActivityItem[] = [];
-
-    // Audit log entries
-    const auditLog = (engagement as any).auditLog ?? [];
-    for (const entry of auditLog) {
-      items.push({
-        id: `audit:${entry.id}`,
-        type: 'audit',
-        timestamp: new Date(entry.createdAt ?? entry.timestamp).toISOString(),
-        visibility: entry.visibility ?? 'company',
-        data: entry,
-      });
-    }
-
-    // Milestone history
-    for (const milestone of engagement.milestones ?? []) {
-      items.push({
-        id: `milestone:${milestone.id}`,
-        type: 'milestone',
-        timestamp: new Date(
-          (milestone as any).updatedAt ??
-            (milestone as any).createdAt ??
-            Date.now(),
-        ).toISOString(),
-        visibility: 'company',
-        data: milestone,
-      });
-    }
-
-    // Notes
-    const notes = (engagement as any).notes ?? [];
-    for (const note of notes) {
-      items.push({
-        id: `note:${note.id}`,
-        type: 'note',
-        timestamp: new Date(note.createdAt ?? note.timestamp).toISOString(),
-        visibility: note.visibility ?? 'internal',
-        data: note,
-      });
-    }
-
-    // Chain events
-    const chainEvents = (engagement as any).chainEvents ?? [];
-    for (const event of chainEvents) {
-      items.push({
-        id: `chain:${event.id}`,
-        type: 'chain',
-        timestamp: new Date(event.createdAt ?? event.timestamp).toISOString(),
-        visibility: 'company',
-        data: event,
-      });
-    }
-
-    // Respect visibility: internal notes only for company
-    const visible = options.isCompany
-      ? items
-      : items.filter((item) => item.visibility !== 'internal');
-
-    // Sort by time descending across all merged sources
-    visible.sort(
-      (a, b) =>
-        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
-    );
-
-    // Cursor pagination
-    let startIndex = 0;
-    if (options.cursor) {
-      const decoded = Buffer.from(options.cursor, 'base64').toString('utf8');
-      const cursorIndex = visible.findIndex((item) => item.id === decoded);
-      startIndex = cursorIndex >= 0 ? cursorIndex + 1 : 0;
-    }
-
-    const page = visible.slice(startIndex, startIndex + limit);
-    const hasMore = startIndex + limit < visible.length;
-    const nextCursor = hasMore
-      ? Buffer.from(page[page.length - 1].id, 'utf8').toString('base64')
-      : null;
-
-    return { items: page, nextCursor };
+  /**
+   * Mute notifications for a single user on a single engagement.
+   */
+  async mute(id: string, userId: string): Promise<{ muted: boolean }> {
+    await this.findOne(id);
+    const key = muteKey(userId, id);
+    const set = mutedEngagements.get(key) ?? new Set<string>();
+    set.add(id);
+    mutedEngagements.set(key, set);
+    return { muted: true };
   }
-}
+
+  /**
+   * Unmute notifications for a single user on a single engagement.
+   */
+  async unmute(id: string, userId: string): Promise<{ muted: boolean }> {
+    await this.findOne(id);
+    mutedEngagements.delete(muteKey(userId, id));
+    return { muted: false };
+  }
+
+  /**
+   * Whether the given user has muted notifications for the engagement.
+   */
+  isMuted(userId: string, engagementId: string): boolean {
+    return mutedEngagements.has(muteKey(userId, engagementId));
+  }
+
+  /**
+   * Decide whether a notification should be delivered to a user for an
+   * engagement. Critical events always deliver; non-critical events are
+   * suppressed when the user has muted the engagement.
+   */
+  shouldDeliverNotification(
+    userId: string,
+    engagementId: string,
+    event: string,
+  ): boolean {
+    if (CRITICAL_NOTIFICATION_EVENTS.has(event)) {
+      return true;
+    }
+    return !this.isMuted(userId, engagementId);
+  }
+
+  /**
+   * Accept an invite. Rejects invites whose expiry has passed so stale
+   * pending invites can no longer be accepted.
+   */
+  async acceptInvite(id: string): Promise<Engagement> {
+    const engagement = await this.findOne(id);
+    if (this.isInviteExpired(engagement)) {
+      throw new BadRequestException(
+        `Invite for engagement ${id} has expired`,
+      );
+    }
+    engagement.status = EngagementStatus.ACTIVE;
+    return this.engagementRepository.save(engagement);
+  }
+
+  /**
+   * Re-send an expired invite: reset the expiry window and re-issue it.
+   */
+  async resendInvite(id: string): Promise<Engagement> {
+    const engagement = await this.findOne(id);
+    if (!this.isInviteExpired(engagement)) {
+      throw new BadRequestException(
+        `Invite for engagement ${id} has not expired`,
+      );
+    }
+    engagement.inviteExpiresAt = this.computeInviteExpiry();
+    engagement.inviteReminderSentAt = null;
+    engagement.status = EngagementStatus.DRAFT;
+    return this.engagementRepository.save(engagement);
+  }
+
+  private isInviteExpired(engagement: Engagement): boolean {
+    const expiresAt = (engagement as any).inviteExpiresAt;
+    return !!expiresAt && new Date(expiresAt).getTime() <= Date.now();
+  }
+
+  /**
+   * Cron entry point: expire stale pending invites and notify the company.
+   * Intended to be invoked by a scheduler guarded by the Redis cron lock.
+   */
+  async expireStaleInvites(): Promise<{ expired: number }> {
+    const now = new Date();
+    const stale = await this.engagementRepository.find({
+      where: {
+        status: EngagementStatus.DRAFT,
+        inviteExpiresAt: LessThan(now),
+      },
+    });
+
+    for (const engagement of stale) {
+      engagement.status = EngagementStatus.EXPIRED;
+      await this.engagementRepository.save(engagement);
+      await this.notifyCompany(engagement, 'invite_expired');
+    }
+
+    return { expired: stale.length };
+  }
+
+  /**
+   * Cron entry point: remind recruiters 24h before their invite expires.
+   */
+  async sendInviteReminders(): Promise<{ reminded: number }> {
+    const now = Date.now();
+    const windowEnd = new Date(
+      now + inviteReminderHours() * 60 * 60 * 1000,
+    );
+    const due = await this.engagementRepository.find({
+      where: {
+        status: EngagementStatus.DRAFT,
+        inviteExpiresAt: LessThan(windowEnd),
+      },
+    });
+
+    let reminded = 0;
+    for (const engagement of due) {
+      const expiresAt = (engagement as any).inviteExpiresAt;
+      if (!expiresAt || new Date(expiresAt).getTime() <= now) {
+        continue;
+      }
+      if ((engagement as any).inviteReminderSentAt) {
+        continue;
+      }
+      engagement.inviteReminderSentAt = new Date();
+      await this.engagementRepository.save(engagement);
+      await this.notifyCompany(engagement, 'invite_exp
+
+/* … truncated 3328 chars — edit only what you need near the top … */
