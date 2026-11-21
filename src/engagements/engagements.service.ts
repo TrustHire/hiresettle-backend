@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -52,6 +53,21 @@ export interface ApproverContext {
 }
 
 const APPROVER_ROLES = ['approver', 'admin', 'owner'];
+
+/**
+ * A single payout split rule for an engagement. `basisPoints` is expressed
+ * out of 10000 (100%). All splits for an engagement must sum to 10000.
+ */
+export interface PayoutSplit {
+  address: string;
+  basisPoints: number;
+}
+
+/** Total basis points representing 100%. */
+export const TOTAL_BASIS_POINTS = 10000;
+
+/** Stellar ed25519 public keys are 56 chars, starting with 'G'. */
+const STELLAR_ADDRESS_REGEX = /^G[A-Z2-7]{55}$/;
 
 export interface AuditLogEntry {
   id: string;
@@ -249,6 +265,117 @@ export class EngagementsService {
     return engagement;
   }
 
+  /**
+   * Replace the payout split rules for an engagement. Splits may only be
+   * changed while the engagement is unfunded (draft / pending approval).
+   * Every address must be a valid Stellar account and the basis points must
+   * sum to exactly 10000.
+   */
+  async setPayoutSplits(
+    id: string,
+    splits: PayoutSplit[],
+  ): Promise<Engagement> {
+    const engagement = await this.findOne(id);
+
+    if (!this.isUnfunded(engagement)) {
+      throw new ForbiddenException(
+        `Payout splits for engagement ${id} can only change while unfunded`,
+      );
+    }
+
+    this.validatePayoutSplits(splits);
+
+    (engagement as any).payoutSplits = splits.map((split) => ({
+      address: split.address,
+      basisPoints: split.basisPoints,
+    }));
+
+    return this.engagementRepository.save(engagement);
+  }
+
+  /**
+   * Build the multi-operation payment for a milestone release, distributing
+   * the amount across the engagement's payout splits. Rounding remainders
+   * are assigned to the primary (first) recruiter split.
+   */
+  buildReleasePayments(
+    engagement: Engagement,
+    amount: number,
+  ): Array<{ destination: string; amount: string }> {
+    const splits: PayoutSplit[] = (engagement as any).payoutSplits ?? [];
+    if (!splits.length) {
+      return [];
+    }
+
+    this.validatePayoutSplits(splits);
+
+    const total = Number(amount);
+    const payments = splits.map((split) => ({
+      destination: split.address,
+      amount: this.toStroops(total, split.basisPoints),
+    }));
+
+    // Assign any rounding remainder to the primary recruiter (first split).
+    const distributed = payments.reduce(
+      (sum, payment) => sum + BigInt(payment.amount),
+      0n,
+    );
+    const expected = BigInt(Math.round(total * 1e7));
+    const remainder = expected - distributed;
+    if (remainder !== 0n) {
+      payments[0].amount = (BigInt(payments[0].amount) + remainder).toString();
+    }
+
+    return payments;
+  }
+
+  private isUnfunded(engagement: Engagement): boolean {
+    return (
+      engagement.status === EngagementStatus.DRAFT ||
+      engagement.status === EngagementStatus.PENDING_APPROVAL
+    );
+  }
+
+  private validatePayoutSplits(splits: PayoutSplit[]): void {
+    if (!Array.isArray(splits) || splits.length === 0) {
+      throw new BadRequestException('At least one payout split is required');
+    }
+
+    let totalBasisPoints = 0;
+    for (const split of splits) {
+      if (!split || typeof split.address !== 'string') {
+        throw new BadRequestException('Each payout split needs an address');
+      }
+      if (!STELLAR_ADDRESS_REGEX.test(split.address)) {
+        throw new BadRequestException(
+          `Invalid Stellar address in payout split: ${split.address}`,
+        );
+      }
+      if (
+        !Number.isInteger(split.basisPoints) ||
+        split.basisPoints <= 0 ||
+        split.basisPoints > TOTAL_BASIS_POINTS
+      ) {
+        throw new BadRequestException(
+          `Invalid basis points for ${split.address}: ${split.basisPoints}`,
+        );
+      }
+      totalBasisPoints += split.basisPoints;
+    }
+
+    if (totalBasisPoints !== TOTAL_BASIS_POINTS) {
+      throw new BadRequestException(
+        `Payout splits must sum to ${TOTAL_BASIS_POINTS} bps, got ${totalBasisPoints}`,
+      );
+    }
+  }
+
+  private toStroops(amount: number, basisPoints: number): string {
+    const stroops = BigInt(Math.round(amount * 1e7));
+    return ((stroops * BigInt(basisPoints)) / BigInt(TOTAL_BASIS_POINTS))
+      .toString();
+  }
+
   private assertApprover(approver: ApproverContext): void {
     if (!approver || !APPROVER_ROLES.includes(approver.role)) {
       throw new ForbiddenException(
@@ -278,116 +405,6 @@ export class EngagementsService {
       action,
       actorId,
       createdAt: new Date().toISOString(),
-      visibility: 'company',
-    });
-    (engagement as any).auditLog = auditLog;
-  }
+      visibility: 'com
 
-  /**
-   * Loads the company approval settings. Overridable so the persistence
-   * layer can supply the real company record.
-   */
-  protected async getCompanyApprovalSettings(
-    companyId?: string,
-  ): Promise<CompanyApprovalSettings> {
-    const company = companyId
-      ? await (this.engagementRepository.manager as any)
-          .getRepository('Company')
-          .findOne({ where: { id: companyId } })
-          .catch(() => null)
-      : null;
-
-    return {
-      approvalRequired: Boolean(company?.approvalRequired),
-      approvalThreshold: Number(company?.approvalThreshold ?? 0),
-    };
-  }
-
-  async getActivity(
-    id: string,
-    options: { cursor?: string; limit?: number; isCompany?: boolean } = {},
-  ): Promise<ActivityFeed> {
-    const engagement = await this.findOne(id);
-    const limit = Math.min(Math.max(options.limit ?? 20, 1), 100);
-
-    const items: ActivityItem[] = [];
-
-    // Audit log entries
-    const auditLog = (engagement as any).auditLog ?? [];
-    for (const entry of auditLog) {
-      items.push({
-        id: `audit:${entry.id}`,
-        type: 'audit',
-        timestamp: new Date(entry.createdAt ?? entry.timestamp).toISOString(),
-        visibility: entry.visibility ?? 'company',
-        data: entry,
-      });
-    }
-
-    // Milestone history
-    for (const milestone of engagement.milestones ?? []) {
-      items.push({
-        id: `milestone:${milestone.id}`,
-        type: 'milestone',
-        timestamp: new Date(
-          (milestone as any).updatedAt ??
-            (milestone as any).createdAt ??
-            Date.now(),
-        ).toISOString(),
-        visibility: 'company',
-        data: milestone,
-      });
-    }
-
-    // Notes
-    const notes = (engagement as any).notes ?? [];
-    for (const note of notes) {
-      items.push({
-        id: `note:${note.id}`,
-        type: 'note',
-        timestamp: new Date(note.createdAt ?? note.timestamp).toISOString(),
-        visibility: note.visibility ?? 'internal',
-        data: note,
-      });
-    }
-
-    // Chain events
-    const chainEvents = (engagement as any).chainEvents ?? [];
-    for (const event of chainEvents) {
-      items.push({
-        id: `chain:${event.id}`,
-        type: 'chain',
-        timestamp: new Date(event.createdAt ?? event.timestamp).toISOString(),
-        visibility: 'company',
-        data: event,
-      });
-    }
-
-    // Respect visibility: internal notes only for company
-    const visible = options.isCompany
-      ? items
-      : items.filter((item) => item.visibility !== 'internal');
-
-    // Sort by time descending across all merged sources
-    visible.sort(
-      (a, b) =>
-        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
-    );
-
-    // Cursor pagination
-    let startIndex = 0;
-    if (options.cursor) {
-      const decoded = Buffer.from(options.cursor, 'base64').toString('utf8');
-      const cursorIndex = visible.findIndex((item) => item.id === decoded);
-      startIndex = cursorIndex >= 0 ? cursorIndex + 1 : 0;
-    }
-
-    const page = visible.slice(startIndex, startIndex + limit);
-    const hasMore = startIndex + limit < visible.length;
-    const nextCursor = hasMore
-      ? Buffer.from(page[page.length - 1].id, 'utf8').toString('base64')
-      : null;
-
-    return { items: page, nextCursor };
-  }
-}
+/* … truncated 3348 chars — edit only what you need near the top … */
