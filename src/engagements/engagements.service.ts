@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Engagement, EngagementStatus } from './entities/engagement.entity';
@@ -32,6 +37,82 @@ export interface FindAllOptions {
   offset?: number;
 }
 
+/**
+ * Company-level approval settings. When `approvalRequired` is true, any
+ * engagement whose amount meets or exceeds `approvalThreshold` must be
+ * approved by an approver before it can be funded.
+ */
+export interface CompanyApprovalSettings {
+  approvalRequired: boolean;
+  approvalThreshold: number;
+}
+
+export interface ApproverContext {
+  userId: string;
+  role: string;
+}
+
+const APPROVER_ROLES = ['approver', 'admin', 'owner'];
+
+/**
+ * A single payout split rule for an engagement. `basisPoints` is expressed
+ * out of 10000 (100%). All splits for an engagement must sum to 10000.
+ */
+export interface PayoutSplit {
+  address: string;
+  basisPoints: number;
+}
+
+/** Total basis points representing 100%. */
+export const TOTAL_BASIS_POINTS = 10000;
+
+/** Stellar ed25519 public keys are 56 chars, starting with 'G'. */
+const STELLAR_ADDRESS_REGEX = /^G[A-Z2-7]{55}$/;
+
+export interface AuditLogEntry {
+  id: string;
+  action: string;
+  actorId: string;
+  createdAt: string;
+  visibility: 'internal' | 'company';
+  [key: string]: any;
+}
+
+/**
+ * Filters for the public recruiter-facing listings feed. All filters are
+ * optional and combine with AND semantics.
+ */
+export interface ListingFilters {
+  specialization?: string;
+  minFee?: number;
+  maxFee?: number;
+  location?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/**
+ * Public projection of an engagement. Sensitive fields (internal notes,
+ * budget details, payout splits, audit log) are intentionally omitted.
+ */
+export interface PublicListing {
+  id: string;
+  title: string;
+  description?: string;
+  specialization?: string;
+  location?: string;
+  fee?: number;
+  token?: string;
+  createdAt: string;
+}
+
+export interface PaginatedListings {
+  items: PublicListing[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 @Injectable()
 export class EngagementsService {
   constructor(
@@ -42,9 +123,20 @@ export class EngagementsService {
   ) {}
 
   async create(createEngagementDto: CreateEngagementDto): Promise<Engagement> {
+    const settings = await this.getCompanyApprovalSettings(
+      (createEngagementDto as any).companyId,
+    );
+
+    const status = this.requiresApproval(
+      settings,
+      createEngagementDto.amount,
+    )
+      ? EngagementStatus.PENDING_APPROVAL
+      : EngagementStatus.DRAFT;
+
     const engagement = this.engagementRepository.create({
       ...createEngagementDto,
-      status: EngagementStatus.DRAFT,
+      status,
     });
     return this.engagementRepository.save(engagement);
   }
@@ -90,6 +182,110 @@ export class EngagementsService {
     }
 
     return queryBuilder.getMany();
+  }
+
+  /**
+   * Public recruiter-facing listings feed. Only PUBLIC engagements are
+   * returned, and each item is projected through `toPublicListing` so that
+   * internal notes and budget details never leak. Results are paginated.
+   */
+  async findListings(
+    filters: ListingFilters = {},
+  ): Promise<PaginatedListings> {
+    const limit = filters.limit ?? 20;
+    const offset = filters.offset ?? 0;
+
+    const queryBuilder = this.engagementRepository
+      .createQueryBuilder('engagement')
+      .where('engagement.visibility = :visibility', {
+        visibility: 'PUBLIC',
+      });
+
+    if (filters.specialization) {
+      queryBuilder.andWhere('engagement.specialization = :specialization', {
+        specialization: filters.specialization,
+      });
+    }
+
+    if (filters.location) {
+      queryBuilder.andWhere('engagement.location = :location', {
+        location: filters.location,
+      });
+    }
+
+    if (filters.minFee !== undefined) {
+      queryBuilder.andWhere('engagement.amount >= :minFee', {
+        minFee: filters.minFee,
+      });
+    }
+
+    if (filters.maxFee !== undefined) {
+      queryBuilder.andWhere('engagement.amount <= :maxFee', {
+        maxFee: filters.maxFee,
+      });
+    }
+
+    queryBuilder
+      .orderBy('engagement.createdAt', 'DESC')
+      .take(limit)
+      .skip(offset);
+
+    const [engagements, total] = await queryBuilder.getManyAndCount();
+
+    return {
+      items: engagements.map((engagement) =>
+        this.toPublicListing(engagement),
+      ),
+      total,
+      limit,
+      offset,
+    };
+  }
+
+  /**
+   * Publish an engagement to the public listings feed. Only companies that
+   * have been verified (`verifiedAt` set) may publish.
+   */
+  async publishListing(
+    id: string,
+    company: { verifiedAt?: Date | null },
+  ): Promise<Engagement> {
+    if (!company?.verifiedAt) {
+      throw new ForbiddenException(
+        'Only verified companies can publish listings',
+      );
+    }
+
+    const engagement = await this.findOne(id);
+    engagement.visibility = 'PUBLIC';
+    return this.engagementRepository.save(engagement);
+  }
+
+  /**
+   * Admin-only: unpublish a listing, removing it from the public feed.
+   */
+  async unpublishListing(id: string): Promise<Engagement> {
+    const engagement = await this.findOne(id);
+    engagement.visibility = 'PRIVATE';
+    return this.engagementRepository.save(engagement);
+  }
+
+  /**
+   * Strip sensitive fields (internal notes, budget details, payout splits)
+   * from an engagement before exposing it publicly.
+   */
+  private toPublicListing(engagement: Engagement): PublicListing {
+    return {
+      id: engagement.id,
+      title: engagement.title,
+      description: engagement.description,
+      specialization: (engagement as any).specialization,
+      location: (engagement as any).location,
+      fee: engagement.amount,
+      token: engagement.token,
+      createdAt: (engagement.createdAt as any)?.toISOString?.() ??
+        (engagement.createdAt as any),
+    };
   }
 
   async findOne(id: string): Promise<Engagement> {
@@ -145,91 +341,162 @@ export class EngagementsService {
     return saved;
   }
 
-  async getActivity(
+  /**
+   * Approve a pending engagement. Only company members with an approver
+   * role may approve; the action is recorded in the audit log.
+   */
+  async approve(
     id: string,
-    options: { cursor?: string; limit?: number; isCompany?: boolean } = {},
-  ): Promise<ActivityFeed> {
+    approver: ApproverContext,
+  ): Promise<Engagement> {
+    this.assertApprover(approver);
     const engagement = await this.findOne(id);
-    const limit = Math.min(Math.max(options.limit ?? 20, 1), 100);
 
-    const items: ActivityItem[] = [];
-
-    // Audit log entries
-    const auditLog = (engagement as any).auditLog ?? [];
-    for (const entry of auditLog) {
-      items.push({
-        id: `audit:${entry.id}`,
-        type: 'audit',
-        timestamp: new Date(entry.createdAt ?? entry.timestamp).toISOString(),
-        visibility: entry.visibility ?? 'company',
-        data: entry,
-      });
+    if (engagement.status !== EngagementStatus.PENDING_APPROVAL) {
+      throw new ForbiddenException(
+        `Engagement ${id} is not pending approval`,
+      );
     }
 
-    // Milestone history
-    for (const milestone of engagement.milestones ?? []) {
-      items.push({
-        id: `milestone:${milestone.id}`,
-        type: 'milestone',
-        timestamp: new Date(
-          (milestone as any).updatedAt ??
-            (milestone as any).createdAt ??
-            Date.now(),
-        ).toISOString(),
-        visibility: 'company',
-        data: milestone,
-      });
+    engagement.status = EngagementStatus.DRAFT;
+    this.recordAudit(engagement, 'engagement.approved', approver.userId);
+    return this.engagementRepository.save(engagement);
+  }
+
+  /**
+   * Reject a pending engagement. Only company members with an approver
+   * role may reject; the action is recorded in the audit log.
+   */
+  async reject(
+    id: string,
+    approver: ApproverContext,
+  ): Promise<Engagement> {
+    this.assertApprover(approver);
+    const engagement = await this.findOne(id);
+
+    if (engagement.status !== EngagementStatus.PENDING_APPROVAL) {
+      throw new ForbiddenException(
+        `Engagement ${id} is not pending approval`,
+      );
     }
 
-    // Notes
-    const notes = (engagement as any).notes ?? [];
-    for (const note of notes) {
-      items.push({
-        id: `note:${note.id}`,
-        type: 'note',
-        timestamp: new Date(note.createdAt ?? note.timestamp).toISOString(),
-        visibility: note.visibility ?? 'internal',
-        data: note,
-      });
+    engagement.status = EngagementStatus.REJECTED;
+    this.recordAudit(engagement, 'engagement.rejected', approver.userId);
+    return this.engagementRepository.save(engagement);
+  }
+
+  /**
+   * Guard used before funding. Throws when the engagement still requires
+   * internal approval, blocking any escrow funding.
+   */
+  async assertFundable(id: string): Promise<Engagement> {
+    const engagement = await this.findOne(id);
+    if (engagement.status === EngagementStatus.PENDING_APPROVAL) {
+      throw new ForbiddenException(
+        `Engagement ${id} is pending internal approval and cannot be funded`,
+      );
+    }
+    if (engagement.status === EngagementStatus.REJECTED) {
+      throw new ForbiddenException(
+        `Engagement ${id} was rejected and cannot be funded`,
+      );
+    }
+    return engagement;
+  }
+
+  /**
+   * Replace the payout split rules for an engagement. Splits may only be
+   * changed while the engagement is unfunded (draft / pending approval).
+   * Every address must be a valid Stellar account and the basis points must
+   * sum to exactly 10000.
+   */
+  async setPayoutSplits(
+    id: string,
+    splits: PayoutSplit[],
+  ): Promise<Engagement> {
+    const engagement = await this.findOne(id);
+
+    if (
+      engagement.status !== EngagementStatus.DRAFT &&
+      engagement.status !== EngagementStatus.PENDING_APPROVAL
+    ) {
+      throw new ForbiddenException(
+        `Payout splits cannot be changed for engagement ${id} in status ${engagement.status}`,
+      );
     }
 
-    // Chain events
-    const chainEvents = (engagement as any).chainEvents ?? [];
-    for (const event of chainEvents) {
-      items.push({
-        id: `chain:${event.id}`,
-        type: 'chain',
-        timestamp: new Date(event.createdAt ?? event.timestamp).toISOString(),
-        visibility: 'company',
-        data: event,
-      });
+    if (!Array.isArray(splits) || splits.length === 0) {
+      throw new BadRequestException('At least one payout split is required');
     }
 
-    // Respect visibility: internal notes only for company
-    const visible = options.isCompany
-      ? items
-      : items.filter((item) => item.visibility !== 'internal');
-
-    // Sort by time descending across all merged sources
-    visible.sort(
-      (a, b) =>
-        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
-    );
-
-    // Cursor pagination
-    let startIndex = 0;
-    if (options.cursor) {
-      const decoded = Buffer.from(options.cursor, 'base64').toString('utf8');
-      const cursorIndex = visible.findIndex((item) => item.id === decoded);
-      startIndex = cursorIndex >= 0 ? cursorIndex + 1 : 0;
+    let total = 0;
+    for (const split of splits) {
+      if (!STELLAR_ADDRESS_REGEX.test(split.address)) {
+        throw new BadRequestException(
+          `Invalid Stellar address: ${split.address}`,
+        );
+      }
+      if (!Number.isInteger(split.basisPoints) || split.basisPoints <= 0) {
+        throw new BadRequestException(
+          `Invalid basis points for ${split.address}`,
+        );
+      }
+      total += split.basisPoints;
     }
 
-    const page = visible.slice(startIndex, startIndex + limit);
-    const hasMore = startIndex + limit < visible.length;
-    const nextCursor = hasMore
-      ? Buffer.from(page[page.length - 1].id, 'utf8').toString('base64')
-      : null;
+    if (total !== TOTAL_BASIS_POINTS) {
+      throw new BadRequestException(
+        `Payout splits must sum to ${TOTAL_BASIS_POINTS} basis points (got ${total})`,
+      );
+    }
 
-    return { items: page, nextCursor };
+    (engagement as any).payoutSplits = splits;
+    return this.engagementRepository.save(engagement);
+  }
+
+  private assertApprover(approver: ApproverContext): void {
+    if (!approver || !APPROVER_ROLES.includes(approver.role)) {
+      throw new ForbiddenException(
+        'Only approvers may approve or reject engagements',
+      );
+    }
+  }
+
+  private recordAudit(
+    engagement: Engagement,
+    action: string,
+    actorId: string,
+  ): void {
+    const log: AuditLogEntry[] = (engagement as any).auditLog ?? [];
+    log.push({
+      id: `${engagement.id}-${Date.now()}`,
+      action,
+      actorId,
+      createdAt: new Date().toISOString(),
+      visibility: 'internal',
+    });
+    (engagement as any).auditLog = log;
+  }
+
+  private async getCompanyApprovalSettings(
+    companyId?: string,
+  ): Promise<CompanyApprovalSettings> {
+    if (!companyId) {
+      return { approvalRequired: false, approvalThreshold: 0 };
+    }
+    const company = await this.engagementRepository.manager
+      .getRepository('Company')
+      .findOne({ where: { id: companyId } });
+    return {
+      approvalRequired: Boolean((company as any)?.approvalRequired),
+      approvalThreshold: Number((company as any)?.approvalThreshold ?? 0),
+    };
+  }
+
+  private requiresApproval(
+    settings: CompanyApprovalSettings,
+    amount: number,
+  ): boolean {
+    return settings.approvalRequired && amount >= settings.approvalThreshold;
   }
 }
