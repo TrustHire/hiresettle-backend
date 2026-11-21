@@ -78,6 +78,41 @@ export interface AuditLogEntry {
   [key: string]: any;
 }
 
+/**
+ * Filters for the public recruiter-facing listings feed. All filters are
+ * optional and combine with AND semantics.
+ */
+export interface ListingFilters {
+  specialization?: string;
+  minFee?: number;
+  maxFee?: number;
+  location?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/**
+ * Public projection of an engagement. Sensitive fields (internal notes,
+ * budget details, payout splits, audit log) are intentionally omitted.
+ */
+export interface PublicListing {
+  id: string;
+  title: string;
+  description?: string;
+  specialization?: string;
+  location?: string;
+  fee?: number;
+  token?: string;
+  createdAt: string;
+}
+
+export interface PaginatedListings {
+  items: PublicListing[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 @Injectable()
 export class EngagementsService {
   constructor(
@@ -147,6 +182,110 @@ export class EngagementsService {
     }
 
     return queryBuilder.getMany();
+  }
+
+  /**
+   * Public recruiter-facing listings feed. Only PUBLIC engagements are
+   * returned, and each item is projected through `toPublicListing` so that
+   * internal notes and budget details never leak. Results are paginated.
+   */
+  async findListings(
+    filters: ListingFilters = {},
+  ): Promise<PaginatedListings> {
+    const limit = filters.limit ?? 20;
+    const offset = filters.offset ?? 0;
+
+    const queryBuilder = this.engagementRepository
+      .createQueryBuilder('engagement')
+      .where('engagement.visibility = :visibility', {
+        visibility: 'PUBLIC',
+      });
+
+    if (filters.specialization) {
+      queryBuilder.andWhere('engagement.specialization = :specialization', {
+        specialization: filters.specialization,
+      });
+    }
+
+    if (filters.location) {
+      queryBuilder.andWhere('engagement.location = :location', {
+        location: filters.location,
+      });
+    }
+
+    if (filters.minFee !== undefined) {
+      queryBuilder.andWhere('engagement.amount >= :minFee', {
+        minFee: filters.minFee,
+      });
+    }
+
+    if (filters.maxFee !== undefined) {
+      queryBuilder.andWhere('engagement.amount <= :maxFee', {
+        maxFee: filters.maxFee,
+      });
+    }
+
+    queryBuilder
+      .orderBy('engagement.createdAt', 'DESC')
+      .take(limit)
+      .skip(offset);
+
+    const [engagements, total] = await queryBuilder.getManyAndCount();
+
+    return {
+      items: engagements.map((engagement) =>
+        this.toPublicListing(engagement),
+      ),
+      total,
+      limit,
+      offset,
+    };
+  }
+
+  /**
+   * Publish an engagement to the public listings feed. Only companies that
+   * have been verified (`verifiedAt` set) may publish.
+   */
+  async publishListing(
+    id: string,
+    company: { verifiedAt?: Date | null },
+  ): Promise<Engagement> {
+    if (!company?.verifiedAt) {
+      throw new ForbiddenException(
+        'Only verified companies can publish listings',
+      );
+    }
+
+    const engagement = await this.findOne(id);
+    engagement.visibility = 'PUBLIC';
+    return this.engagementRepository.save(engagement);
+  }
+
+  /**
+   * Admin-only: unpublish a listing, removing it from the public feed.
+   */
+  async unpublishListing(id: string): Promise<Engagement> {
+    const engagement = await this.findOne(id);
+    engagement.visibility = 'PRIVATE';
+    return this.engagementRepository.save(engagement);
+  }
+
+  /**
+   * Strip sensitive fields (internal notes, budget details, payout splits)
+   * from an engagement before exposing it publicly.
+   */
+  private toPublicListing(engagement: Engagement): PublicListing {
+    return {
+      id: engagement.id,
+      title: engagement.title,
+      description: engagement.description,
+      specialization: (engagement as any).specialization,
+      location: (engagement as any).location,
+      fee: engagement.amount,
+      token: engagement.token,
+      createdAt: (engagement.createdAt as any)?.toISOString?.() ??
+        (engagement.createdAt as any),
+    };
   }
 
   async findOne(id: string): Promise<Engagement> {
@@ -277,121 +416,50 @@ export class EngagementsService {
   ): Promise<Engagement> {
     const engagement = await this.findOne(id);
 
-    if (!this.isUnfunded(engagement)) {
+    if (
+      engagement.status !== EngagementStatus.DRAFT &&
+      engagement.status !== EngagementStatus.PENDING_APPROVAL
+    ) {
       throw new ForbiddenException(
-        `Payout splits for engagement ${id} can only change while unfunded`,
+        `Payout splits cannot be changed for engagement ${id} in status ${engagement.status}`,
       );
     }
 
-    this.validatePayoutSplits(splits);
-
-    (engagement as any).payoutSplits = splits.map((split) => ({
-      address: split.address,
-      basisPoints: split.basisPoints,
-    }));
-
-    return this.engagementRepository.save(engagement);
-  }
-
-  /**
-   * Build the multi-operation payment for a milestone release, distributing
-   * the amount across the engagement's payout splits. Rounding remainders
-   * are assigned to the primary (first) recruiter split.
-   */
-  buildReleasePayments(
-    engagement: Engagement,
-    amount: number,
-  ): Array<{ destination: string; amount: string }> {
-    const splits: PayoutSplit[] = (engagement as any).payoutSplits ?? [];
-    if (!splits.length) {
-      return [];
-    }
-
-    this.validatePayoutSplits(splits);
-
-    const total = Number(amount);
-    const payments = splits.map((split) => ({
-      destination: split.address,
-      amount: this.toStroops(total, split.basisPoints),
-    }));
-
-    // Assign any rounding remainder to the primary recruiter (first split).
-    const distributed = payments.reduce(
-      (sum, payment) => sum + BigInt(payment.amount),
-      0n,
-    );
-    const expected = BigInt(Math.round(total * 1e7));
-    const remainder = expected - distributed;
-    if (remainder !== 0n) {
-      payments[0].amount = (BigInt(payments[0].amount) + remainder).toString();
-    }
-
-    return payments;
-  }
-
-  private isUnfunded(engagement: Engagement): boolean {
-    return (
-      engagement.status === EngagementStatus.DRAFT ||
-      engagement.status === EngagementStatus.PENDING_APPROVAL
-    );
-  }
-
-  private validatePayoutSplits(splits: PayoutSplit[]): void {
     if (!Array.isArray(splits) || splits.length === 0) {
       throw new BadRequestException('At least one payout split is required');
     }
 
-    let totalBasisPoints = 0;
+    let total = 0;
     for (const split of splits) {
-      if (!split || typeof split.address !== 'string') {
-        throw new BadRequestException('Each payout split needs an address');
-      }
       if (!STELLAR_ADDRESS_REGEX.test(split.address)) {
         throw new BadRequestException(
-          `Invalid Stellar address in payout split: ${split.address}`,
+          `Invalid Stellar address: ${split.address}`,
         );
       }
-      if (
-        !Number.isInteger(split.basisPoints) ||
-        split.basisPoints <= 0 ||
-        split.basisPoints > TOTAL_BASIS_POINTS
-      ) {
+      if (!Number.isInteger(split.basisPoints) || split.basisPoints <= 0) {
         throw new BadRequestException(
-          `Invalid basis points for ${split.address}: ${split.basisPoints}`,
+          `Invalid basis points for ${split.address}`,
         );
       }
-      totalBasisPoints += split.basisPoints;
+      total += split.basisPoints;
     }
 
-    if (totalBasisPoints !== TOTAL_BASIS_POINTS) {
+    if (total !== TOTAL_BASIS_POINTS) {
       throw new BadRequestException(
-        `Payout splits must sum to ${TOTAL_BASIS_POINTS} bps, got ${totalBasisPoints}`,
+        `Payout splits must sum to ${TOTAL_BASIS_POINTS} basis points (got ${total})`,
       );
     }
-  }
 
-  private toStroops(amount: number, basisPoints: number): string {
-    const stroops = BigInt(Math.round(amount * 1e7));
-    return ((stroops * BigInt(basisPoints)) / BigInt(TOTAL_BASIS_POINTS))
-      .toString();
+    (engagement as any).payoutSplits = splits;
+    return this.engagementRepository.save(engagement);
   }
 
   private assertApprover(approver: ApproverContext): void {
     if (!approver || !APPROVER_ROLES.includes(approver.role)) {
       throw new ForbiddenException(
-        'Only company members with an approver role may approve or reject engagements',
+        'Only approvers may approve or reject engagements',
       );
     }
-  }
-
-  private requiresApproval(
-    settings: CompanyApprovalSettings,
-    amount: number,
-  ): boolean {
-    if (!settings.approvalRequired) {
-      return false;
-    }
-    return Number(amount) >= Number(settings.approvalThreshold ?? 0);
   }
 
   private recordAudit(
@@ -399,12 +467,36 @@ export class EngagementsService {
     action: string,
     actorId: string,
   ): void {
-    const auditLog: AuditLogEntry[] = (engagement as any).auditLog ?? [];
-    auditLog.push({
-      id: `${action}:${actorId}:${Date.now()}`,
+    const log: AuditLogEntry[] = (engagement as any).auditLog ?? [];
+    log.push({
+      id: `${engagement.id}-${Date.now()}`,
       action,
       actorId,
       createdAt: new Date().toISOString(),
-      visibility: 'com
+      visibility: 'internal',
+    });
+    (engagement as any).auditLog = log;
+  }
 
-/* … truncated 3348 chars — edit only what you need near the top … */
+  private async getCompanyApprovalSettings(
+    companyId?: string,
+  ): Promise<CompanyApprovalSettings> {
+    if (!companyId) {
+      return { approvalRequired: false, approvalThreshold: 0 };
+    }
+    const company = await this.engagementRepository.manager
+      .getRepository('Company')
+      .findOne({ where: { id: companyId } });
+    return {
+      approvalRequired: Boolean((company as any)?.approvalRequired),
+      approvalThreshold: Number((company as any)?.approvalThreshold ?? 0),
+    };
+  }
+
+  private requiresApproval(
+    settings: CompanyApprovalSettings,
+    amount: number,
+  ): boolean {
+    return settings.approvalRequired && amount >= settings.approvalThreshold;
+  }
+}
