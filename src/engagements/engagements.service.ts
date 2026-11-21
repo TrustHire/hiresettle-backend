@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Engagement, EngagementStatus } from './entities/engagement.entity';
@@ -32,6 +36,32 @@ export interface FindAllOptions {
   offset?: number;
 }
 
+/**
+ * Company-level approval settings. When `approvalRequired` is true, any
+ * engagement whose amount meets or exceeds `approvalThreshold` must be
+ * approved by an approver before it can be funded.
+ */
+export interface CompanyApprovalSettings {
+  approvalRequired: boolean;
+  approvalThreshold: number;
+}
+
+export interface ApproverContext {
+  userId: string;
+  role: string;
+}
+
+const APPROVER_ROLES = ['approver', 'admin', 'owner'];
+
+export interface AuditLogEntry {
+  id: string;
+  action: string;
+  actorId: string;
+  createdAt: string;
+  visibility: 'internal' | 'company';
+  [key: string]: any;
+}
+
 @Injectable()
 export class EngagementsService {
   constructor(
@@ -42,9 +72,20 @@ export class EngagementsService {
   ) {}
 
   async create(createEngagementDto: CreateEngagementDto): Promise<Engagement> {
+    const settings = await this.getCompanyApprovalSettings(
+      (createEngagementDto as any).companyId,
+    );
+
+    const status = this.requiresApproval(
+      settings,
+      createEngagementDto.amount,
+    )
+      ? EngagementStatus.PENDING_APPROVAL
+      : EngagementStatus.DRAFT;
+
     const engagement = this.engagementRepository.create({
       ...createEngagementDto,
-      status: EngagementStatus.DRAFT,
+      status,
     });
     return this.engagementRepository.save(engagement);
   }
@@ -143,6 +184,123 @@ export class EngagementsService {
     }
 
     return saved;
+  }
+
+  /**
+   * Approve a pending engagement. Only company members with an approver
+   * role may approve; the action is recorded in the audit log.
+   */
+  async approve(
+    id: string,
+    approver: ApproverContext,
+  ): Promise<Engagement> {
+    this.assertApprover(approver);
+    const engagement = await this.findOne(id);
+
+    if (engagement.status !== EngagementStatus.PENDING_APPROVAL) {
+      throw new ForbiddenException(
+        `Engagement ${id} is not pending approval`,
+      );
+    }
+
+    engagement.status = EngagementStatus.DRAFT;
+    this.recordAudit(engagement, 'engagement.approved', approver.userId);
+    return this.engagementRepository.save(engagement);
+  }
+
+  /**
+   * Reject a pending engagement. Only company members with an approver
+   * role may reject; the action is recorded in the audit log.
+   */
+  async reject(
+    id: string,
+    approver: ApproverContext,
+  ): Promise<Engagement> {
+    this.assertApprover(approver);
+    const engagement = await this.findOne(id);
+
+    if (engagement.status !== EngagementStatus.PENDING_APPROVAL) {
+      throw new ForbiddenException(
+        `Engagement ${id} is not pending approval`,
+      );
+    }
+
+    engagement.status = EngagementStatus.REJECTED;
+    this.recordAudit(engagement, 'engagement.rejected', approver.userId);
+    return this.engagementRepository.save(engagement);
+  }
+
+  /**
+   * Guard used before funding. Throws when the engagement still requires
+   * internal approval, blocking any escrow funding.
+   */
+  async assertFundable(id: string): Promise<Engagement> {
+    const engagement = await this.findOne(id);
+    if (engagement.status === EngagementStatus.PENDING_APPROVAL) {
+      throw new ForbiddenException(
+        `Engagement ${id} is pending internal approval and cannot be funded`,
+      );
+    }
+    if (engagement.status === EngagementStatus.REJECTED) {
+      throw new ForbiddenException(
+        `Engagement ${id} was rejected and cannot be funded`,
+      );
+    }
+    return engagement;
+  }
+
+  private assertApprover(approver: ApproverContext): void {
+    if (!approver || !APPROVER_ROLES.includes(approver.role)) {
+      throw new ForbiddenException(
+        'Only company members with an approver role may approve or reject engagements',
+      );
+    }
+  }
+
+  private requiresApproval(
+    settings: CompanyApprovalSettings,
+    amount: number,
+  ): boolean {
+    if (!settings.approvalRequired) {
+      return false;
+    }
+    return Number(amount) >= Number(settings.approvalThreshold ?? 0);
+  }
+
+  private recordAudit(
+    engagement: Engagement,
+    action: string,
+    actorId: string,
+  ): void {
+    const auditLog: AuditLogEntry[] = (engagement as any).auditLog ?? [];
+    auditLog.push({
+      id: `${action}:${actorId}:${Date.now()}`,
+      action,
+      actorId,
+      createdAt: new Date().toISOString(),
+      visibility: 'company',
+    });
+    (engagement as any).auditLog = auditLog;
+  }
+
+  /**
+   * Loads the company approval settings. Overridable so the persistence
+   * layer can supply the real company record.
+   */
+  protected async getCompanyApprovalSettings(
+    companyId?: string,
+  ): Promise<CompanyApprovalSettings> {
+    const company = companyId
+      ? await (this.engagementRepository.manager as any)
+          .getRepository('Company')
+          .findOne({ where: { id: companyId } })
+          .catch(() => null)
+      : null;
+
+    return {
+      approvalRequired: Boolean(company?.approvalRequired),
+      approvalThreshold: Number(company?.approvalThreshold ?? 0),
+    };
   }
 
   async getActivity(
