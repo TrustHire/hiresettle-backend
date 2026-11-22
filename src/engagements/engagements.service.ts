@@ -427,23 +427,15 @@ export class EngagementsService {
 
   async getActivity(
     id: string,
-    options: { cursor?: string; limit?: number; isCompany?: boolean } = {},
-  ): Promise<ActivityFeed> {
+    approver: ApproverContext,
+  ): Promise<Engagement> {
+    this.assertApprover(approver);
     const engagement = await this.findOne(id);
-    const limit = Math.min(Math.max(options.limit ?? 20, 1), 100);
 
-    const items: ActivityItem[] = [];
-
-    // Audit log entries
-    const auditLog = (engagement as any).auditLog ?? [];
-    for (const entry of auditLog) {
-      items.push({
-        id: `audit:${entry.id}`,
-        type: 'audit',
-        timestamp: new Date(entry.createdAt ?? entry.timestamp).toISOString(),
-        visibility: entry.visibility ?? 'company',
-        data: entry,
-      });
+    if (engagement.status !== EngagementStatus.PENDING_APPROVAL) {
+      throw new ForbiddenException(
+        `Engagement ${id} is not pending approval`,
+      );
     }
 
   /**
