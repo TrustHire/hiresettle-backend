@@ -1,6 +1,11 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, MoreThan, Not, Repository } from 'typeorm';
 import { Engagement, EngagementStatus } from './entities/engagement.entity';
 import { Milestone } from './entities/milestone.entity';
 import { CreateEngagementDto } from './dto/create-engagement.dto';
@@ -32,39 +37,40 @@ export interface FindAllOptions {
   offset?: number;
 }
 
-/**
- * Configurable risk-scoring rules. Values are sourced from SystemConfig
- * (see `getRiskConfig`) so admins can tune thresholds without a deploy.
- */
-export interface RiskScoringConfig {
-  /** Score at or above which an engagement is flagged for admin review. */
-  flagThreshold: number;
-  /** Window (ms) used to detect rapid creation/cancellation velocity. */
-  velocityWindowMs: number;
-  /** Number of same-party engagements within the window that triggers a hit. */
-  velocityCountThreshold: number;
-  /** Points added per velocity hit. */
-  velocityWeight: number;
-  /** Account age (days) below which the account is considered new. */
-  newAccountDays: number;
-  /** Points added for a new account. */
-  newAccountWeight: number;
-  /** Points added when KYC is not verified. */
-  kycUnverifiedWeight: number;
-  /** Points added per prior dispute. */
-  priorDisputeWeight: number;
+export interface ExportOptions {
+  q?: string;
+  status?: EngagementStatus;
+  companyId: string;
 }
 
-export const DEFAULT_RISK_CONFIG: RiskScoringConfig = {
-  flagThreshold: 60,
-  velocityWindowMs: 24 * 60 * 60 * 1000,
-  velocityCountThreshold: 3,
-  velocityWeight: 30,
-  newAccountDays: 7,
-  newAccountWeight: 20,
-  kycUnverifiedWeight: 25,
-  priorDisputeWeight: 15,
-};
+export interface ExclusivityStatus {
+  active: boolean;
+  exclusiveUntil: Date | null;
+}
+
+const EXCLUSIVITY_NOTICE_DAYS = 3;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const CSV_COLUMNS = [
+  'id',
+  'title',
+  'status',
+  'amount',
+  'token',
+  'createdAt',
+  'updatedAt',
+] as const;
+
+function escapeCsvValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  const str = value instanceof Date ? value.toISOString() : String(value);
+  if (/[",\n\r]/.test(str)) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
 
 @Injectable()
 export class EngagementsService {
@@ -76,6 +82,8 @@ export class EngagementsService {
   ) {}
 
   async create(createEngagementDto: CreateEngagementDto): Promise<Engagement> {
+    await this.assertNoActiveExclusivity(createEngagementDto);
+
     const engagement = this.engagementRepository.create({
       ...createEngagementDto,
       status: EngagementStatus.DRAFT,
@@ -89,95 +97,86 @@ export class EngagementsService {
   }
 
   /**
-   * Resolve risk-scoring rules from SystemConfig, falling back to defaults.
-   * SystemConfig is read defensively so this works even when the config
-   * repository is not wired into this service.
+   * Rejects a new engagement when another recruiter already holds an active
+   * exclusivity window for the same company + job title.
    */
-  private async getRiskConfig(): Promise<RiskScoringConfig> {
-    const configRepo = (this.engagementRepository.manager as any)?.getRepository?.(
-      'SystemConfig',
-    );
-    if (!configRepo) {
-      return DEFAULT_RISK_CONFIG;
-    }
-    try {
-      const rows: Array<{ key: string; value: any }> = await configRepo.find({
-        where: { key: 'riskScoring' },
-      });
-      const stored = rows?.[0]?.value;
-      if (stored && typeof stored === 'object') {
-        return { ...DEFAULT_RISK_CONFIG, ...stored };
-      }
-    } catch {
-      // Fall through to defaults if SystemConfig is unavailable.
-    }
-    return DEFAULT_RISK_CONFIG;
-  }
+  private async assertNoActiveExclusivity(
+    dto: CreateEngagementDto,
+  ): Promise<void> {
+    const companyId = (dto as any).companyId;
+    const title = (dto as any).title;
+    const recruiterId = (dto as any).recruiterId;
 
-  /**
-   * Compute a risk score (0-100) from velocity, account age, KYC status and
-   * prior disputes. Returns the score and whether it exceeds the flag
-   * threshold. Flagging never blocks the engagement; admins decide.
-   */
-  async computeRiskScore(
-    engagement: Partial<Engagement>,
-  ): Promise<{ score: number; flagged: boolean }> {
-    const config = await this.getRiskConfig();
-    let score = 0;
-
-    // Velocity: rapid creation/cancellation between the same parties.
-    const companyId = (engagement as any).companyId;
-    const recruiterId = (engagement as any).recruiterId;
-    if (companyId && recruiterId) {
-      const since = new Date(Date.now() - config.velocityWindowMs);
-      const recent = await this.engagementRepository
-        .createQueryBuilder('engagement')
-        .where('engagement.companyId = :companyId', { companyId })
-        .andWhere('engagement.recruiterId = :recruiterId', { recruiterId })
-        .andWhere('engagement.createdAt >= :since', { since })
-        .getCount();
-      if (recent >= config.velocityCountThreshold) {
-        score += config.velocityWeight;
-      }
+    if (!companyId || !title) {
+      return;
     }
 
-    // Account age: newer accounts carry more risk.
-    const accountCreatedAt = (engagement as any).accountCreatedAt;
-    if (accountCreatedAt) {
-      const ageDays =
-        (Date.now() - new Date(accountCreatedAt).getTime()) /
-        (24 * 60 * 60 * 1000);
-      if (ageDays < config.newAccountDays) {
-        score += config.newAccountWeight;
-      }
-    }
-
-    // KYC status: unverified parties add risk.
-    const kycStatus = (engagement as any).kycStatus;
-    if (kycStatus && kycStatus !== 'verified') {
-      score += config.kycUnverifiedWeight;
-    }
-
-    // Prior disputes between the parties.
-    const priorDisputes = Number((engagement as any).priorDisputes ?? 0);
-    if (priorDisputes > 0) {
-      score += priorDisputes * config.priorDisputeWeight;
-    }
-
-    score = Math.max(0, Math.min(100, Math.round(score)));
-    return { score, flagged: score >= config.flagThreshold };
-  }
-
-  /**
-   * List engagements flagged for admin review. Flagged engagements remain
-   * fully operational unless an admin explicitly blocks them.
-   */
-  async findFlagged(): Promise<Engagement[]> {
-    return this.engagementRepository.find({
-      where: { riskFlagged: true } as any,
-      relations: ['milestones'],
-      order: { riskScore: 'DESC' } as any,
+    const conflicting = await this.engagementRepository.findOne({
+      where: {
+        companyId,
+        title,
+        exclusiveUntil: MoreThan(new Date()),
+        ...(recruiterId ? { recruiterId: Not(recruiterId) } : {}),
+      } as any,
     });
+
+    if (conflicting) {
+      throw new ConflictException({
+        statusCode: 409,
+        error: 'ENGAGEMENT_EXCLUSIVITY_CONFLICT',
+        message: `An exclusive engagement for "${title}" is active until ${new Date(
+          conflicting.exclusiveUntil as Date,
+        ).toISOString()}`,
+      });
+    }
+  }
+
+  /**
+   * Exclusivity end date may only be shortened without recruiter consent.
+   */
+  private assertExclusivityChangeAllowed(
+    current: Date | null | undefined,
+    next: Date | null | undefined,
+    recruiterConsent: boolean,
+  ): void {
+    if (!current || !next || recruiterConsent) {
+      return;
+    }
+    if (new Date(next).getTime() > new Date(current).getTime()) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        error: 'ENGAGEMENT_EXCLUSIVITY_EXTENSION_FORBIDDEN',
+        message:
+          'Exclusivity end date can only be shortened without recruiter consent',
+      });
+    }
+  }
+
+  getExclusivityStatus(engagement: Engagement): ExclusivityStatus {
+    const exclusiveUntil = (engagement as any).exclusiveUntil ?? null;
+    return {
+      active: !!exclusiveUntil && new Date(exclusiveUntil).getTime() > Date.now(),
+      exclusiveUntil,
+    };
+  }
+
+  /**
+   * Returns engagements whose exclusivity ends within the next 3 days so both
+   * parties can be notified ahead of expiry.
+   */
+  async findExclusivityExpiringSoon(): Promise<Engagement[]> {
+    const now = new Date();
+    const horizon = new Date(now.getTime() + EXCLUSIVITY_NOTICE_DAYS * DAY_MS);
+    return this.engagementRepository.find({
+      where: {
+        exclusiveUntil: MoreThan(now),
+      } as any,
+    }).then((rows) =>
+      rows.filter((row) => {
+        const until = (row as any).exclusiveUntil;
+        return until && new Date(until).getTime() <= horizon.getTime();
+      }),
+    );
   }
 
   async findAll(options: FindAllOptions = {}): Promise<Engagement[]> {
@@ -223,6 +222,65 @@ export class EngagementsService {
     return queryBuilder.getMany();
   }
 
+  /**
+   * Streams a CSV export of the caller's company engagements, reusing the
+   * same list filters (q, status) as findAll. Scoped strictly to companyId
+   * so no cross-company rows can leak. Rows are streamed in batches to keep
+   * memory bounded for large sets.
+   */
+  async *exportCsv(options: ExportOptions): AsyncGenerator<string> {
+    const { q, status, companyId } = options;
+
+    const queryBuilder = this.engagementRepository
+      .createQueryBuilder('engagement')
+      .where('engagement.companyId = :companyId', { companyId });
+
+    if (q && q.trim()) {
+      queryBuilder.andWhere(
+        'engagement.search_vector @@ plainto_tsquery(\'english\', :q)',
+        { q: q.trim() },
+      );
+    }
+
+    if (status) {
+      queryBuilder.andWhere('engagement.status = :status', { status });
+    }
+
+    queryBuilder.orderBy('engagement.createdAt', 'DESC');
+
+    yield CSV_COLUMNS.join(',') + '\n';
+
+    const batchSize = 500;
+    let offset = 0;
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const rows = await queryBuilder
+        .clone()
+        .skip(offset)
+        .take(batchSize)
+        .getMany();
+
+      if (rows.length === 0) {
+        break;
+      }
+
+      for (const row of rows) {
+        yield (
+          CSV_COLUMNS.map((column) =>
+            escapeCsvValue((row as any)[column]),
+          ).join(',') + '\n'
+        );
+      }
+
+      if (rows.length < batchSize) {
+        break;
+      }
+
+      offset += batchSize;
+    }
+  }
+
   async findOne(id: string): Promise<Engagement> {
     const engagement = await this.engagementRepository.findOne({
       where: { id },
@@ -239,6 +297,15 @@ export class EngagementsService {
     updateEngagementDto: UpdateEngagementDto,
   ): Promise<Engagement> {
     const engagement = await this.findOne(id);
+
+    if ((updateEngagementDto as any).exclusiveUntil !== undefined) {
+      this.assertExclusivityChangeAllowed(
+        (engagement as any).exclusiveUntil,
+        (updateEngagementDto as any).exclusiveUntil,
+        !!(updateEngagementDto as any).recruiterConsent,
+      );
+    }
+
     Object.assign(engagement, updateEngagementDto);
     return this.engagementRepository.save(engagement);
   }
@@ -274,6 +341,74 @@ export class EngagementsService {
     }
 
     return saved;
+  }
+
+  /**
+   * Build the canonical agreement terms for an engagement. The terms are
+   * derived from the persisted engagement so the hash always reflects the
+   * current state of the record.
+   */
+  async buildAgreementTerms(id: string): Promise<AgreementTerms> {
+    const engagement = await this.findOne(id);
+    return {
+      engagementId: engagement.id,
+      parties: {
+        companyId: (engagement as any).companyId ?? '',
+        recruiterId: (engagement as any).recruiterId ?? '',
+      },
+      fee: {
+        amount: String(engagement.amount ?? '0'),
+        token: engagement.token ?? '',
+      },
+      milestones: (engagement.milestones ?? []).map((m) => ({
+        title: m.title,
+        amount: String(m.amount ?? '0'),
+      })),
+      retentionDays: Number((engagement as any).retentionDays ?? 0),
+    };
+  }
+
+  /**
+   * Record both parties' signatures over the canonical terms hash. The hash is
+   * attached as the memo of the funding transaction so it is anchored on-chain.
+   */
+  async signAgreement(
+    id: string,
+    signatures: AgreementSignature[],
+  ): Promise<AgreementRecord> {
+    const terms = await this.buildAgreementTerms(id);
+    const hash = hashTerms(terms);
+
+    const parties = new Set(signatures.map((s) => s.party));
+    if (!parties.has('company') || !parties.has('recruiter')) {
+      throw new BadRequestException(
+        'Both company and recruiter must sign the agreement',
+      );
+    }
+
+    const engagement = await this.findOne(id);
+    (engagement as any).agreementHash = hash;
+    (engagement as any).agreementSignatures = signatures;
+    (engagement as any).agreementMemo = hash;
+    await this.engagementRepository.save(engagement);
+
+    return { terms, hash, signatures, memo: hash };
+  }
+
+  /**
+   * Return the agreement terms, hash and signatures. The hash is recomputed
+   * from the current terms so that editing terms after signing invalidates
+   * the stored signatures.
+   */
+  async getAgreement(id: string): Promise<AgreementRecord> {
+    const engagement = await this.findOne(id);
+    const terms = await this.buildAgreementTerms(id);
+    const hash = hashTerms(terms);
+    const signatures: AgreementSignature[] =
+      (engagement as any).agreementSignatures ?? [];
+    const memo = (engagement as any).agreementMemo ?? hash;
+
+    return { terms, hash, signatures, memo };
   }
 
   async getActivity(
@@ -336,31 +471,20 @@ export class EngagementsService {
       });
     }
 
-    // Respect visibility: internal notes only for company
-    const visible = options.isCompany
-      ? items
-      : items.filter((item) => item.visibility !== 'internal');
+    items.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
 
-    // Sort by time descending across all merged sources
-    visible.sort(
-      (a, b) =>
-        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
-    );
-
-    // Cursor pagination
     let startIndex = 0;
     if (options.cursor) {
-      const decoded = Buffer.from(options.cursor, 'base64').toString('utf8');
-      const cursorIndex = visible.findIndex((item) => item.id === decoded);
+      const cursorIndex = items.findIndex((item) => item.id === options.cursor);
       startIndex = cursorIndex >= 0 ? cursorIndex + 1 : 0;
     }
 
-    const page = visible.slice(startIndex, startIndex + limit);
-    const hasMore = startIndex + limit < visible.length;
-    const nextCursor = hasMore
-      ? Buffer.from(page[page.length - 1].id, 'utf8').toString('base64')
-      : null;
+    const page = items.slice(startIndex, startIndex + limit);
+    const hasMore = startIndex + limit < items.length;
 
-    return { items: page, nextCursor };
+    return {
+      items: page,
+      nextCursor: hasMore ? page[page.length - 1]?.id ?? null : null,
+    };
   }
 }
