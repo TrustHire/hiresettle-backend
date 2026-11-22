@@ -1,11 +1,11 @@
 import {
-  BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, MoreThan, Not, Repository } from 'typeorm';
 import { Engagement, EngagementStatus } from './entities/engagement.entity';
 import { Milestone } from './entities/milestone.entity';
 import { CreateEngagementDto } from './dto/create-engagement.dto';
@@ -37,80 +37,39 @@ export interface FindAllOptions {
   offset?: number;
 }
 
-/**
- * Company-level approval settings. When `approvalRequired` is true, any
- * engagement whose amount meets or exceeds `approvalThreshold` must be
- * approved by an approver before it can be funded.
- */
-export interface CompanyApprovalSettings {
-  approvalRequired: boolean;
-  approvalThreshold: number;
+export interface ExportOptions {
+  q?: string;
+  status?: EngagementStatus;
+  companyId: string;
 }
 
-export interface ApproverContext {
-  userId: string;
-  role: string;
+export interface ExclusivityStatus {
+  active: boolean;
+  exclusiveUntil: Date | null;
 }
 
-const APPROVER_ROLES = ['approver', 'admin', 'owner'];
+const EXCLUSIVITY_NOTICE_DAYS = 3;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
-/**
- * A single payout split rule for an engagement. `basisPoints` is expressed
- * out of 10000 (100%). All splits for an engagement must sum to 10000.
- */
-export interface PayoutSplit {
-  address: string;
-  basisPoints: number;
-}
+const CSV_COLUMNS = [
+  'id',
+  'title',
+  'status',
+  'amount',
+  'token',
+  'createdAt',
+  'updatedAt',
+] as const;
 
-/** Total basis points representing 100%. */
-export const TOTAL_BASIS_POINTS = 10000;
-
-/** Stellar ed25519 public keys are 56 chars, starting with 'G'. */
-const STELLAR_ADDRESS_REGEX = /^G[A-Z2-7]{55}$/;
-
-export interface AuditLogEntry {
-  id: string;
-  action: string;
-  actorId: string;
-  createdAt: string;
-  visibility: 'internal' | 'company';
-  [key: string]: any;
-}
-
-/**
- * Filters for the public recruiter-facing listings feed. All filters are
- * optional and combine with AND semantics.
- */
-export interface ListingFilters {
-  specialization?: string;
-  minFee?: number;
-  maxFee?: number;
-  location?: string;
-  limit?: number;
-  offset?: number;
-}
-
-/**
- * Public projection of an engagement. Sensitive fields (internal notes,
- * budget details, payout splits, audit log) are intentionally omitted.
- */
-export interface PublicListing {
-  id: string;
-  title: string;
-  description?: string;
-  specialization?: string;
-  location?: string;
-  fee?: number;
-  token?: string;
-  createdAt: string;
-}
-
-export interface PaginatedListings {
-  items: PublicListing[];
-  total: number;
-  limit: number;
-  offset: number;
+function escapeCsvValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  const str = value instanceof Date ? value.toISOString() : String(value);
+  if (/[",\n\r]/.test(str)) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
 }
 
 @Injectable()
@@ -123,22 +82,102 @@ export class EngagementsService {
   ) {}
 
   async create(createEngagementDto: CreateEngagementDto): Promise<Engagement> {
-    const settings = await this.getCompanyApprovalSettings(
-      (createEngagementDto as any).companyId,
-    );
-
-    const status = this.requiresApproval(
-      settings,
-      createEngagementDto.amount,
-    )
-      ? EngagementStatus.PENDING_APPROVAL
-      : EngagementStatus.DRAFT;
+    await this.assertNoActiveExclusivity(createEngagementDto);
 
     const engagement = this.engagementRepository.create({
       ...createEngagementDto,
-      status,
+      status: EngagementStatus.DRAFT,
+      inviteExpiresAt: this.computeInviteExpiry(),
     });
+
+    const { score, flagged } = await this.computeRiskScore(engagement);
+    (engagement as any).riskScore = score;
+    (engagement as any).riskFlagged = flagged;
+
     return this.engagementRepository.save(engagement);
+  }
+
+  /**
+   * Rejects a new engagement when another recruiter already holds an active
+   * exclusivity window for the same company + job title.
+   */
+  private async assertNoActiveExclusivity(
+    dto: CreateEngagementDto,
+  ): Promise<void> {
+    const companyId = (dto as any).companyId;
+    const title = (dto as any).title;
+    const recruiterId = (dto as any).recruiterId;
+
+    if (!companyId || !title) {
+      return;
+    }
+
+    const conflicting = await this.engagementRepository.findOne({
+      where: {
+        companyId,
+        title,
+        exclusiveUntil: MoreThan(new Date()),
+        ...(recruiterId ? { recruiterId: Not(recruiterId) } : {}),
+      } as any,
+    });
+
+    if (conflicting) {
+      throw new ConflictException({
+        statusCode: 409,
+        error: 'ENGAGEMENT_EXCLUSIVITY_CONFLICT',
+        message: `An exclusive engagement for "${title}" is active until ${new Date(
+          conflicting.exclusiveUntil as Date,
+        ).toISOString()}`,
+      });
+    }
+  }
+
+  /**
+   * Exclusivity end date may only be shortened without recruiter consent.
+   */
+  private assertExclusivityChangeAllowed(
+    current: Date | null | undefined,
+    next: Date | null | undefined,
+    recruiterConsent: boolean,
+  ): void {
+    if (!current || !next || recruiterConsent) {
+      return;
+    }
+    if (new Date(next).getTime() > new Date(current).getTime()) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        error: 'ENGAGEMENT_EXCLUSIVITY_EXTENSION_FORBIDDEN',
+        message:
+          'Exclusivity end date can only be shortened without recruiter consent',
+      });
+    }
+  }
+
+  getExclusivityStatus(engagement: Engagement): ExclusivityStatus {
+    const exclusiveUntil = (engagement as any).exclusiveUntil ?? null;
+    return {
+      active: !!exclusiveUntil && new Date(exclusiveUntil).getTime() > Date.now(),
+      exclusiveUntil,
+    };
+  }
+
+  /**
+   * Returns engagements whose exclusivity ends within the next 3 days so both
+   * parties can be notified ahead of expiry.
+   */
+  async findExclusivityExpiringSoon(): Promise<Engagement[]> {
+    const now = new Date();
+    const horizon = new Date(now.getTime() + EXCLUSIVITY_NOTICE_DAYS * DAY_MS);
+    return this.engagementRepository.find({
+      where: {
+        exclusiveUntil: MoreThan(now),
+      } as any,
+    }).then((rows) =>
+      rows.filter((row) => {
+        const until = (row as any).exclusiveUntil;
+        return until && new Date(until).getTime() <= horizon.getTime();
+      }),
+    );
   }
 
   async findAll(options: FindAllOptions = {}): Promise<Engagement[]> {
@@ -185,107 +224,62 @@ export class EngagementsService {
   }
 
   /**
-   * Public recruiter-facing listings feed. Only PUBLIC engagements are
-   * returned, and each item is projected through `toPublicListing` so that
-   * internal notes and budget details never leak. Results are paginated.
+   * Streams a CSV export of the caller's company engagements, reusing the
+   * same list filters (q, status) as findAll. Scoped strictly to companyId
+   * so no cross-company rows can leak. Rows are streamed in batches to keep
+   * memory bounded for large sets.
    */
-  async findListings(
-    filters: ListingFilters = {},
-  ): Promise<PaginatedListings> {
-    const limit = filters.limit ?? 20;
-    const offset = filters.offset ?? 0;
+  async *exportCsv(options: ExportOptions): AsyncGenerator<string> {
+    const { q, status, companyId } = options;
 
     const queryBuilder = this.engagementRepository
       .createQueryBuilder('engagement')
-      .where('engagement.visibility = :visibility', {
-        visibility: 'PUBLIC',
-      });
+      .where('engagement.companyId = :companyId', { companyId });
 
-    if (filters.specialization) {
-      queryBuilder.andWhere('engagement.specialization = :specialization', {
-        specialization: filters.specialization,
-      });
-    }
-
-    if (filters.location) {
-      queryBuilder.andWhere('engagement.location = :location', {
-        location: filters.location,
-      });
-    }
-
-    if (filters.minFee !== undefined) {
-      queryBuilder.andWhere('engagement.amount >= :minFee', {
-        minFee: filters.minFee,
-      });
-    }
-
-    if (filters.maxFee !== undefined) {
-      queryBuilder.andWhere('engagement.amount <= :maxFee', {
-        maxFee: filters.maxFee,
-      });
-    }
-
-    queryBuilder
-      .orderBy('engagement.createdAt', 'DESC')
-      .take(limit)
-      .skip(offset);
-
-    const [engagements, total] = await queryBuilder.getManyAndCount();
-
-    return {
-      items: engagements.map((engagement) =>
-        this.toPublicListing(engagement),
-      ),
-      total,
-      limit,
-      offset,
-    };
-  }
-
-  /**
-   * Publish an engagement to the public listings feed. Only companies that
-   * have been verified (`verifiedAt` set) may publish.
-   */
-  async publishListing(
-    id: string,
-    company: { verifiedAt?: Date | null },
-  ): Promise<Engagement> {
-    if (!company?.verifiedAt) {
-      throw new ForbiddenException(
-        'Only verified companies can publish listings',
+    if (q && q.trim()) {
+      queryBuilder.andWhere(
+        'engagement.search_vector @@ plainto_tsquery(\'english\', :q)',
+        { q: q.trim() },
       );
     }
 
-    const engagement = await this.findOne(id);
-    engagement.visibility = 'PUBLIC';
-    return this.engagementRepository.save(engagement);
-  }
+    if (status) {
+      queryBuilder.andWhere('engagement.status = :status', { status });
+    }
 
-  /**
-   * Admin-only: unpublish a listing, removing it from the public feed.
-   */
-  async unpublishListing(id: string): Promise<Engagement> {
-    const engagement = await this.findOne(id);
-    engagement.visibility = 'PRIVATE';
-    return this.engagementRepository.save(engagement);
-  }
+    queryBuilder.orderBy('engagement.createdAt', 'DESC');
 
-  /**
-   * Strip sensitive fields (internal notes, budget details, payout splits)
-   * from an engagement before exposing it publicly.
-   */
-  private toPublicListing(engagement: Engagement): PublicListing {
-    return {
-      id: engagement.id,
-      title: engagement.title,
-      description: engagement.description,
-      specialization: (engagement as any).specialization,
-      location: (engagement as any).location,
-      fee: engagement.amount,
-      token: engagement.token,
-      createdAt: (engagement.createdAt as any)?.toISOString?.() ??
-        (engagement.createdAt as any),
-    };
+    yield CSV_COLUMNS.join(',') + '\n';
+
+    const batchSize = 500;
+    let offset = 0;
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const rows = await queryBuilder
+        .clone()
+        .skip(offset)
+        .take(batchSize)
+        .getMany();
+
+      if (rows.length === 0) {
+        break;
+      }
+
+      for (const row of rows) {
+        yield (
+          CSV_COLUMNS.map((column) =>
+            escapeCsvValue((row as any)[column]),
+          ).join(',') + '\n'
+        );
+      }
+
+      if (rows.length < batchSize) {
+        break;
+      }
+
+      offset += batchSize;
+    }
   }
 
   async findOne(id: string): Promise<Engagement> {
@@ -299,11 +293,32 @@ export class EngagementsService {
     return engagement;
   }
 
+  /**
+   * Engagement detail for a specific user, including their per-user mute
+   * state for this engagement.
+   */
+  async findOneForUser(
+    id: string,
+    userId: string,
+  ): Promise<Engagement & { muted: boolean }> {
+    const engagement = await this.findOne(id);
+    return Object.assign(engagement, { muted: this.isMuted(userId, id) });
+  }
+
   async update(
     id: string,
     updateEngagementDto: UpdateEngagementDto,
   ): Promise<Engagement> {
     const engagement = await this.findOne(id);
+
+    if ((updateEngagementDto as any).exclusiveUntil !== undefined) {
+      this.assertExclusivityChangeAllowed(
+        (engagement as any).exclusiveUntil,
+        (updateEngagementDto as any).exclusiveUntil,
+        !!(updateEngagementDto as any).recruiterConsent,
+      );
+    }
+
     Object.assign(engagement, updateEngagementDto);
     return this.engagementRepository.save(engagement);
   }
@@ -322,6 +337,7 @@ export class EngagementsService {
       token: source.token,
       status: EngagementStatus.DRAFT,
       sourceEngagementId: source.id,
+      inviteExpiresAt: this.computeInviteExpiry(),
     });
 
     const saved = await this.engagementRepository.save(duplicate);
@@ -342,161 +358,192 @@ export class EngagementsService {
   }
 
   /**
-   * Approve a pending engagement. Only company members with an approver
-   * role may approve; the action is recorded in the audit log.
+   * Build the canonical agreement terms for an engagement. The terms are
+   * derived from the persisted engagement so the hash always reflects the
+   * current state of the record.
    */
-  async approve(
-    id: string,
-    approver: ApproverContext,
-  ): Promise<Engagement> {
-    this.assertApprover(approver);
+  async buildAgreementTerms(id: string): Promise<AgreementTerms> {
     const engagement = await this.findOne(id);
-
-    if (engagement.status !== EngagementStatus.PENDING_APPROVAL) {
-      throw new ForbiddenException(
-        `Engagement ${id} is not pending approval`,
-      );
-    }
-
-    engagement.status = EngagementStatus.DRAFT;
-    this.recordAudit(engagement, 'engagement.approved', approver.userId);
-    return this.engagementRepository.save(engagement);
-  }
-
-  /**
-   * Reject a pending engagement. Only company members with an approver
-   * role may reject; the action is recorded in the audit log.
-   */
-  async reject(
-    id: string,
-    approver: ApproverContext,
-  ): Promise<Engagement> {
-    this.assertApprover(approver);
-    const engagement = await this.findOne(id);
-
-    if (engagement.status !== EngagementStatus.PENDING_APPROVAL) {
-      throw new ForbiddenException(
-        `Engagement ${id} is not pending approval`,
-      );
-    }
-
-    engagement.status = EngagementStatus.REJECTED;
-    this.recordAudit(engagement, 'engagement.rejected', approver.userId);
-    return this.engagementRepository.save(engagement);
-  }
-
-  /**
-   * Guard used before funding. Throws when the engagement still requires
-   * internal approval, blocking any escrow funding.
-   */
-  async assertFundable(id: string): Promise<Engagement> {
-    const engagement = await this.findOne(id);
-    if (engagement.status === EngagementStatus.PENDING_APPROVAL) {
-      throw new ForbiddenException(
-        `Engagement ${id} is pending internal approval and cannot be funded`,
-      );
-    }
-    if (engagement.status === EngagementStatus.REJECTED) {
-      throw new ForbiddenException(
-        `Engagement ${id} was rejected and cannot be funded`,
-      );
-    }
-    return engagement;
-  }
-
-  /**
-   * Replace the payout split rules for an engagement. Splits may only be
-   * changed while the engagement is unfunded (draft / pending approval).
-   * Every address must be a valid Stellar account and the basis points must
-   * sum to exactly 10000.
-   */
-  async setPayoutSplits(
-    id: string,
-    splits: PayoutSplit[],
-  ): Promise<Engagement> {
-    const engagement = await this.findOne(id);
-
-    if (
-      engagement.status !== EngagementStatus.DRAFT &&
-      engagement.status !== EngagementStatus.PENDING_APPROVAL
-    ) {
-      throw new ForbiddenException(
-        `Payout splits cannot be changed for engagement ${id} in status ${engagement.status}`,
-      );
-    }
-
-    if (!Array.isArray(splits) || splits.length === 0) {
-      throw new BadRequestException('At least one payout split is required');
-    }
-
-    let total = 0;
-    for (const split of splits) {
-      if (!STELLAR_ADDRESS_REGEX.test(split.address)) {
-        throw new BadRequestException(
-          `Invalid Stellar address: ${split.address}`,
-        );
-      }
-      if (!Number.isInteger(split.basisPoints) || split.basisPoints <= 0) {
-        throw new BadRequestException(
-          `Invalid basis points for ${split.address}`,
-        );
-      }
-      total += split.basisPoints;
-    }
-
-    if (total !== TOTAL_BASIS_POINTS) {
-      throw new BadRequestException(
-        `Payout splits must sum to ${TOTAL_BASIS_POINTS} basis points (got ${total})`,
-      );
-    }
-
-    (engagement as any).payoutSplits = splits;
-    return this.engagementRepository.save(engagement);
-  }
-
-  private assertApprover(approver: ApproverContext): void {
-    if (!approver || !APPROVER_ROLES.includes(approver.role)) {
-      throw new ForbiddenException(
-        'Only approvers may approve or reject engagements',
-      );
-    }
-  }
-
-  private recordAudit(
-    engagement: Engagement,
-    action: string,
-    actorId: string,
-  ): void {
-    const log: AuditLogEntry[] = (engagement as any).auditLog ?? [];
-    log.push({
-      id: `${engagement.id}-${Date.now()}`,
-      action,
-      actorId,
-      createdAt: new Date().toISOString(),
-      visibility: 'internal',
-    });
-    (engagement as any).auditLog = log;
-  }
-
-  private async getCompanyApprovalSettings(
-    companyId?: string,
-  ): Promise<CompanyApprovalSettings> {
-    if (!companyId) {
-      return { approvalRequired: false, approvalThreshold: 0 };
-    }
-    const company = await this.engagementRepository.manager
-      .getRepository('Company')
-      .findOne({ where: { id: companyId } });
     return {
-      approvalRequired: Boolean((company as any)?.approvalRequired),
-      approvalThreshold: Number((company as any)?.approvalThreshold ?? 0),
+      engagementId: engagement.id,
+      parties: {
+        companyId: (engagement as any).companyId ?? '',
+        recruiterId: (engagement as any).recruiterId ?? '',
+      },
+      fee: {
+        amount: String(engagement.amount ?? '0'),
+        token: engagement.token ?? '',
+      },
+      milestones: (engagement.milestones ?? []).map((m) => ({
+        title: m.title,
+        amount: String(m.amount ?? '0'),
+      })),
+      retentionDays: Number((engagement as any).retentionDays ?? 0),
     };
   }
 
-  private requiresApproval(
-    settings: CompanyApprovalSettings,
-    amount: number,
-  ): boolean {
-    return settings.approvalRequired && amount >= settings.approvalThreshold;
+  /**
+   * Record both parties' signatures over the canonical terms hash. The hash is
+   * attached as the memo of the funding transaction so it is anchored on-chain.
+   */
+  async signAgreement(
+    id: string,
+    signatures: AgreementSignature[],
+  ): Promise<AgreementRecord> {
+    const terms = await this.buildAgreementTerms(id);
+    const hash = hashTerms(terms);
+
+    const parties = new Set(signatures.map((s) => s.party));
+    if (!parties.has('company') || !parties.has('recruiter')) {
+      throw new BadRequestException(
+        'Both company and recruiter must sign the agreement',
+      );
+    }
+
+    const engagement = await this.findOne(id);
+    (engagement as any).agreementHash = hash;
+    (engagement as any).agreementSignatures = signatures;
+    (engagement as any).agreementMemo = hash;
+    await this.engagementRepository.save(engagement);
+
+    return { terms, hash, signatures, memo: hash };
   }
-}
+
+  /**
+   * Return the agreement terms, hash and signatures. The hash is recomputed
+   * from the current terms so that editing terms after signing invalidates
+   * the stored signatures.
+   */
+  async getAgreement(id: string): Promise<AgreementRecord> {
+    const engagement = await this.findOne(id);
+    const terms = await this.buildAgreementTerms(id);
+    const hash = hashTerms(terms);
+    const signatures: AgreementSignature[] =
+      (engagement as any).agreementSignatures ?? [];
+    const memo = (engagement as any).agreementMemo ?? hash;
+
+    return { terms, hash, signatures, memo };
+  }
+
+  async getActivity(
+    id: string,
+    approver: ApproverContext,
+  ): Promise<Engagement> {
+    this.assertApprover(approver);
+    const engagement = await this.findOne(id);
+
+    if (engagement.status !== EngagementStatus.PENDING_APPROVAL) {
+      throw new ForbiddenException(
+        `Engagement ${id} is not pending approval`,
+      );
+    }
+
+  /**
+   * Unmute notifications for a single user on a single engagement.
+   */
+  async unmute(id: string, userId: string): Promise<{ muted: boolean }> {
+    await this.findOne(id);
+    mutedEngagements.delete(muteKey(userId, id));
+    return { muted: false };
+  }
+
+  /**
+   * Whether the given user has muted notifications for the engagement.
+   */
+  isMuted(userId: string, engagementId: string): boolean {
+    return mutedEngagements.has(muteKey(userId, engagementId));
+  }
+
+  /**
+   * Decide whether a notification should be delivered to a user for an
+   * engagement. Critical events always deliver; non-critical events are
+   * suppressed when the user has muted the engagement.
+   */
+  shouldDeliverNotification(
+    userId: string,
+    engagementId: string,
+    event: string,
+  ): boolean {
+    if (CRITICAL_NOTIFICATION_EVENTS.has(event)) {
+      return true;
+    }
+    return !this.isMuted(userId, engagementId);
+  }
+
+  /**
+   * Accept an invite. Rejects invites whose expiry has passed so stale
+   * pending invites can no longer be accepted.
+   */
+  async acceptInvite(id: string): Promise<Engagement> {
+    const engagement = await this.findOne(id);
+    if (this.isInviteExpired(engagement)) {
+      throw new BadRequestException(
+        `Invite for engagement ${id} has expired`,
+      );
+    }
+    engagement.status = EngagementStatus.ACTIVE;
+    return this.engagementRepository.save(engagement);
+  }
+
+  /**
+   * Re-send an expired invite: reset the expiry window and re-issue it.
+   */
+  async resendInvite(id: string): Promise<Engagement> {
+    const engagement = await this.findOne(id);
+    if (!this.isInviteExpired(engagement)) {
+      throw new BadRequestException(
+        `Invite for engagement ${id} has not expired`,
+      );
+    }
+    engagement.inviteExpiresAt = this.computeInviteExpiry();
+    engagement.inviteReminderSentAt = null;
+    engagement.status = EngagementStatus.DRAFT;
+    return this.engagementRepository.save(engagement);
+  }
+
+    items.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+
+    let startIndex = 0;
+    if (options.cursor) {
+      const cursorIndex = items.findIndex((item) => item.id === options.cursor);
+      startIndex = cursorIndex >= 0 ? cursorIndex + 1 : 0;
+    }
+
+    const page = items.slice(startIndex, startIndex + limit);
+    const hasMore = startIndex + limit < items.length;
+
+    return {
+      items: page,
+      nextCursor: hasMore ? page[page.length - 1]?.id ?? null : null,
+    };
+  }
+
+  /**
+   * Cron entry point: remind recruiters 24h before their invite expires.
+   */
+  async sendInviteReminders(): Promise<{ reminded: number }> {
+    const now = Date.now();
+    const windowEnd = new Date(
+      now + inviteReminderHours() * 60 * 60 * 1000,
+    );
+    const due = await this.engagementRepository.find({
+      where: {
+        status: EngagementStatus.DRAFT,
+        inviteExpiresAt: LessThan(windowEnd),
+      },
+    });
+
+    let reminded = 0;
+    for (const engagement of due) {
+      const expiresAt = (engagement as any).inviteExpiresAt;
+      if (!expiresAt || new Date(expiresAt).getTime() <= now) {
+        continue;
+      }
+      if ((engagement as any).inviteReminderSentAt) {
+        continue;
+      }
+      engagement.inviteReminderSentAt = new Date();
+      await this.engagementRepository.save(engagement);
+      await this.notifyCompany(engagement, 'invite_exp
+
+/* … truncated 3328 chars — edit only what you need near the top … */

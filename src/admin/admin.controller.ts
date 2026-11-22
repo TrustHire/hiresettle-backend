@@ -75,4 +75,9 @@ export class AdminController {
       html,
     };
   }
+
+  @Get('engagements/flagged')
+  listFlaggedEngagements() {
+    return this.adminService.listFlaggedEngagements();
+  }
 }

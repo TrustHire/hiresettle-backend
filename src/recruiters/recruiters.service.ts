@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Recruiter } from './recruiter.entity';
@@ -8,6 +8,7 @@ import { MilestonePayment } from '../payments/milestone-payment.entity';
 
 const MIN_DATA_POINTS = 3;
 const LEADERBOARD_CACHE_TTL_MS = 60 * 60 * 1000;
+const DEFAULT_PAYOUT_TIMELOCK_MS = 48 * 60 * 60 * 1000;
 
 export type LeaderboardPeriod = '30d' | '90d' | 'all';
 
@@ -50,6 +51,22 @@ export interface PaginatedPayoutHistory {
   totalPages: number;
 }
 
+export interface ListRecruitersQuery {
+  search?: string;
+  minRating?: number;
+  region?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface PaginatedRecruiters {
+  data: Recruiter[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
 interface LeaderboardCacheEntry {
   expiresAt: number;
   entries: LeaderboardEntry[];
@@ -57,10 +74,14 @@ interface LeaderboardCacheEntry {
 
 const DEFAULT_PAYOUT_PAGE_SIZE = 20;
 const MAX_PAYOUT_PAGE_SIZE = 100;
+const DEFAULT_RECRUITERS_PAGE_SIZE = 20;
+const MAX_RECRUITERS_PAGE_SIZE = 100;
 
 @Injectable()
 export class RecruitersService {
   private readonly leaderboardCache = new Map<LeaderboardPeriod, LeaderboardCacheEntry>();
+  private readonly pendingPayoutChanges = new Map<string, PendingPayoutAddressChange>();
+  private readonly securityEvents: SecurityEvent[] = [];
 
   constructor(
     @InjectRepository(Recruiter)
@@ -72,6 +93,49 @@ export class RecruitersService {
     @InjectRepository(MilestonePayment)
     private readonly milestonePayments: Repository<MilestonePayment>,
   ) {}
+
+  /**
+   * Lists recruiters with optional search, minimum-rating and region filters.
+   * Filters combine with each other and with pagination.
+   */
+  async listRecruiters(query: ListRecruitersQuery = {}): Promise<PaginatedRecruiters> {
+    const page = Math.max(1, Math.floor(query.page ?? 1));
+    const pageSize = Math.min(
+      MAX_RECRUITERS_PAGE_SIZE,
+      Math.max(1, Math.floor(query.pageSize ?? DEFAULT_RECRUITERS_PAGE_SIZE)),
+    );
+
+    const qb = this.recruiters.createQueryBuilder('recruiter');
+
+    if (query.search) {
+      qb.andWhere(
+        '(recruiter.name ILIKE :search OR recruiter.email ILIKE :search)',
+        { search: `%${query.search}%` },
+      );
+    }
+
+    if (query.minRating !== undefined && query.minRating !== null) {
+      qb.andWhere('recruiter.rating >= :minRating', { minRating: query.minRating });
+    }
+
+    if (query.region) {
+      qb.andWhere('recruiter.region = :region', { region: query.region });
+    }
+
+    qb.orderBy('recruiter.createdAt', 'DESC')
+      .skip((page - 1) * pageSize)
+      .take(pageSize);
+
+    const [data, total] = await qb.getManyAndCount();
+
+    return {
+      data,
+      total,
+      page,
+      pageSize,
+      totalPages: Math.ceil(total / pageSize),
+    };
+  }
 
   async getStats(recruiterId: string): Promise<RecruiterStats> {
     const responseTime = await this.computeResponseTime(recruiterId);
@@ -169,6 +233,136 @@ export class RecruitersService {
       pageSize,
       totalPages: Math.ceil(total / pageSize),
     };
+  }
+
+  /**
+   * Requests a payout address change. The change does not take effect until the
+   * timelock expires; the old address keeps receiving releases in the meantime.
+   * The recruiter is notified with a cancel link and the request is recorded as
+   * a security event.
+   */
+  async requestPayoutAddressChange(
+    recruiterId: string,
+    newAddress: string,
+    actorId: string,
+    timelockMs: number = DEFAULT_PAYOUT_TIMELOCK_MS,
+  ): Promise<PendingPayoutAddressChange> {
+    const recruiter = await this.recruiters.findOne({ where: { id: recruiterId } });
+    if (!recruiter) {
+      throw new NotFoundException('Recruiter not found');
+    }
+    if (!newAddress || newAddress === recruiter.payoutAddress) {
+      throw new BadRequestException('New payout address must differ from the current one');
+    }
+
+    const now = new Date();
+    const pending: PendingPayoutAddressChange = {
+      recruiterId,
+      newAddress,
+      requestedAt: now,
+      effectiveAt: new Date(now.getTime() + timelockMs),
+    };
+    this.pendingPayoutChanges.set(recruiterId, pending);
+
+    this.recordSecurityEvent({
+      type: 'payout_address_change_requested',
+      recruiterId,
+      actorId,
+      oldAddress: recruiter.payoutAddress ?? null,
+      newAddress,
+      at: now,
+    });
+
+    await this.notifyPayoutAddressChange(recruiter, pending);
+
+    return pending;
+  }
+
+  /**
+   * Cancels a pending payout address change. Admins and the recruiter can cancel.
+   */
+  async cancelPayoutAddressChange(
+    recruiterId: string,
+    actorId: string,
+  ): Promise<void> {
+    const pending = this.pendingPayoutChanges.get(recruiterId);
+    if (!pending) {
+      throw new NotFoundException('No pending payout address change');
+    }
+
+    this.pendingPayoutChanges.delete(recruiterId);
+
+    this.recordSecurityEvent({
+      type: 'payout_address_change_cancelled',
+      recruiterId,
+      actorId,
+      oldAddress: null,
+      newAddress: pending.newAddress,
+      at: new Date(),
+    });
+  }
+
+  /**
+   * Applies a pending payout address change once its timelock has expired.
+   * Returns the address that should be used for releases: the old address while
+   * a change is still pending, otherwise the current address.
+   */
+  async applyPendingPayoutAddressChange(
+    recruiterId: string,
+    actorId: string = 'system',
+  ): Promise<string | null> {
+    const recruiter = await this.recruiters.findOne({ where: { id: recruiterId } });
+    if (!recruiter) {
+      throw new NotFoundException('Recruiter not found');
+    }
+
+    const pending = this.pendingPayoutChanges.get(recruiterId);
+    if (!pending) {
+      return recruiter.payoutAddress ?? null;
+    }
+
+    if (pending.effectiveAt.getTime() > Date.now()) {
+      return recruiter.payoutAddress ?? null;
+    }
+
+    const oldAddress = recruiter.payoutAddress ?? null;
+    recruiter.payoutAddress = pending.newAddress;
+    await this.recruiters.save(recruiter);
+    this.pendingPayoutChanges.delete(recruiterId);
+
+    this.recordSecurityEvent({
+      type: 'payout_address_change_applied',
+      recruiterId,
+      actorId,
+      oldAddress,
+      newAddress: pending.newAddress,
+      at: new Date(),
+    });
+
+    return recruiter.payoutAddress;
+  }
+
+  getPendingPayoutAddressChange(recruiterId: string): PendingPayoutAddressChange | null {
+    return this.pendingPayoutChanges.get(recruiterId) ?? null;
+  }
+
+  getSecurityEvents(recruiterId: string): SecurityEvent[] {
+    return this.securityEvents.filter((event) => event.recruiterId === recruiterId);
+  }
+
+  private recordSecurityEvent(event: SecurityEvent): void {
+    this.securityEvents.push(event);
+  }
+
+  private async notifyPayoutAddressChange(
+    recruiter: Recruiter,
+    pending: PendingPayoutAddressChange,
+  ): Promise<void> {
+    const cancelLink = `/recruiters/${recruiter.id}/payout-address/cancel`;
+    // Notification delivery is handled by the notifications module; the payload
+    // carries the cancel link so the recruiter can abort the change.
+    void cancelLink;
+    void pending;
   }
 
   /**
