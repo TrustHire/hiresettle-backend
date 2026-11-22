@@ -87,6 +87,7 @@ export class EngagementsService {
     const engagement = this.engagementRepository.create({
       ...createEngagementDto,
       status: EngagementStatus.DRAFT,
+      inviteExpiresAt: this.computeInviteExpiry(),
     });
 
     const { score, flagged } = await this.computeRiskScore(engagement);
@@ -292,6 +293,18 @@ export class EngagementsService {
     return engagement;
   }
 
+  /**
+   * Engagement detail for a specific user, including their per-user mute
+   * state for this engagement.
+   */
+  async findOneForUser(
+    id: string,
+    userId: string,
+  ): Promise<Engagement & { muted: boolean }> {
+    const engagement = await this.findOne(id);
+    return Object.assign(engagement, { muted: this.isMuted(userId, id) });
+  }
+
   async update(
     id: string,
     updateEngagementDto: UpdateEngagementDto,
@@ -324,6 +337,7 @@ export class EngagementsService {
       token: source.token,
       status: EngagementStatus.DRAFT,
       sourceEngagementId: source.id,
+      inviteExpiresAt: this.computeInviteExpiry(),
     });
 
     const saved = await this.engagementRepository.save(duplicate);
@@ -432,44 +446,68 @@ export class EngagementsService {
       });
     }
 
-    // Milestone history
-    for (const milestone of engagement.milestones ?? []) {
-      items.push({
-        id: `milestone:${milestone.id}`,
-        type: 'milestone',
-        timestamp: new Date(
-          (milestone as any).updatedAt ??
-            (milestone as any).createdAt ??
-            Date.now(),
-        ).toISOString(),
-        visibility: 'company',
-        data: milestone,
-      });
-    }
+  /**
+   * Unmute notifications for a single user on a single engagement.
+   */
+  async unmute(id: string, userId: string): Promise<{ muted: boolean }> {
+    await this.findOne(id);
+    mutedEngagements.delete(muteKey(userId, id));
+    return { muted: false };
+  }
 
-    // Notes
-    const notes = (engagement as any).notes ?? [];
-    for (const note of notes) {
-      items.push({
-        id: `note:${note.id}`,
-        type: 'note',
-        timestamp: new Date(note.createdAt ?? note.timestamp).toISOString(),
-        visibility: note.visibility ?? 'internal',
-        data: note,
-      });
-    }
+  /**
+   * Whether the given user has muted notifications for the engagement.
+   */
+  isMuted(userId: string, engagementId: string): boolean {
+    return mutedEngagements.has(muteKey(userId, engagementId));
+  }
 
-    // Chain events
-    const chainEvents = (engagement as any).chainEvents ?? [];
-    for (const event of chainEvents) {
-      items.push({
-        id: `chain:${event.id}`,
-        type: 'chain',
-        timestamp: new Date(event.createdAt ?? event.timestamp).toISOString(),
-        visibility: 'company',
-        data: event,
-      });
+  /**
+   * Decide whether a notification should be delivered to a user for an
+   * engagement. Critical events always deliver; non-critical events are
+   * suppressed when the user has muted the engagement.
+   */
+  shouldDeliverNotification(
+    userId: string,
+    engagementId: string,
+    event: string,
+  ): boolean {
+    if (CRITICAL_NOTIFICATION_EVENTS.has(event)) {
+      return true;
     }
+    return !this.isMuted(userId, engagementId);
+  }
+
+  /**
+   * Accept an invite. Rejects invites whose expiry has passed so stale
+   * pending invites can no longer be accepted.
+   */
+  async acceptInvite(id: string): Promise<Engagement> {
+    const engagement = await this.findOne(id);
+    if (this.isInviteExpired(engagement)) {
+      throw new BadRequestException(
+        `Invite for engagement ${id} has expired`,
+      );
+    }
+    engagement.status = EngagementStatus.ACTIVE;
+    return this.engagementRepository.save(engagement);
+  }
+
+  /**
+   * Re-send an expired invite: reset the expiry window and re-issue it.
+   */
+  async resendInvite(id: string): Promise<Engagement> {
+    const engagement = await this.findOne(id);
+    if (!this.isInviteExpired(engagement)) {
+      throw new BadRequestException(
+        `Invite for engagement ${id} has not expired`,
+      );
+    }
+    engagement.inviteExpiresAt = this.computeInviteExpiry();
+    engagement.inviteReminderSentAt = null;
+    engagement.status = EngagementStatus.DRAFT;
+    return this.engagementRepository.save(engagement);
+  }
 
     items.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
 
@@ -487,4 +525,33 @@ export class EngagementsService {
       nextCursor: hasMore ? page[page.length - 1]?.id ?? null : null,
     };
   }
-}
+
+  /**
+   * Cron entry point: remind recruiters 24h before their invite expires.
+   */
+  async sendInviteReminders(): Promise<{ reminded: number }> {
+    const now = Date.now();
+    const windowEnd = new Date(
+      now + inviteReminderHours() * 60 * 60 * 1000,
+    );
+    const due = await this.engagementRepository.find({
+      where: {
+        status: EngagementStatus.DRAFT,
+        inviteExpiresAt: LessThan(windowEnd),
+      },
+    });
+
+    let reminded = 0;
+    for (const engagement of due) {
+      const expiresAt = (engagement as any).inviteExpiresAt;
+      if (!expiresAt || new Date(expiresAt).getTime() <= now) {
+        continue;
+      }
+      if ((engagement as any).inviteReminderSentAt) {
+        continue;
+      }
+      engagement.inviteReminderSentAt = new Date();
+      await this.engagementRepository.save(engagement);
+      await this.notifyCompany(engagement, 'invite_exp
+
+/* … truncated 3328 chars — edit only what you need near the top … */
