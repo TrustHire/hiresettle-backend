@@ -338,6 +338,74 @@ export class EngagementsService {
     return saved;
   }
 
+  /**
+   * Build the canonical agreement terms for an engagement. The terms are
+   * derived from the persisted engagement so the hash always reflects the
+   * current state of the record.
+   */
+  async buildAgreementTerms(id: string): Promise<AgreementTerms> {
+    const engagement = await this.findOne(id);
+    return {
+      engagementId: engagement.id,
+      parties: {
+        companyId: (engagement as any).companyId ?? '',
+        recruiterId: (engagement as any).recruiterId ?? '',
+      },
+      fee: {
+        amount: String(engagement.amount ?? '0'),
+        token: engagement.token ?? '',
+      },
+      milestones: (engagement.milestones ?? []).map((m) => ({
+        title: m.title,
+        amount: String(m.amount ?? '0'),
+      })),
+      retentionDays: Number((engagement as any).retentionDays ?? 0),
+    };
+  }
+
+  /**
+   * Record both parties' signatures over the canonical terms hash. The hash is
+   * attached as the memo of the funding transaction so it is anchored on-chain.
+   */
+  async signAgreement(
+    id: string,
+    signatures: AgreementSignature[],
+  ): Promise<AgreementRecord> {
+    const terms = await this.buildAgreementTerms(id);
+    const hash = hashTerms(terms);
+
+    const parties = new Set(signatures.map((s) => s.party));
+    if (!parties.has('company') || !parties.has('recruiter')) {
+      throw new BadRequestException(
+        'Both company and recruiter must sign the agreement',
+      );
+    }
+
+    const engagement = await this.findOne(id);
+    (engagement as any).agreementHash = hash;
+    (engagement as any).agreementSignatures = signatures;
+    (engagement as any).agreementMemo = hash;
+    await this.engagementRepository.save(engagement);
+
+    return { terms, hash, signatures, memo: hash };
+  }
+
+  /**
+   * Return the agreement terms, hash and signatures. The hash is recomputed
+   * from the current terms so that editing terms after signing invalidates
+   * the stored signatures.
+   */
+  async getAgreement(id: string): Promise<AgreementRecord> {
+    const engagement = await this.findOne(id);
+    const terms = await this.buildAgreementTerms(id);
+    const hash = hashTerms(terms);
+    const signatures: AgreementSignature[] =
+      (engagement as any).agreementSignatures ?? [];
+    const memo = (engagement as any).agreementMemo ?? hash;
+
+    return { terms, hash, signatures, memo };
+  }
+
   async getActivity(
     id: string,
     options: { cursor?: string; limit?: number; isCompany?: boolean } = {},
