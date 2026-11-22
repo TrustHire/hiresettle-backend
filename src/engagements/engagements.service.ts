@@ -1,6 +1,11 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, LessThan } from 'typeorm';
+import { IsNull, MoreThan, Not, Repository } from 'typeorm';
 import { Engagement, EngagementStatus } from './entities/engagement.entity';
 import { Milestone } from './entities/milestone.entity';
 import { CreateEngagementDto } from './dto/create-engagement.dto';
@@ -32,43 +37,39 @@ export interface FindAllOptions {
   offset?: number;
 }
 
-/** Default invite lifetime in days, overridable via INVITE_EXPIRY_DAYS. */
-export const DEFAULT_INVITE_EXPIRY_DAYS = 7;
-/** Reminder window before expiry, overridable via INVITE_REMINDER_HOURS. */
-export const DEFAULT_INVITE_REMINDER_HOURS = 24;
-
-/**
- * Notification events that must always be delivered, even when the recipient
- * has muted the engagement (disputes, funds released, etc.).
- */
-export const CRITICAL_NOTIFICATION_EVENTS: ReadonlySet<string> = new Set([
-  'dispute_opened',
-  'dispute_resolved',
-  'funds_released',
-]);
-
-/**
- * Per-user, per-engagement mute state. Keyed by `${userId}:${engagementId}` so
- * muting is scoped to a single user rather than the engagement as a whole.
- */
-const mutedEngagements = new Map<string, Set<string>>();
-
-function muteKey(userId: string, engagementId: string): string {
-  return `${userId}:${engagementId}`;
+export interface ExportOptions {
+  q?: string;
+  status?: EngagementStatus;
+  companyId: string;
 }
 
-function inviteExpiryDays(): number {
-  const parsed = Number(process.env.INVITE_EXPIRY_DAYS);
-  return Number.isFinite(parsed) && parsed > 0
-    ? parsed
-    : DEFAULT_INVITE_EXPIRY_DAYS;
+export interface ExclusivityStatus {
+  active: boolean;
+  exclusiveUntil: Date | null;
 }
 
-function inviteReminderHours(): number {
-  const parsed = Number(process.env.INVITE_REMINDER_HOURS);
-  return Number.isFinite(parsed) && parsed >= 0
-    ? parsed
-    : DEFAULT_INVITE_REMINDER_HOURS;
+const EXCLUSIVITY_NOTICE_DAYS = 3;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const CSV_COLUMNS = [
+  'id',
+  'title',
+  'status',
+  'amount',
+  'token',
+  'createdAt',
+  'updatedAt',
+] as const;
+
+function escapeCsvValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  const str = value instanceof Date ? value.toISOString() : String(value);
+  if (/[",\n\r]/.test(str)) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
 }
 
 @Injectable()
@@ -81,16 +82,102 @@ export class EngagementsService {
   ) {}
 
   async create(createEngagementDto: CreateEngagementDto): Promise<Engagement> {
+    await this.assertNoActiveExclusivity(createEngagementDto);
+
     const engagement = this.engagementRepository.create({
       ...createEngagementDto,
       status: EngagementStatus.DRAFT,
       inviteExpiresAt: this.computeInviteExpiry(),
     });
+
+    const { score, flagged } = await this.computeRiskScore(engagement);
+    (engagement as any).riskScore = score;
+    (engagement as any).riskFlagged = flagged;
+
     return this.engagementRepository.save(engagement);
   }
 
-  private computeInviteExpiry(from: Date = new Date()): Date {
-    return new Date(from.getTime() + inviteExpiryDays() * 24 * 60 * 60 * 1000);
+  /**
+   * Rejects a new engagement when another recruiter already holds an active
+   * exclusivity window for the same company + job title.
+   */
+  private async assertNoActiveExclusivity(
+    dto: CreateEngagementDto,
+  ): Promise<void> {
+    const companyId = (dto as any).companyId;
+    const title = (dto as any).title;
+    const recruiterId = (dto as any).recruiterId;
+
+    if (!companyId || !title) {
+      return;
+    }
+
+    const conflicting = await this.engagementRepository.findOne({
+      where: {
+        companyId,
+        title,
+        exclusiveUntil: MoreThan(new Date()),
+        ...(recruiterId ? { recruiterId: Not(recruiterId) } : {}),
+      } as any,
+    });
+
+    if (conflicting) {
+      throw new ConflictException({
+        statusCode: 409,
+        error: 'ENGAGEMENT_EXCLUSIVITY_CONFLICT',
+        message: `An exclusive engagement for "${title}" is active until ${new Date(
+          conflicting.exclusiveUntil as Date,
+        ).toISOString()}`,
+      });
+    }
+  }
+
+  /**
+   * Exclusivity end date may only be shortened without recruiter consent.
+   */
+  private assertExclusivityChangeAllowed(
+    current: Date | null | undefined,
+    next: Date | null | undefined,
+    recruiterConsent: boolean,
+  ): void {
+    if (!current || !next || recruiterConsent) {
+      return;
+    }
+    if (new Date(next).getTime() > new Date(current).getTime()) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        error: 'ENGAGEMENT_EXCLUSIVITY_EXTENSION_FORBIDDEN',
+        message:
+          'Exclusivity end date can only be shortened without recruiter consent',
+      });
+    }
+  }
+
+  getExclusivityStatus(engagement: Engagement): ExclusivityStatus {
+    const exclusiveUntil = (engagement as any).exclusiveUntil ?? null;
+    return {
+      active: !!exclusiveUntil && new Date(exclusiveUntil).getTime() > Date.now(),
+      exclusiveUntil,
+    };
+  }
+
+  /**
+   * Returns engagements whose exclusivity ends within the next 3 days so both
+   * parties can be notified ahead of expiry.
+   */
+  async findExclusivityExpiringSoon(): Promise<Engagement[]> {
+    const now = new Date();
+    const horizon = new Date(now.getTime() + EXCLUSIVITY_NOTICE_DAYS * DAY_MS);
+    return this.engagementRepository.find({
+      where: {
+        exclusiveUntil: MoreThan(now),
+      } as any,
+    }).then((rows) =>
+      rows.filter((row) => {
+        const until = (row as any).exclusiveUntil;
+        return until && new Date(until).getTime() <= horizon.getTime();
+      }),
+    );
   }
 
   async findAll(options: FindAllOptions = {}): Promise<Engagement[]> {
@@ -136,6 +223,65 @@ export class EngagementsService {
     return queryBuilder.getMany();
   }
 
+  /**
+   * Streams a CSV export of the caller's company engagements, reusing the
+   * same list filters (q, status) as findAll. Scoped strictly to companyId
+   * so no cross-company rows can leak. Rows are streamed in batches to keep
+   * memory bounded for large sets.
+   */
+  async *exportCsv(options: ExportOptions): AsyncGenerator<string> {
+    const { q, status, companyId } = options;
+
+    const queryBuilder = this.engagementRepository
+      .createQueryBuilder('engagement')
+      .where('engagement.companyId = :companyId', { companyId });
+
+    if (q && q.trim()) {
+      queryBuilder.andWhere(
+        'engagement.search_vector @@ plainto_tsquery(\'english\', :q)',
+        { q: q.trim() },
+      );
+    }
+
+    if (status) {
+      queryBuilder.andWhere('engagement.status = :status', { status });
+    }
+
+    queryBuilder.orderBy('engagement.createdAt', 'DESC');
+
+    yield CSV_COLUMNS.join(',') + '\n';
+
+    const batchSize = 500;
+    let offset = 0;
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const rows = await queryBuilder
+        .clone()
+        .skip(offset)
+        .take(batchSize)
+        .getMany();
+
+      if (rows.length === 0) {
+        break;
+      }
+
+      for (const row of rows) {
+        yield (
+          CSV_COLUMNS.map((column) =>
+            escapeCsvValue((row as any)[column]),
+          ).join(',') + '\n'
+        );
+      }
+
+      if (rows.length < batchSize) {
+        break;
+      }
+
+      offset += batchSize;
+    }
+  }
+
   async findOne(id: string): Promise<Engagement> {
     const engagement = await this.engagementRepository.findOne({
       where: { id },
@@ -164,6 +310,15 @@ export class EngagementsService {
     updateEngagementDto: UpdateEngagementDto,
   ): Promise<Engagement> {
     const engagement = await this.findOne(id);
+
+    if ((updateEngagementDto as any).exclusiveUntil !== undefined) {
+      this.assertExclusivityChangeAllowed(
+        (engagement as any).exclusiveUntil,
+        (updateEngagementDto as any).exclusiveUntil,
+        !!(updateEngagementDto as any).recruiterConsent,
+      );
+    }
+
     Object.assign(engagement, updateEngagementDto);
     return this.engagementRepository.save(engagement);
   }
@@ -203,16 +358,93 @@ export class EngagementsService {
   }
 
   /**
-   * Mute notifications for a single user on a single engagement.
+   * Build the canonical agreement terms for an engagement. The terms are
+   * derived from the persisted engagement so the hash always reflects the
+   * current state of the record.
    */
-  async mute(id: string, userId: string): Promise<{ muted: boolean }> {
-    await this.findOne(id);
-    const key = muteKey(userId, id);
-    const set = mutedEngagements.get(key) ?? new Set<string>();
-    set.add(id);
-    mutedEngagements.set(key, set);
-    return { muted: true };
+  async buildAgreementTerms(id: string): Promise<AgreementTerms> {
+    const engagement = await this.findOne(id);
+    return {
+      engagementId: engagement.id,
+      parties: {
+        companyId: (engagement as any).companyId ?? '',
+        recruiterId: (engagement as any).recruiterId ?? '',
+      },
+      fee: {
+        amount: String(engagement.amount ?? '0'),
+        token: engagement.token ?? '',
+      },
+      milestones: (engagement.milestones ?? []).map((m) => ({
+        title: m.title,
+        amount: String(m.amount ?? '0'),
+      })),
+      retentionDays: Number((engagement as any).retentionDays ?? 0),
+    };
   }
+
+  /**
+   * Record both parties' signatures over the canonical terms hash. The hash is
+   * attached as the memo of the funding transaction so it is anchored on-chain.
+   */
+  async signAgreement(
+    id: string,
+    signatures: AgreementSignature[],
+  ): Promise<AgreementRecord> {
+    const terms = await this.buildAgreementTerms(id);
+    const hash = hashTerms(terms);
+
+    const parties = new Set(signatures.map((s) => s.party));
+    if (!parties.has('company') || !parties.has('recruiter')) {
+      throw new BadRequestException(
+        'Both company and recruiter must sign the agreement',
+      );
+    }
+
+    const engagement = await this.findOne(id);
+    (engagement as any).agreementHash = hash;
+    (engagement as any).agreementSignatures = signatures;
+    (engagement as any).agreementMemo = hash;
+    await this.engagementRepository.save(engagement);
+
+    return { terms, hash, signatures, memo: hash };
+  }
+
+  /**
+   * Return the agreement terms, hash and signatures. The hash is recomputed
+   * from the current terms so that editing terms after signing invalidates
+   * the stored signatures.
+   */
+  async getAgreement(id: string): Promise<AgreementRecord> {
+    const engagement = await this.findOne(id);
+    const terms = await this.buildAgreementTerms(id);
+    const hash = hashTerms(terms);
+    const signatures: AgreementSignature[] =
+      (engagement as any).agreementSignatures ?? [];
+    const memo = (engagement as any).agreementMemo ?? hash;
+
+    return { terms, hash, signatures, memo };
+  }
+
+  async getActivity(
+    id: string,
+    options: { cursor?: string; limit?: number; isCompany?: boolean } = {},
+  ): Promise<ActivityFeed> {
+    const engagement = await this.findOne(id);
+    const limit = Math.min(Math.max(options.limit ?? 20, 1), 100);
+
+    const items: ActivityItem[] = [];
+
+    // Audit log entries
+    const auditLog = (engagement as any).auditLog ?? [];
+    for (const entry of auditLog) {
+      items.push({
+        id: `audit:${entry.id}`,
+        type: 'audit',
+        timestamp: new Date(entry.createdAt ?? entry.timestamp).toISOString(),
+        visibility: entry.visibility ?? 'company',
+        data: entry,
+      });
+    }
 
   /**
    * Unmute notifications for a single user on a single engagement.
@@ -277,31 +509,21 @@ export class EngagementsService {
     return this.engagementRepository.save(engagement);
   }
 
-  private isInviteExpired(engagement: Engagement): boolean {
-    const expiresAt = (engagement as any).inviteExpiresAt;
-    return !!expiresAt && new Date(expiresAt).getTime() <= Date.now();
-  }
+    items.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
 
-  /**
-   * Cron entry point: expire stale pending invites and notify the company.
-   * Intended to be invoked by a scheduler guarded by the Redis cron lock.
-   */
-  async expireStaleInvites(): Promise<{ expired: number }> {
-    const now = new Date();
-    const stale = await this.engagementRepository.find({
-      where: {
-        status: EngagementStatus.DRAFT,
-        inviteExpiresAt: LessThan(now),
-      },
-    });
-
-    for (const engagement of stale) {
-      engagement.status = EngagementStatus.EXPIRED;
-      await this.engagementRepository.save(engagement);
-      await this.notifyCompany(engagement, 'invite_expired');
+    let startIndex = 0;
+    if (options.cursor) {
+      const cursorIndex = items.findIndex((item) => item.id === options.cursor);
+      startIndex = cursorIndex >= 0 ? cursorIndex + 1 : 0;
     }
 
-    return { expired: stale.length };
+    const page = items.slice(startIndex, startIndex + limit);
+    const hasMore = startIndex + limit < items.length;
+
+    return {
+      items: page,
+      nextCursor: hasMore ? page[page.length - 1]?.id ?? null : null,
+    };
   }
 
   /**

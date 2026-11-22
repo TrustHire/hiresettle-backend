@@ -11,8 +11,23 @@ export class RecruitersController {
   constructor(private readonly recruitersService: RecruitersService) {}
 
   @Get()
-  async findAll(@Query('specialization') specialization?: string) {
-    return this.recruitersService.findAll({ specialization });
+  async findAll(
+    @Query('specialization') specialization?: string,
+    @Query('minRating') minRating?: string,
+    @Query('region') region?: string,
+  ) {
+    let parsedMinRating: number | undefined;
+    if (minRating !== undefined) {
+      parsedMinRating = Number(minRating);
+      if (Number.isNaN(parsedMinRating) || parsedMinRating < 0 || parsedMinRating > 5) {
+        throw new BadRequestException('minRating must be a number between 0 and 5');
+      }
+    }
+    return this.recruitersService.findAll({
+      specialization,
+      minRating: parsedMinRating,
+      region,
+    });
   }
 
   @Get('leaderboard')

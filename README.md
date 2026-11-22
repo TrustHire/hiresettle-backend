@@ -325,5 +325,5 @@ MIT
 <!-- handsoff-issue-405 -->
 - #405: Add admin endpoints to pause and resume queues
 
-<!-- handsoff-issue-564 -->
-- #564: Add LinkedIn profile verification for recruiters
+<!-- handsoff-issue-552 -->
+- #552: Add @mentions in engagement and milestone comments
