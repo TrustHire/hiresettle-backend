@@ -324,3 +324,6 @@ MIT
 
 <!-- handsoff-issue-405 -->
 - #405: Add admin endpoints to pause and resume queues
+
+<!-- handsoff-issue-552 -->
+- #552: Add @mentions in engagement and milestone comments

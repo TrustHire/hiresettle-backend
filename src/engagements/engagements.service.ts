@@ -88,6 +88,11 @@ export class EngagementsService {
       ...createEngagementDto,
       status: EngagementStatus.DRAFT,
     });
+
+    const { score, flagged } = await this.computeRiskScore(engagement);
+    (engagement as any).riskScore = score;
+    (engagement as any).riskFlagged = flagged;
+
     return this.engagementRepository.save(engagement);
   }
 
