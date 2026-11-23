@@ -38,6 +38,7 @@ This directory contains the technical documentation for the HireSettle backend.
 | [Secrets](./secrets.md) | Secret management, credential rotation procedures, and production injection. |
 | [Security](./security.md) | Dependency vulnerability scanning and triage process. |
 | [Stellar Integration](./stellar-integration.md) | Integration details with the Stellar blockchain, event polling, and contract interaction. |
+| [Stellar Transactions](./stellar-transactions.md) | Transaction submission queue, sequence numbers, fee-bump sponsorship, Horizon failover, circuit breaker, and troubleshooting. |
 | [Team Management](./team-management.md) | Company member invites, acceptance, role permissions, and removing members. |
 | [Data Retention](./data-retention.md) | Retention windows, account deletion lifecycle, scheduled PII anonymization job, and env vars. |
 | [API Versioning](./api-versioning.md) | Current URL versioning convention and deprecation/sunset policy. |
