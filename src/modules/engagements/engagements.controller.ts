@@ -113,6 +113,7 @@ export class EngagementsController {
   @ApiQuery({ name: 'createdFrom', required: false, description: 'ISO date string (e.g., 2026-01-01)' })
   @ApiQuery({ name: 'createdTo', required: false, description: 'ISO date string (e.g., 2026-12-31)' })
   @ApiQuery({ name: 'tags', required: false, description: 'Comma-separated tags; returns engagements that have ALL listed tags' })
+  @ApiQuery({ name: 'costCenterId', required: false, description: 'Filter by department cost center ID (#547)' })
   @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number' })
   @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page' })
   @ApiQuery({ name: 'cursor', required: false, type: String, description: 'ID of the last engagement from the previous page' })
@@ -138,6 +139,7 @@ export class EngagementsController {
     @Query('sortOrder') sortOrder?: string,
     @Query('includeArchived') includeArchived?: boolean,
     @Query('overdue') overdue?: string,
+    @Query('costCenterId') costCenterId?: string,
   ) {
     return this.engagementsService.findAll({
       companyAddress,
@@ -154,6 +156,7 @@ export class EngagementsController {
       sortOrder,
       includeArchived,
       overdue,
+      costCenterId,
     });
   }
 

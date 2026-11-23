@@ -229,6 +229,27 @@ export class EngagementsService {
       };
     });
 
+    // Check optional cost center & compute non-blocking budget warning (#547)
+    const warnings: string[] = [];
+    if (dto.costCenterId) {
+      const center = await this.prisma.costCenter.findFirst({
+        where: { id: dto.costCenterId, companyId: user.id },
+      });
+      if (!center) {
+        throw new NotFoundException(`Cost center ${dto.costCenterId} not found for this company`);
+      }
+      const agg = await this.prisma.engagement.aggregate({
+        where: { costCenterId: dto.costCenterId, archivedAt: null },
+        _sum: { totalAmount: true },
+      });
+      const projected = (agg._sum.totalAmount ?? 0n) + BigInt(mergedData.totalAmount);
+      if (projected > center.budget) {
+        const msg = `Cost center ${center.code} (${center.name}) budget exceeded: projected ${projected.toString()} > budget ${center.budget.toString()}`;
+        this.logger.warn(msg);
+        warnings.push(msg);
+      }
+    }
+
     // Persist engagement as PENDING_ACCEPTANCE — on-chain submission happens on recruiter accept
     const engagement = await this.prisma.engagement.create({
       data: {
@@ -236,6 +257,7 @@ export class EngagementsService {
         companyAddress: mergedData.companyAddress,
         recruiterAddress: mergedData.recruiterAddress,
         arbiterAddress: mergedData.arbiterAddress,
+        companyId: user.id,
         tokenAddress: mergedData.tokenAddress,
         totalAmount: BigInt(mergedData.totalAmount),
         jobTitle: mergedData.jobTitle,
@@ -244,6 +266,7 @@ export class EngagementsService {
         location: mergedData.location,
         status: EngagementStatus.PENDING_ACCEPTANCE,
         templateVersionId: templateVersion?.id,
+        costCenterId: dto.costCenterId ?? null,
         milestones: { create: milestoneData },
       },
       include: { milestones: { orderBy: { milestoneIndex: 'asc' } } },
@@ -259,7 +282,8 @@ export class EngagementsService {
       { engagementId: engagement.id },
     );
 
-    return this.serialize(engagement);
+    const serialized = this.serialize(engagement);
+    return warnings.length > 0 ? { ...serialized, warnings } : serialized;
   }
 
   // ----------------------------------------------------------
@@ -468,15 +492,17 @@ export class EngagementsService {
     sortOrder?: string;    // 'asc' | 'desc'
     includeArchived?: boolean;
     overdue?: boolean | string; // true → only engagements past their targetStartDate (#470)
+    costCenterId?: string;
   }) {
     const {
       companyAddress, recruiterAddress, status, search, createdFrom, createdTo, tags,
-      page = 1, limit = 20, cursor, sortBy, sortOrder, includeArchived, overdue,
+      page = 1, limit = 20, cursor, sortBy, sortOrder, includeArchived, overdue, costCenterId,
     } = filters;
 
     const where: any = {};
     if (companyAddress) where.companyAddress = companyAddress;
     if (recruiterAddress) where.recruiterAddress = recruiterAddress;
+    if (costCenterId) where.costCenterId = costCenterId;
 
     if (!includeArchived) {
       where.archivedAt = null;

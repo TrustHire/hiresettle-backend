@@ -292,6 +292,8 @@ export class CompaniesService {
         status: true,
         totalAmount: true,
         releasedAmount: true,
+        costCenterId: true,
+        costCenter: { select: { id: true, code: true, name: true, budget: true } },
         createdAt: true,
         updatedAt: true,
       },
@@ -331,12 +333,42 @@ export class CompaniesService {
       ? Math.round((totalCompletionDays / completedEngagements) * 10) / 10
       : 0;
 
+    // Breakdown of spend by cost center (#547)
+    const byCostCenter = new Map<
+      string,
+      { costCenterId: string | null; code: string | null; name: string | null; budget: string | null; spent: bigint; count: number }
+    >();
+    for (const eng of engagements as any[]) {
+      const key = eng.costCenterId ?? '__unassigned__';
+      const existing = byCostCenter.get(key) ?? {
+        costCenterId: eng.costCenterId ?? null,
+        code: eng.costCenter?.code ?? null,
+        name: eng.costCenter?.name ?? null,
+        budget: eng.costCenter?.budget != null ? eng.costCenter.budget.toString() : null,
+        spent: 0n,
+        count: 0,
+      };
+      existing.spent += eng.totalAmount;
+      existing.count += 1;
+      byCostCenter.set(key, existing);
+    }
+
+    const costCenterBreakdown = Array.from(byCostCenter.values()).map((entry) => ({
+      costCenterId: entry.costCenterId,
+      code: entry.code,
+      name: entry.name,
+      budget: entry.budget,
+      totalSpent: entry.spent.toString(),
+      engagementCount: entry.count,
+    }));
+
     return {
       totalEngagements,
       byStatus,
       totalEscrowed: totalEscrowed.toString(),
       totalReleased: totalReleased.toString(),
       avgTimeToPlacement,
+      costCenterBreakdown,
       ...(dateFrom ? { dateFrom: new Date(dateFrom).toISOString() } : {}),
       ...(dateTo ? { dateTo: new Date(dateTo).toISOString() } : {}),
       generatedAt: new Date().toISOString(),
