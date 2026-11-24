@@ -61,7 +61,7 @@
 | `UsersModule` | Public profile lookups by Stellar address (cached); authenticated user profile CRUD; GDPR erasure and JSON data export; notification preference management; avatar upload to S3 with MIME/size validation |
 | `WebhooksModule` | Outbound webhook delivery for engagement lifecycle events; subscription CRUD (JWT or `X-Api-Key`); BullMQ queue-based async dispatch with inline fallback delivery; 5-second HTTP timeout |
 | `HealthModule` | `GET /health` terminus check (database liveness) |
-| `common/StellarModule` | Shared Stellar RPC/Horizon client, contract call helpers, retention timer math |
+| `common/StellarModule` | Shared Stellar RPC/Horizon client, contract call helpers, retention timer math (see [Stellar Transactions](./stellar-transactions.md) for submission, fee-bump sponsorship, and failover) |
 | `common/PrismaModule` | Global Prisma ORM client with optional metrics middleware |
 | `common/S3Module` | S3 file upload and presigned URL generation |
 | `common/CacheModule` | In-memory (or Redis-backed) cache-aside layer |
