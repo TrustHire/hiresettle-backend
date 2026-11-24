@@ -293,6 +293,8 @@ model User {
   arbiterRecusals      ArbiterRecusal[]
   milestoneComments    MilestoneComment[]
   creditLedgerEntries  CreditLedger[]           @relation("CompanyCreditLedger")
+  costCenters          CostCenter[]             @relation("CompanyCostCenters")
+  agencyMembership     AgencyMember?
 
   @@index([role, deactivatedAt])
   @@index([deletedAt, anonymizedAt]) // Used by PiiAnonymizationSchedulerService
@@ -383,6 +385,7 @@ model Engagement {
   // Asset/USD rate snapshotted when escrow funding is confirmed, so fiat reports stay stable (#469)
   fundingRateUsd    Float?
   fundingRateAt     DateTime?
+  costCenterId      String?           // optional department cost center (#547)
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
@@ -391,6 +394,7 @@ model Engagement {
   recruiter       User                        @relation("RecruiterEngagements", fields: [recruiterAddress], references: [stellarAddress])
   arbiter         User                        @relation("ArbiterEngagements",   fields: [arbiterAddress],   references: [stellarAddress])
   templateVersion EngagementTemplateVersion?  @relation(fields: [templateVersionId], references: [id])
+  costCenter      CostCenter?                 @relation(fields: [costCenterId], references: [id], onDelete: SetNull)
   milestones      Milestone[]
   events          ChainEvent[]
   auditLogs       EngagementAuditLog[]
@@ -407,6 +411,7 @@ model Engagement {
   @@index([status, createdAt])
   @@index([archivedAt])
   @@index([targetStartDate])
+  @@index([costCenterId])
   @@map("engagements")
 }
 
@@ -1389,4 +1394,80 @@ model MultisigSignature {
   @@unique([pendingTxId, signerId])
   @@index([pendingTxId])
   @@map("multisig_signatures")
+}
+
+// ============================================================
+// COST CENTERS (#547)
+// ============================================================
+
+model CostCenter {
+  id        String   @id @default(uuid())
+  companyId String
+  name      String
+  code      String
+  budget    BigInt   // budget in integer base units (stroops)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company     User         @relation("CompanyCostCenters", fields: [companyId], references: [id], onDelete: Cascade)
+  engagements Engagement[]
+
+  @@unique([companyId, code])
+  @@index([companyId])
+  @@map("cost_centers")
+}
+
+// ============================================================
+// RECRUITING AGENCIES (#549)
+// ============================================================
+
+enum AgencyRole {
+  OWNER
+  RECRUITER
+}
+
+model Agency {
+  id          String   @id @default(uuid())
+  name        String
+  slug        String   @unique
+  description String?
+  website     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members AgencyMember[]
+  invites AgencyInvite[]
+
+  @@map("agencies")
+}
+
+model AgencyMember {
+  id        String     @id @default(uuid())
+  agencyId  String
+  userId    String     @unique // A recruiter can belong to only one agency at a time
+  role      AgencyRole @default(RECRUITER)
+  createdAt DateTime   @default(now())
+
+  agency Agency @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([agencyId])
+  @@map("agency_members")
+}
+
+model AgencyInvite {
+  id         String     @id @default(uuid())
+  agencyId   String
+  email      String
+  role       AgencyRole @default(RECRUITER)
+  token      String     @unique
+  expiresAt  DateTime
+  acceptedAt DateTime?
+  createdAt  DateTime   @default(now())
+
+  agency Agency @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+
+  @@index([agencyId])
+  @@index([email])
+  @@map("agency_invites")
 }

@@ -147,4 +147,9 @@ export class CreateEngagementDto {
   @IsInt()
   @Min(1)
   requiredApprovals?: number;
+
+  @ApiProperty({ required: false, description: 'Optional department cost center ID (#547)' })
+  @IsOptional()
+  @IsString()
+  costCenterId?: string;
 }

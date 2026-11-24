@@ -69,19 +69,35 @@ export class UsersService {
     if (!user) throw new NotFoundException("User not found");
 
     let averageRating: number | null | undefined;
+    let agency: { id: string; name: string; slug: string; role: string } | null | undefined;
     if (user.role === "RECRUITER") {
-      const avg = await this.prisma.recruiterReview.aggregate({
-        where: { recruiterId: user.id },
-        _avg: { rating: true },
-      });
+      const [avg, membership] = await Promise.all([
+        this.prisma.recruiterReview.aggregate({
+          where: { recruiterId: user.id },
+          _avg: { rating: true },
+        }),
+        this.prisma.agencyMember.findUnique({
+          where: { userId: user.id },
+          include: { agency: { select: { id: true, name: true, slug: true } } },
+        }),
+      ]);
       averageRating =
         avg._avg.rating != null ? Math.round(avg._avg.rating * 10) / 10 : null;
+      agency = membership
+        ? {
+            id: membership.agency.id,
+            name: membership.agency.name,
+            slug: membership.agency.slug,
+            role: membership.role,
+          }
+        : null;
     }
 
     const { id: _id, ...profile } = user;
     const result: PublicUserDto = {
       ...profile,
       ...(averageRating !== undefined ? { averageRating } : {}),
+      ...(agency !== undefined ? { agency } : {}),
     };
     await this.cache?.set(cacheKey, result, UsersService.PROFILE_TTL_S);
     return result;

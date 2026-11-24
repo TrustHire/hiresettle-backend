@@ -43,6 +43,7 @@ export class BillingService {
       },
       include: {
         milestones: true,
+        costCenter: { select: { code: true, name: true } },
       },
       orderBy: {
         createdAt: 'desc',
@@ -67,6 +68,7 @@ export class BillingService {
         totalEscrowed: escrowed.toString(),
         totalReleased: released.toString(),
         status: engagement.status,
+        costCenter: (engagement as any).costCenter?.code ?? '',
       };
     });
 
@@ -86,7 +88,7 @@ export class BillingService {
     const billingData = await this.getBillingSummary(companyUser, fromDate, toDate);
     
     // Build CSV header
-    const headers = ['Engagement ID', 'Job Title', 'Created At', 'Total Escrowed', 'Total Released', 'Status'];
+    const headers = ['Engagement ID', 'Job Title', 'Created At', 'Total Escrowed', 'Total Released', 'Status', 'Cost Center'];
     
     // Build CSV rows
     const rows = billingData.engagementBreakdown.map((item) => [
@@ -96,6 +98,7 @@ export class BillingService {
       item.totalEscrowed,
       item.totalReleased,
       item.status,
+      csvCell(item.costCenter),
     ]);
 
     // Add summary row
@@ -106,6 +109,7 @@ export class BillingService {
       billingData.summary.totalEscrowed,
       billingData.summary.totalReleased,
       `${billingData.summary.totalEngagements} engagements`,
+      '',
     ];
 
     // Combine all parts
@@ -148,6 +152,7 @@ export class BillingService {
 
     const engagements = await this.prisma.engagement.findMany({
       where,
+      include: { costCenter: { select: { code: true } } },
       orderBy: { createdAt: 'desc' },
     });
 
@@ -156,14 +161,16 @@ export class BillingService {
       'Engagement Reference',
       'Amount (stroops)',
       'Status',
+      'Cost Center',
     ]);
 
-    const rows = engagements.map((e) =>
+    const rows = engagements.map((e: any) =>
       buildCsvRow([
         e.createdAt.toISOString(),
         e.id,
         e.totalAmount.toString(),
         e.status,
+        e.costCenter?.code ?? '',
       ]),
     );
 

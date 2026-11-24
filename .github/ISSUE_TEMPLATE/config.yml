@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://github.com/TrustHire/hiresettle-backend/tree/main/docs
+    about: Check the project documentation before opening an issue.
