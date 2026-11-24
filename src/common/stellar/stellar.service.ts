@@ -15,6 +15,11 @@ import {
   xdr,
   nativeToScVal,
   Transaction,
+  Horizon,
+  Asset,
+  Operation,
+  Claimant,
+  Memo,
 } from "@stellar/stellar-sdk";
 import { StellarError, StellarErrorCode } from "./stellar.error";
 import { CacheService } from "../cache/cache.service";
@@ -768,6 +773,180 @@ export class StellarService implements OnModuleInit {
   ): Promise<{ sufficient: boolean; balance: bigint }> {
     const { balance } = await this.getBalance(accountAddress, tokenAddress);
     return { sufficient: balance >= requiredAmount, balance };
+  }
+
+  /**
+   * True when `accountAddress` can receive `tokenAddress` (CODE:ISSUER).
+   * Native XLM and the issuer itself never need a trustline.
+   * An unauthorized trustline (auth-required issuers) counts as missing.
+   */
+  async hasTrustline(accountAddress: string, tokenAddress: string): Promise<boolean> {
+    if (tokenAddress === 'native' || tokenAddress === 'XLM') return true;
+    const [code, issuer] = tokenAddress.split(':');
+    if (!code || !issuer) return true; // Soroban-only token contract — no classic trustline concept
+    if (issuer === accountAddress) return true;
+
+    const response = await fetch(`${this.horizonUrl}/accounts/${accountAddress}`);
+    if (response.status === 404) return false;
+    if (!response.ok) {
+      throw new StellarError(
+        `Horizon returned ${response.status} while loading ${accountAddress}`,
+        StellarErrorCode.SUBMISSION_FAILED,
+      );
+    }
+    const account = await response.json();
+    return (account.balances ?? []).some(
+      (b: any) =>
+        b.asset_code === code &&
+        b.asset_issuer === issuer &&
+        b.is_authorized !== false,
+    );
+  }
+
+  /**
+   * Release a milestone payment to an explicit destination instead of the
+   * engagement's recruiter address. Used to route funds through the platform
+   * relay account when the recruiter has no trustline, so the relay can hand
+   * them over as a claimable balance. Requires the escrow contract to expose
+   * `release_milestone_payment_to(engagement_id, milestone_index, destination)`.
+   */
+  async releaseMilestonePaymentTo(
+    engagementId: string,
+    milestoneIndex: number,
+    destination: string,
+  ): Promise<string> {
+    const keypair = this.requireBackendKeypair();
+    const contract = new Contract(this.contractId);
+    const account = await this.rpcClient.getAccount(keypair.publicKey());
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        contract.call(
+          'release_milestone_payment_to',
+          nativeToScVal(engagementId, { type: 'string' }),
+          nativeToScVal(milestoneIndex, { type: 'u32' }),
+          nativeToScVal(destination, { type: 'address' }),
+        ),
+      )
+      .setTimeout(60)
+      .build();
+
+    const { txHash } = await this.submitAndConfirm(tx);
+    return txHash;
+  }
+
+  /**
+   * Create a claimable balance from the backend (relay) account.
+   * The recipient can claim unconditionally; the backend may reclaim after
+   * `reclaimAfterSeconds` so funds are never stranded.
+   */
+  async createClaimableBalance(params: {
+    recipient: string;
+    tokenAddress: string;
+    amountStroops: bigint;
+    reclaimAfterSeconds: number;
+    memo?: string;
+  }): Promise<{ balanceId: string; txHash: string }> {
+    const keypair = this.requireBackendKeypair();
+    const asset = this.toClassicAsset(params.tokenAddress);
+    const horizon = this.horizon();
+    const source = await horizon.loadAccount(keypair.publicKey());
+
+    const builder = new TransactionBuilder(source, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        Operation.createClaimableBalance({
+          asset,
+          amount: this.stroopsToUsdc(params.amountStroops, 7),
+          claimants: [
+            new Claimant(params.recipient, Claimant.predicateUnconditional()),
+            new Claimant(
+              keypair.publicKey(),
+              Claimant.predicateNot(
+                Claimant.predicateBeforeRelativeTime(String(params.reclaimAfterSeconds)),
+              ),
+            ),
+          ],
+        }),
+      )
+      .setTimeout(60);
+    if (params.memo) builder.addMemo(Memo.text(params.memo.slice(0, 28)));
+
+    const tx = builder.build();
+    tx.sign(keypair);
+    const balanceId = tx.getClaimableBalanceId(0);
+    const result = await horizon.submitTransaction(tx);
+    return { balanceId, txHash: result.hash };
+  }
+
+  /** Returns the claimable balance from Horizon, or null once it has been claimed/reclaimed. */
+  async getClaimableBalance(balanceId: string): Promise<{ id: string; claimants: any[] } | null> {
+    const response = await fetch(`${this.horizonUrl}/claimable_balances/${balanceId}`);
+    if (response.status === 404) return null;
+    if (!response.ok) {
+      throw new StellarError(
+        `Horizon returned ${response.status} for claimable balance ${balanceId}`,
+        StellarErrorCode.SUBMISSION_FAILED,
+      );
+    }
+    return response.json();
+  }
+
+  /**
+   * Publish a 32-byte hash on-chain (memo hash + manageData entry on the
+   * backend account). Used to anchor the daily audit-chain root.
+   */
+  async anchorHash(dataKey: string, hashHex: string): Promise<string> {
+    const keypair = this.requireBackendKeypair();
+    const horizon = this.horizon();
+    const source = await horizon.loadAccount(keypair.publicKey());
+    const hash = Buffer.from(hashHex, 'hex');
+
+    const tx = new TransactionBuilder(source, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(Operation.manageData({ name: dataKey.slice(0, 64), value: hash }))
+      .addMemo(Memo.hash(hash))
+      .setTimeout(60)
+      .build();
+    tx.sign(keypair);
+    const result = await horizon.submitTransaction(tx);
+    return result.hash;
+  }
+
+  getNetworkPassphrase(): string {
+    return this.networkPassphrase;
+  }
+
+  private horizon(): Horizon.Server {
+    return new Horizon.Server(this.horizonUrl, {
+      allowHttp: this.horizonUrl?.startsWith('http://'),
+    });
+  }
+
+  private toClassicAsset(tokenAddress: string): Asset {
+    if (tokenAddress === 'native' || tokenAddress === 'XLM') return Asset.native();
+    const [code, issuer] = tokenAddress.split(':');
+    if (!code || !issuer) {
+      throw new BadRequestException(`Token ${tokenAddress} is not a classic CODE:ISSUER asset`);
+    }
+    return new Asset(code, issuer);
+  }
+
+  private requireBackendKeypair(): Keypair {
+    if (!this.backendKeypair) {
+      throw new StellarError(
+        'Backend Stellar keypair is not configured',
+        StellarErrorCode.KEYPAIR_NOT_CONFIGURED,
+      );
+    }
+    return this.backendKeypair;
   }
 
   getBackendAccountAddress(): string | undefined {

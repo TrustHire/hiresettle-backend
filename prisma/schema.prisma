@@ -71,6 +71,10 @@ enum NotificationType {
   UNMATCHED_PAYMENT_ALERT
   DISPUTE_MESSAGE_CREATED
   FILE_QUARANTINED
+  PAYOUT_COMPLETED
+  PAYOUT_FAILED
+  CLAIMABLE_BALANCE_CREATED
+  CLAIMABLE_BALANCE_REMINDER
 }
 
 // Malware scan state of an uploaded file (#471). Files are only served once CLEAN.
@@ -293,6 +297,8 @@ model User {
   arbiterRecusals      ArbiterRecusal[]
   milestoneComments    MilestoneComment[]
   creditLedgerEntries  CreditLedger[]           @relation("CompanyCreditLedger")
+  payouts              Payout[]
+  claimableBalances    ClaimableBalance[]
   costCenters          CostCenter[]             @relation("CompanyCostCenters")
   agencyMembership     AgencyMember?
 
@@ -317,6 +323,10 @@ model ApiKey {
   expiresAt  DateTime?
   revokedAt  DateTime?
   lastUsedAt DateTime?
+  rateLimit    Int?    // requests per throttle window for this key; null = global THROTTLE_LIMIT
+  monthlyQuota Int?    // max requests per calendar month (UTC); null = unlimited
+  quotaPeriod  String? // "YYYY-MM" the quotaUsed counter belongs to
+  quotaUsed    Int     @default(0)
   createdAt  DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -514,6 +524,10 @@ model EngagementAuditLog {
   changedBy    String
   reason       String?
   createdAt    DateTime @default(now())
+  // Tamper-evident hash chain: filled in by AuditChainService (seal job)
+  chainSeq     Int?      @unique
+  prevHash     String?
+  hash         String?
 
   engagement   Engagement @relation(fields: [engagementId], references: [id])
   changedByUser User       @relation(fields: [changedBy], references: [id])
@@ -789,6 +803,10 @@ model AuditLog {
   reason      String
   changedBy   String    // userId of the admin who made the change
   createdAt   DateTime  @default(now())
+  // Tamper-evident hash chain: filled in by AuditChainService (seal job)
+  chainSeq     Int?      @unique
+  prevHash     String?
+  hash         String?
 
   @@index([entityType, entityId])
   @@index([changedBy])
@@ -824,6 +842,10 @@ model MilestoneAuditLog {
   action      String?       // e.g. PARTIAL_RELEASE_EXECUTED (#378)
   details     Json?         // structured breakdown, e.g. amounts and txHash
   createdAt   DateTime      @default(now())
+  // Tamper-evident hash chain: filled in by AuditChainService (seal job)
+  chainSeq     Int?      @unique
+  prevHash     String?
+  hash         String?
 
   milestone   Milestone     @relation(fields: [milestoneId], references: [id])
   user        User          @relation(fields: [changedBy], references: [id])
@@ -1470,4 +1492,96 @@ model AgencyInvite {
   @@index([agencyId])
   @@index([email])
   @@map("agency_invites")
+}
+
+// ============================================================
+// Fiat off-ramp (SEP-24) and claimable-balance fallback
+// ============================================================
+
+enum PayoutStatus {
+  INTERACTIVE          // interactive URL issued, recruiter completing anchor KYC/form
+  PENDING_USER_TRANSFER // anchor waiting for the recruiter's on-chain USDC transfer
+  PENDING_ANCHOR       // anchor processing the off-chain fiat leg
+  COMPLETED
+  FAILED
+  EXPIRED
+}
+
+model Payout {
+  id                    String       @id @default(uuid())
+  recruiterId           String
+  anchorId              String       // key from PAYOUT_ANCHORS config
+  assetCode             String
+  amount                String?      // requested amount (human units), optional
+  status                PayoutStatus @default(INTERACTIVE)
+  anchorTransactionId   String
+  anchorStatus          String?      // raw SEP-24 status
+  anchorToken           String       // SEP-10 JWT issued by the anchor; never returned by the API
+  interactiveUrl        String
+  moreInfoUrl           String?
+  amountIn              String?
+  amountOut             String?
+  amountFee             String?
+  withdrawAnchorAccount String?
+  withdrawMemo          String?
+  withdrawMemoType      String?
+  stellarTransactionId  String?
+  externalTransactionId String?
+  message               String?
+  lastPolledAt          DateTime?
+  completedAt           DateTime?
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+
+  recruiter User @relation(fields: [recruiterId], references: [id], onDelete: Cascade)
+
+  @@unique([anchorId, anchorTransactionId])
+  @@index([recruiterId, createdAt])
+  @@index([status, lastPolledAt])
+  @@map("payouts")
+}
+
+enum ClaimableBalanceStatus {
+  UNCLAIMED
+  CLAIMED
+  RECLAIMED
+}
+
+model ClaimableBalance {
+  id              String                 @id @default(uuid())
+  balanceId       String                 @unique // on-chain claimable balance id (hex)
+  recruiterId     String?
+  recipientAddress String
+  engagementId    String
+  milestoneIndex  Int
+  asset           String                 // CODE:ISSUER
+  amount          BigInt                 // stroops
+  txHash          String
+  status          ClaimableBalanceStatus @default(UNCLAIMED)
+  remindersSent   Int                    @default(0)
+  lastRemindedAt  DateTime?
+  claimedAt       DateTime?
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  recruiter User? @relation(fields: [recruiterId], references: [id], onDelete: SetNull)
+
+  @@unique([engagementId, milestoneIndex])
+  @@index([status, lastRemindedAt])
+  @@map("claimable_balances")
+}
+
+// ============================================================
+// Audit hash-chain anchors (daily root published on Stellar)
+// ============================================================
+
+model AuditChainAnchor {
+  id         String   @id @default(uuid())
+  day        DateTime @unique @db.Date
+  rootHash   String
+  heads      Json     // { tableName: { chainSeq, hash } }
+  txHash     String?
+  createdAt  DateTime @default(now())
+
+  @@map("audit_chain_anchors")
 }

@@ -49,6 +49,7 @@ import { GdprService } from '../users/gdpr.service';
 import { AuthService, RequestMeta } from '../auth/auth.service';
 import { ApiKeysService } from '../auth/api-keys.service';
 import { CreateApiKeyDto } from '../auth/dto/create-api-key.dto';
+import { UpdateApiKeyLimitsDto } from '../auth/dto/update-api-key-limits.dto';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -441,5 +442,23 @@ export class AdminController {
   @ApiResponse({ status: 404, description: 'API key not found' })
   revokeApiKey(@Param('id') id: string) {
     return this.apiKeys.revoke(id);
+  }
+
+  @Patch('api-keys/:id/limits')
+  @ApiOperation({
+    summary: 'Set per-key rate limit and monthly quota (ADMIN only, no ceilings). null clears a limit.',
+  })
+  @ApiParam({ name: 'id', description: 'API key ID' })
+  @ApiResponse({ status: 200, description: 'Updated key with current-month usage' })
+  @ApiResponse({ status: 404, description: 'API key not found' })
+  updateApiKeyLimits(@Param('id') id: string, @Body() dto: UpdateApiKeyLimitsDto) {
+    return this.apiKeys.updateLimits(id, dto);
+  }
+
+  @Get('api-keys/:id/usage')
+  @ApiOperation({ summary: 'Current-month quota usage for an API key (ADMIN only)' })
+  @ApiParam({ name: 'id', description: 'API key ID' })
+  getApiKeyUsage(@Param('id') id: string) {
+    return this.apiKeys.getUsage(id);
   }
 }

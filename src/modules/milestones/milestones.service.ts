@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, Logger, UnprocessableEntityException, ForbiddenException, BadRequestException, ConflictException, Optional } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
+import { PayoutDeliveryService } from '../payouts/payout-delivery.service';
 import { S3Service } from '../../common/s3/s3.service';
 import { DisputeOutcome, FileScanStatus, MilestoneKind, MilestoneStatus, NotificationType } from '@prisma/client';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -20,7 +21,17 @@ export class MilestonesService {
     private readonly s3: S3Service,
     private readonly disputes: DisputesService,
     @Optional() private readonly fileScan?: FileScanService,
+    @Optional() private readonly payoutDelivery?: PayoutDeliveryService,
   ) {}
+
+  /** Trustline-aware release (falls back to a claimable balance); plain contract release when not wired. */
+  private async releasePayment(engagementId: string, milestoneIndex: number): Promise<void> {
+    if (this.payoutDelivery) {
+      await this.payoutDelivery.releaseMilestone(engagementId, milestoneIndex);
+    } else {
+      await this.stellar.releaseMilestonePayment(engagementId, milestoneIndex);
+    }
+  }
 
   async findByEngagement(engagementId: string) {
     return this.prisma.milestone.findMany({
@@ -280,7 +291,7 @@ export class MilestonesService {
     });
 
     if (approvalCount >= requiredApprovals) {
-      await this.stellar.releaseMilestonePayment(engagementId, milestoneIndex);
+      await this.releasePayment(engagementId, milestoneIndex);
       const paymentReleased = BigInt(milestone.amount || 0);
       const updated = await this.markConfirmed(engagementId, milestoneIndex, paymentReleased);
       await this.proofVersions.markApproved(milestone.id, user.id);
@@ -365,7 +376,7 @@ export class MilestonesService {
       return { approvals: approvalCount, requiredApprovals, confirmed: false };
     }
 
-    await this.stellar.releaseMilestonePayment(engagementId, milestoneIndex);
+    await this.releasePayment(engagementId, milestoneIndex);
 
     const paymentReleased = BigInt(milestone.amount || 0);
     const updated = await this.markConfirmed(engagementId, milestoneIndex, paymentReleased);
