@@ -17,7 +17,8 @@ import { HttpMetricsInterceptor } from './metrics/http-metrics.interceptor';
 import { MetricsService } from './metrics/metrics.service';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  // rawBody: needed to verify HMAC signatures on inbound ATS webhooks.
+  const app = await NestFactory.create(AppModule, { bufferLogs: true, rawBody: true });
   const logger = app.get(WINSTON_MODULE_NEST_PROVIDER);
   app.useLogger(logger);
 

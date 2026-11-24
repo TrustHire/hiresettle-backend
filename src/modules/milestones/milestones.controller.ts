@@ -14,6 +14,7 @@ import { ResolveDisputeDto } from './dto/resolve-dispute.dto';
 import { UpdateMilestoneStatusDto } from './dto/update-milestone-status.dto';
 import { BulkCreateMilestonesDto } from './dto/bulk-create-milestones.dto';
 import { SetPlacementDueDateDto } from './dto/set-placement-due-date.dto';
+import { SetProofRequirementsDto } from './dto/set-proof-requirements.dto';
 import { AdjustMilestonePercentsDto } from './dto/adjust-milestone-percents.dto';
 import { Idempotent } from '../../common/decorators/idempotent.decorator';
 import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
@@ -345,6 +346,25 @@ export class MilestonesController {
     @CurrentUser() user: any,
   ) {
     return this.milestonesService.setPlacementDueDate(engagementId, index, dto.placementDueAt, user);
+  }
+
+  /**
+   * PUT /api/v1/engagements/:engagementId/milestones/:index/proof-requirements
+   * Replace the checklist every proof submission must satisfy (company only).
+   */
+  @Put(':index/proof-requirements')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Replace the proof requirement checklist (company only, LOCKED/PENDING milestones)' })
+  @ApiResponse({ status: 200, description: 'Requirements updated' })
+  @ApiResponse({ status: 403, description: 'Not the company on this engagement' })
+  @ApiResponse({ status: 422, description: 'Proof is already under review' })
+  setProofRequirements(
+    @Param('engagementId') engagementId: string,
+    @Param('index', ParseIntPipe) index: number,
+    @Body() dto: SetProofRequirementsDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.milestonesService.setProofRequirements(engagementId, index, dto.proofRequirements, user);
   }
 
   /**

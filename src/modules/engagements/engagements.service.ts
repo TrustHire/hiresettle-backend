@@ -8,6 +8,7 @@ import { CreateEngagementDto } from './dto/create-engagement.dto';
 import { EngagementSummaryDto } from './dto/engagement-summary.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AuditLogService } from './audit-log.service';
+import { resolveProofRequirements } from '../milestones/proof-requirements';
 import { cursorPage } from '../../common/pagination/cursor-pagination';
 import { ExchangeRateService } from '../../common/exchange-rates/exchange-rate.service';
 
@@ -226,6 +227,7 @@ export class EngagementsService {
         paymentPercent: m.paymentPercent,
         retentionDays,
         status: isRetention ? MilestoneStatus.LOCKED : MilestoneStatus.PENDING,
+        proofRequirements: resolveProofRequirements(m, templateVersion?.milestoneConfig),
       };
     });
 

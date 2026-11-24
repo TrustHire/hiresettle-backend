@@ -42,6 +42,9 @@ import { TeamInvitesModule } from "./modules/team-invites/team-invites.module";
 import { CompaniesModule } from "./modules/companies/companies.module";
 import { CostCentersModule } from "./modules/cost-centers/cost-centers.module";
 import { AgenciesModule } from "./modules/agencies/agencies.module";
+import { OAuthClientsModule } from "./modules/oauth-clients/oauth-clients.module";
+import { AccountingModule } from "./modules/accounting/accounting.module";
+import { AtsModule } from "./modules/ats/ats.module";
 import { GraphqlModule } from "./graphql/graphql.module";
 import stellarConfig from "./config/stellar.config";
 import { MaintenanceModeModule } from "./common/maintenance/maintenance-mode.module";
@@ -109,6 +112,9 @@ export function shouldSkipThrottle(req: { path?: string; url?: string; originalU
     CompaniesModule,
     CostCentersModule,
     AgenciesModule,
+    OAuthClientsModule,
+    AccountingModule,
+    AtsModule,
     EmailModule,
     GraphqlModule,
     FeatureFlagsModule,

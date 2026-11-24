@@ -30,8 +30,14 @@ export class CreateEngagementTemplateDto {
         { name: 'Placement', paymentPercent: 50, kind: 'PLACEMENT' },
         { name: '90 Day Retention', paymentPercent: 50, kind: 'RETENTION' }
       ],
-      retentionDays: [90]
-    }
+      retentionDays: [90],
+      defaultProofRequirements: {
+        PLACEMENT: ['Signed offer letter', 'Start-date confirmation']
+      }
+    },
+    description:
+      'milestones[].proofRequirements sets a per-milestone checklist; defaultProofRequirements (keyed by kind) ' +
+      'applies to milestones that do not set their own.'
   })
   @IsObject() @IsNotEmpty()
   milestoneConfig: any;

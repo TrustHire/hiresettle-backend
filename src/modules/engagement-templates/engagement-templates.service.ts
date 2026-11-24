@@ -5,12 +5,14 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { CreateEngagementTemplateDto } from './dto/create-engagement-template.dto';
 import { UpdateEngagementTemplateDto } from './dto/update-engagement-template.dto';
+import { validateTemplateProofRequirements } from '../milestones/proof-requirements';
 
 @Injectable()
 export class EngagementTemplatesService {
   constructor(private readonly prisma: PrismaService) {}
 
   async create(companyId: string, dto: CreateEngagementTemplateDto) {
+    validateTemplateProofRequirements(dto.milestoneConfig);
     return this.prisma.$transaction(async (tx) => {
       const template = await tx.engagementTemplate.create({
         data: {
@@ -71,6 +73,7 @@ export class EngagementTemplatesService {
   // Past engagements keep their existing templateVersionId, so their referenced content
   // never changes underneath them.
   async update(id: string, companyId: string, dto: UpdateEngagementTemplateDto) {
+    validateTemplateProofRequirements(dto.milestoneConfig);
     const existing = await this.findOne(id, companyId);
     const merged = {
       name: dto.name ?? existing.name,
@@ -176,6 +179,7 @@ export class EngagementTemplatesService {
     if (!p?.name || !p?.jobTitle || !p?.milestoneConfig) {
       throw new BadRequestException('Import payload must include name, jobTitle, and milestoneConfig');
     }
+    validateTemplateProofRequirements(p.milestoneConfig);
     return this.create(companyId, {
       name: p.name,
       jobTitle: p.jobTitle,

@@ -71,6 +71,7 @@ enum NotificationType {
   UNMATCHED_PAYMENT_ALERT
   DISPUTE_MESSAGE_CREATED
   FILE_QUARANTINED
+  ATS_CANDIDATE_HIRED
 }
 
 // Malware scan state of an uploaded file (#471). Files are only served once CLEAN.
@@ -294,6 +295,10 @@ model User {
   milestoneComments    MilestoneComment[]
   creditLedgerEntries  CreditLedger[]           @relation("CompanyCreditLedger")
   costCenters          CostCenter[]             @relation("CompanyCostCenters")
+  oauthClients         OAuthClient[]            @relation("CompanyOAuthClients")
+  accountingConnections AccountingConnection[]  @relation("CompanyAccountingConnections")
+  accountMappings      AccountMapping[]         @relation("CompanyAccountMappings")
+  atsIntegrations      AtsIntegration[]         @relation("CompanyAtsIntegrations")
   agencyMembership     AgencyMember?
 
   @@index([role, deactivatedAt])
@@ -538,6 +543,8 @@ model Milestone {
   approachingNotificationSent Boolean @default(false)
   placementDueAt   DateTime?      // optional expected proof-submission date for PLACEMENT milestones (#260)
   reminderSent     Boolean        @default(false) // true once the due-soon reminder has been sent (#260)
+  proofRequirements String[]      @default([]) // checklist every proof submission must satisfy, e.g. "Signed offer letter"
+  readyForProofAt  DateTime?      // set when an ATS reports the candidate as hired
   status           MilestoneStatus @default(PENDING)
   paymentReleased  BigInt?
   confirmedAt      DateTime?
@@ -1470,4 +1477,160 @@ model AgencyInvite {
   @@index([agencyId])
   @@index([email])
   @@map("agency_invites")
+}
+
+// ============================================================
+// OAUTH CLIENT CREDENTIALS (app-level integrator access)
+// ============================================================
+
+model OAuthClient {
+  id          String    @id @default(uuid())
+  clientId    String    @unique
+  secretHash  String    // scrypt hash of the client secret (salt:hash)
+  name        String
+  companyId   String
+  scopes      String[]  @default([])
+  createdById String
+  revokedAt   DateTime?
+  lastUsedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  company User @relation("CompanyOAuthClients", fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@map("oauth_clients")
+}
+
+// ============================================================
+// ACCOUNTING SYNC (Xero / QuickBooks)
+// ============================================================
+
+enum AccountingProvider {
+  XERO
+  QUICKBOOKS
+}
+
+enum AccountingCategory {
+  PLATFORM_FEE
+  RECRUITER_FEE
+}
+
+enum AccountingSyncStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+model AccountingConnection {
+  id                    String             @id @default(uuid())
+  companyId             String
+  provider              AccountingProvider
+  externalTenantId      String             // Xero tenantId / QuickBooks realmId
+  accessTokenEnc        String
+  refreshTokenEnc       String
+  accessTokenExpiresAt  DateTime
+  syncFrom              DateTime           @default(now()) // only milestones released after this are pushed
+  disconnectedAt        DateTime?
+  lastSyncedAt          DateTime?
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+
+  company  User                @relation("CompanyAccountingConnections", fields: [companyId], references: [id], onDelete: Cascade)
+  syncLogs AccountingSyncLog[]
+
+  @@unique([companyId, provider])
+  @@map("accounting_connections")
+}
+
+model AccountMapping {
+  id          String             @id @default(uuid())
+  companyId   String
+  provider    AccountingProvider
+  category    AccountingCategory
+  accountCode String
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  company User @relation("CompanyAccountMappings", fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, provider, category])
+  @@map("accounting_account_mappings")
+}
+
+model AccountingSyncLog {
+  id           String               @id @default(uuid())
+  connectionId String
+  category     AccountingCategory
+  milestoneId  String
+  amount       BigInt
+  status       AccountingSyncStatus @default(PENDING)
+  externalId   String?
+  error        String?
+  attempts     Int                  @default(0)
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+
+  connection AccountingConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  // One record per pushed document — the unique key is what makes syncing idempotent across workers.
+  @@unique([connectionId, category, milestoneId])
+  @@index([connectionId, status])
+  @@map("accounting_sync_logs")
+}
+
+// ============================================================
+// ATS INBOUND WEBHOOKS (Greenhouse / Lever)
+// ============================================================
+
+enum AtsProvider {
+  GREENHOUSE
+  LEVER
+}
+
+model AtsIntegration {
+  id         String      @id @default(uuid()) // used in the public webhook URL
+  companyId  String
+  provider   AtsProvider
+  secretEnc  String      // encrypted signing secret (Greenhouse secret key / Lever signature token)
+  disabledAt DateTime?
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  company  User                   @relation("CompanyAtsIntegrations", fields: [companyId], references: [id], onDelete: Cascade)
+  mappings AtsEngagementMapping[]
+  events   AtsWebhookEvent[]
+
+  @@unique([companyId, provider])
+  @@map("ats_integrations")
+}
+
+model AtsEngagementMapping {
+  id                  String   @id @default(uuid())
+  integrationId       String
+  engagementId        String
+  externalJobId       String   @default("") // "" = match any job
+  externalCandidateId String   @default("") // "" = match any candidate on the job
+  createdAt           DateTime @default(now())
+
+  integration AtsIntegration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@unique([integrationId, externalJobId, externalCandidateId])
+  @@index([engagementId])
+  @@map("ats_engagement_mappings")
+}
+
+model AtsWebhookEvent {
+  id            String    @id @default(uuid())
+  integrationId String
+  payloadHash   String    // sha256 of the raw body, dedupes provider retries
+  eventType     String
+  engagementId  String?
+  outcome       String
+  createdAt     DateTime  @default(now())
+
+  integration AtsIntegration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@unique([integrationId, payloadHash])
+  @@map("ats_webhook_events")
 }

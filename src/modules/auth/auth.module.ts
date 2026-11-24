@@ -33,6 +33,6 @@ import { JwksController } from './jwt-keys/jwks.controller';
   ],
   controllers: [AuthController, JwksController],
   providers: [AuthService, ApiKeysService, JwtStrategy, ApiKeyGuard, JwtOrApiKeyGuard, ApiKeyScopesGuard],
-  exports: [JwtKeysModule, AuthService, ApiKeysService, ApiKeyGuard, JwtOrApiKeyGuard, ApiKeyScopesGuard],
+  exports: [JwtModule, JwtKeysModule, AuthService, ApiKeysService, ApiKeyGuard, JwtOrApiKeyGuard, ApiKeyScopesGuard],
 })
 export class AuthModule {}

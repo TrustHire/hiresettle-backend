@@ -99,6 +99,17 @@ export const envValidationSchema = Joi.object({
 
   // Google OAuth2 (optional)
   GOOGLE_CLIENT_ID: Joi.string().allow('').optional(),
+  // Integrations: OAuth client credentials, accounting sync, ATS webhooks
+  INTEGRATIONS_ENCRYPTION_KEY: Joi.string().min(32).optional(),
+  OAUTH_CLIENT_TOKEN_TTL_SECONDS: Joi.number().integer().min(60).max(86400).default(3600),
+  PUBLIC_API_URL: Joi.string().uri().allow('').optional(),
+  XERO_CLIENT_ID: Joi.string().allow('').optional(),
+  XERO_CLIENT_SECRET: Joi.string().allow('').optional(),
+  QUICKBOOKS_CLIENT_ID: Joi.string().allow('').optional(),
+  QUICKBOOKS_CLIENT_SECRET: Joi.string().allow('').optional(),
+  QUICKBOOKS_ENVIRONMENT: Joi.string().valid('production', 'sandbox').default('production'),
+  ACCOUNTING_CURRENCY: Joi.string().length(3).default('USD'),
+  ACCOUNTING_PLATFORM_VENDOR_NAME: Joi.string().default('HireSettle'),
   GOOGLE_CLIENT_SECRET: Joi.string().allow('').optional(),
   GOOGLE_CALLBACK_URL: Joi.string().uri().allow('').optional(),
   GOOGLE_OAUTH_SUCCESS_REDIRECT: Joi.string().uri().allow('').optional(),

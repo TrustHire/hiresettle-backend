@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { ApiKeysService } from '../../modules/auth/api-keys.service';
+import { assertClientTokenAllowed } from './client-token-scopes';
 
 /**
  * Accepts either a Bearer JWT or an `X-Api-Key` header.
@@ -35,5 +36,11 @@ export class JwtOrApiKeyGuard extends AuthGuard('jwt') implements CanActivate {
     }
 
     return super.canActivate(context) as Promise<boolean>;
+  }
+
+  handleRequest(err: any, user: any, _info: any, context: ExecutionContext) {
+    if (err || !user) throw err || new UnauthorizedException();
+    assertClientTokenAllowed(user, context);
+    return user;
   }
 }

@@ -1,7 +1,7 @@
 import {
   IsString, IsNotEmpty, IsArray, ValidateNested,
   IsInt, Min, Max, IsOptional, IsIn, registerDecorator, ValidationOptions, ValidationArguments,
-  ArrayMaxSize, IsDateString,
+  ArrayMaxSize, IsDateString, MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
@@ -69,6 +69,20 @@ export class MilestoneInputDto {
   @IsOptional()
   @IsDateString()
   placementDueAt?: string;
+
+  @ApiProperty({
+    required: false,
+    type: [String],
+    example: ['Signed offer letter', 'Start-date confirmation'],
+    description: 'Checklist every proof submission must satisfy. Defaults to the template's defaultProofRequirements for this kind.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsString({ each: true })
+  @IsNotEmpty({ each: true })
+  @MaxLength(200, { each: true })
+  proofRequirements?: string[];
 }
 
 export class CreateEngagementDto {
