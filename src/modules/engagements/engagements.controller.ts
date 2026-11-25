@@ -39,6 +39,10 @@ import { CreateCommentDto } from './dto/create-comment.dto';
 import { UpdateCommentDto } from './dto/update-comment.dto';
 import { AddWatcherDto } from './dto/add-watcher.dto';
 import { UpdateCandidateDetailsDto } from './dto/update-candidate-details.dto';
+import { RequestAttachmentUploadDto } from './dto/request-attachment-upload.dto';
+import { ConfirmAttachmentUploadDto } from './dto/confirm-attachment-upload.dto';
+import { EngagementAttachmentsService } from './engagement-attachments.service';
+import { BulkArchiveDto } from './dto/bulk-archive.dto';
 
 @ApiTags('engagements')
 @ApiBearerAuth()
@@ -55,6 +59,7 @@ export class EngagementsController {
     private readonly auditLogService: AuditLogService,
     private readonly savedFiltersService: SavedFiltersService,
     private readonly activityFeed: ActivityFeedService,
+    private readonly attachments: EngagementAttachmentsService,
   ) {}
 
   @Post()
@@ -458,6 +463,20 @@ export class EngagementsController {
     return this.engagementsService.recuseArbiter(id, user.id, user.role);
   }
 
+  @Post('bulk-archive')
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_WRITE)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Archive up to 100 terminal-state engagements in one request' })
+  @ApiResponse({ status: 200, description: 'Per-ID results with counts' })
+  @ApiResponse({ status: 400, description: 'Validation failed' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  bulkArchive(
+    @Body() dto: BulkArchiveDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.engagementsService.bulkArchive(user.id, dto.ids);
+  }
+
   @Post(':id/archive')
   @RequireScopes(ApiKeyScope.ENGAGEMENTS_WRITE)
   @HttpCode(HttpStatus.OK)
@@ -559,6 +578,92 @@ export class EngagementsController {
     @CurrentUser() user: User,
   ) {
     return this.engagementsService.importFromCsv(user, file);
+  }
+
+  // ----------------------------------------------------------
+  // JD ATTACHMENTS (#467)
+  // ----------------------------------------------------------
+
+  /**
+   * POST /api/v1/engagements/:id/attachments/upload-url
+   * Step 1 — returns a presigned S3 PUT URL for direct upload.
+   * Restricted to PDF and DOCX; declared size must be ≤ 10 MB.
+   */
+  @Post(':id/attachments/upload-url')
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_WRITE)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Get a presigned upload URL for a JD/attachment file (participants only)' })
+  @ApiParam({ name: 'id', description: 'Engagement ID' })
+  @ApiResponse({ status: 200, description: '{ uploadUrl, key, expiresIn }' })
+  @ApiResponse({ status: 400, description: 'Disallowed MIME type or file too large' })
+  @ApiResponse({ status: 403, description: 'Not a participant' })
+  @ApiResponse({ status: 404, description: 'Engagement not found' })
+  requestAttachmentUploadUrl(
+    @Param('id') id: string,
+    @Body() dto: RequestAttachmentUploadDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.attachments.requestUploadUrl(id, user, dto);
+  }
+
+  /**
+   * POST /api/v1/engagements/:id/attachments/confirm-upload
+   * Step 2 — confirm the file has been PUT to S3.
+   * Server verifies Content-Type and size, then persists attachment metadata.
+   */
+  @Post(':id/attachments/confirm-upload')
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_WRITE)
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Confirm a direct-to-S3 attachment upload (participants only)' })
+  @ApiParam({ name: 'id', description: 'Engagement ID' })
+  @ApiResponse({ status: 201, description: 'Attachment metadata persisted' })
+  @ApiResponse({ status: 400, description: 'Disallowed Content-Type or file exceeds 10 MB' })
+  @ApiResponse({ status: 403, description: 'Not a participant' })
+  @ApiResponse({ status: 404, description: 'Engagement or S3 object not found' })
+  confirmAttachmentUpload(
+    @Param('id') id: string,
+    @Body() dto: ConfirmAttachmentUploadDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.attachments.confirmUpload(id, user, dto.key);
+  }
+
+  /**
+   * GET /api/v1/engagements/:id/attachments
+   * List all attachments on an engagement (participants only).
+   */
+  @Get(':id/attachments')
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_READ)
+  @ApiOperation({ summary: 'List attachments on an engagement (participants only)' })
+  @ApiParam({ name: 'id', description: 'Engagement ID' })
+  @ApiResponse({ status: 200, description: 'Attachment list' })
+  @ApiResponse({ status: 403, description: 'Not a participant' })
+  @ApiResponse({ status: 404, description: 'Engagement not found' })
+  listAttachments(
+    @Param('id') id: string,
+    @CurrentUser() user: User,
+  ) {
+    return this.attachments.list(id, user);
+  }
+
+  /**
+   * GET /api/v1/engagements/:id/attachments/:attachmentId/download-url
+   * Returns a short-lived presigned download URL (participants only).
+   */
+  @Get(':id/attachments/:attachmentId/download-url')
+  @RequireScopes(ApiKeyScope.ENGAGEMENTS_READ)
+  @ApiOperation({ summary: 'Get a short-lived download URL for an attachment (participants only)' })
+  @ApiParam({ name: 'id', description: 'Engagement ID' })
+  @ApiParam({ name: 'attachmentId', description: 'Attachment ID' })
+  @ApiResponse({ status: 200, description: '{ url, expiresIn, fileName }' })
+  @ApiResponse({ status: 403, description: 'Not a participant' })
+  @ApiResponse({ status: 404, description: 'Attachment not found' })
+  getAttachmentDownloadUrl(
+    @Param('id') id: string,
+    @Param('attachmentId') attachmentId: string,
+    @CurrentUser() user: User,
+  ) {
+    return this.attachments.getDownloadUrl(id, attachmentId, user);
   }
 
   // ----------------------------------------------------------

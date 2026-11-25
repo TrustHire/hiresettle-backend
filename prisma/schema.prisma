@@ -418,6 +418,7 @@ model Engagement {
   review          RecruiterReview?
   disputes        Dispute[]
   arbiterRecusals ArbiterRecusal[]
+  attachments     EngagementAttachment[]
 
   @@index([status])
   @@index([companyAddress])
@@ -518,6 +519,24 @@ model EngagementWatcher {
   @@index([userId])
   @@index([engagementId])
   @@map("engagement_watchers")
+}
+
+// JD and supporting documents attached to an engagement (PDF/DOCX, max 10 MB each).
+// Files are uploaded directly to S3 via a presigned URL; only participants can download.
+model EngagementAttachment {
+  id           String   @id @default(uuid())
+  engagementId String
+  uploadedBy   String   // userId of the uploader
+  fileName     String
+  mimeType     String
+  fileSize     Int      // bytes
+  s3Key        String   // object key in the S3 bucket
+  createdAt    DateTime @default(now())
+
+  engagement Engagement @relation(fields: [engagementId], references: [id], onDelete: Cascade)
+
+  @@index([engagementId])
+  @@map("engagement_attachments")
 }
 
 model EngagementAuditLog {
@@ -733,21 +752,23 @@ model PushSubscription {
 }
 
 model Notification {
-  id        String           @id @default(uuid())
-  userId    String
-  type      NotificationType
-  title     String
-  message   String
-  data      Json?
-  read      Boolean          @default(false)
-  emailSent Boolean          @default(false)
-  createdAt DateTime         @default(now())
+  id           String           @id @default(uuid())
+  userId       String
+  type         NotificationType
+  title        String
+  message      String
+  data         Json?
+  read         Boolean          @default(false)
+  emailSent    Boolean          @default(false)
+  snoozedUntil DateTime?        // null = not snoozed; set = hidden until this time
+  createdAt    DateTime         @default(now())
 
   // Relations
   user User @relation(fields: [userId], references: [id])
 
   @@index([userId])
   @@index([read])
+  @@index([snoozedUntil])
   @@map("notifications")
 }
 

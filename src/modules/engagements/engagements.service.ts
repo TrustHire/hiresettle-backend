@@ -1031,6 +1031,56 @@ export class EngagementsService {
     return this.serialize(updated);
   }
 
+  async bulkArchive(userId: string, ids: string[]) {
+    const TERMINAL = [EngagementStatus.COMPLETED, EngagementStatus.CANCELLED];
+    const results: Array<{ id: string; status: 'archived' | 'skipped' | 'error'; reason?: string }> = [];
+
+    for (const id of ids) {
+      try {
+        const engagement = await this.prisma.engagement.findUnique({ where: { id } });
+
+        if (!engagement) {
+          results.push({ id, status: 'error', reason: 'Not found' });
+          continue;
+        }
+        if (engagement.archivedAt) {
+          results.push({ id, status: 'skipped', reason: 'Already archived' });
+          continue;
+        }
+        if (!TERMINAL.includes(engagement.status)) {
+          results.push({ id, status: 'skipped', reason: `Non-terminal status: ${engagement.status}` });
+          continue;
+        }
+
+        await this.prisma.$transaction(async (tx) => {
+          await tx.engagement.update({
+            where: { id },
+            data: { archivedAt: new Date() },
+          });
+          await this.auditLog.record(tx, {
+            engagementId: id,
+            fromStatus: engagement.status,
+            toStatus: engagement.status, // status unchanged; this records the archive action
+            changedBy: userId,
+            reason: 'bulk-archive',
+          });
+        });
+
+        results.push({ id, status: 'archived' });
+        this.logger.log(`Engagement ${id} bulk-archived by ${userId}`);
+      } catch (err: any) {
+        results.push({ id, status: 'error', reason: err?.message ?? 'Unknown error' });
+      }
+    }
+
+    return {
+      archived: results.filter((r) => r.status === 'archived').length,
+      skipped: results.filter((r) => r.status === 'skipped').length,
+      errors: results.filter((r) => r.status === 'error').length,
+      results,
+    };
+  }
+
   // ----------------------------------------------------------
   // TAGS (#252)
   // ----------------------------------------------------------

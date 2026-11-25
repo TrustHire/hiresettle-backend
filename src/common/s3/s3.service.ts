@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   S3Client,
@@ -60,6 +60,97 @@ export class S3Service {
       ContentType: contentType,
     });
     return await getSignedUrl(this.s3, command, { expiresIn: expiresIn ?? this.defaultPresignedUrlExpiry });
+  }
+
+  /** MIME types accepted for proof and JD/attachment uploads. */
+  static readonly ATTACHMENT_ALLOWED_MIME_TYPES = [
+    'application/pdf',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
+  ];
+
+  /** MIME types accepted for proof file uploads (PDF + common images). */
+  static readonly PROOF_ALLOWED_MIME_TYPES = [
+    'application/pdf',
+    'image/jpeg',
+    'image/png',
+    'image/gif',
+    'image/webp',
+  ];
+
+  /** Maximum size for proof or attachment uploads: 10 MB. */
+  static readonly MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+
+  /**
+   * Returns a presigned PUT URL restricted to allowed proof MIME types (PDF + images) and 10 MB max.
+   * Throws BadRequestException immediately for disallowed contentType.
+   */
+  async getPresignedProofUploadUrl(key: string, contentType: string, expiresIn?: number): Promise<string> {
+    if (!S3Service.PROOF_ALLOWED_MIME_TYPES.includes(contentType)) {
+      throw new BadRequestException(
+        `File type "${contentType}" is not allowed for proof uploads. Accepted: ${S3Service.PROOF_ALLOWED_MIME_TYPES.join(', ')}`,
+      );
+    }
+    const command = new PutObjectCommand({
+      Bucket: this.bucket,
+      Key: key,
+      ContentType: contentType,
+    });
+    return getSignedUrl(this.s3, command, { expiresIn: expiresIn ?? this.defaultPresignedUrlExpiry });
+  }
+
+  /**
+   * Returns a presigned PUT URL restricted to PDF/DOCX MIME types and 10 MB max.
+   * Used for JD/engagement attachment uploads.
+   */
+  async getPresignedAttachmentUploadUrl(key: string, contentType: string, expiresIn?: number): Promise<string> {
+    if (!S3Service.ATTACHMENT_ALLOWED_MIME_TYPES.includes(contentType)) {
+      throw new BadRequestException(
+        `File type "${contentType}" is not allowed for attachments. Accepted: ${S3Service.ATTACHMENT_ALLOWED_MIME_TYPES.join(', ')}`,
+      );
+    }
+    const command = new PutObjectCommand({
+      Bucket: this.bucket,
+      Key: key,
+      ContentType: contentType,
+    });
+    return getSignedUrl(this.s3, command, { expiresIn: expiresIn ?? this.defaultPresignedUrlExpiry });
+  }
+
+  /**
+   * Verifies an already-uploaded object has an allowed Content-Type and is within size limits.
+   * Deletes the object and throws BadRequestException if either check fails.
+   */
+  async verifyUpload(
+    key: string,
+    allowedTypes: string[],
+    maxBytes = S3Service.MAX_UPLOAD_BYTES,
+  ): Promise<{ contentType: string; size: number }> {
+    const command = new HeadObjectCommand({ Bucket: this.bucket, Key: key });
+    let head: any;
+    try {
+      head = await this.s3.send(command);
+    } catch {
+      throw new BadRequestException(`Uploaded file not found at key: ${key}`);
+    }
+
+    const contentType: string = head.ContentType ?? '';
+    const size: number = head.ContentLength ?? 0;
+
+    if (!allowedTypes.includes(contentType)) {
+      await this.deleteObject(key).catch(() => {});
+      throw new BadRequestException(
+        `Uploaded file has disallowed Content-Type "${contentType}". Accepted: ${allowedTypes.join(', ')}`,
+      );
+    }
+
+    if (size > maxBytes) {
+      await this.deleteObject(key).catch(() => {});
+      throw new BadRequestException(
+        `Uploaded file is ${size} bytes, exceeding the ${maxBytes}-byte limit`,
+      );
+    }
+
+    return { contentType, size };
   }
 
   /**

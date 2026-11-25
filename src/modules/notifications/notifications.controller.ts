@@ -9,6 +9,7 @@ import { Response } from 'express';
 import { UpdateNotificationPreferencesDto } from './dto/update-notification-preferences.dto';
 import { UpdateDigestPreferenceDto } from './dto/update-digest-preference.dto';
 import { CreatePushSubscriptionDto, DeletePushSubscriptionDto } from './dto/push-subscription.dto';
+import { SnoozeNotificationDto } from './dto/snooze-notification.dto';
 import { WebPushService } from './web-push.service';
 
 @ApiTags('notifications')
@@ -162,6 +163,21 @@ export class NotificationsController {
   @ApiResponse({ status: 404, description: 'Notification not found' })
   markRead(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.notificationsService.markRead(id, userId);
+  }
+
+  @Patch(':id/snooze')
+  @ApiOperation({ summary: 'Snooze a notification until a given datetime' })
+  @ApiParam({ name: 'id', description: 'Notification ID' })
+  @ApiResponse({ status: 200, description: 'Notification snoozed' })
+  @ApiResponse({ status: 400, description: 'until must be a valid future datetime' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 404, description: 'Notification not found' })
+  snooze(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @Body() dto: SnoozeNotificationDto,
+  ) {
+    return this.notificationsService.snooze(id, userId, dto.until);
   }
 
   @Patch('read-all')

@@ -24,6 +24,7 @@ import { ApproveMilestoneDto } from './dto/approve-milestone.dto';
 import { SubmitProofDto } from './dto/submit-proof.dto';
 import { RejectProofDto } from './dto/reject-proof.dto';
 import { ProposePartialReleaseDto } from './dto/propose-partial-release.dto';
+import { ConfirmProofUploadDto } from './dto/confirm-proof-upload.dto';
 
 const ALLOWED_EVIDENCE_MIME_TYPES = [
   'image/jpeg',
@@ -140,6 +141,42 @@ export class MilestonesController {
   // ----------------------------------------------------------
   // Proof versions (#376)
   // ----------------------------------------------------------
+
+  @Get(':index/proof/upload-url')
+  @ApiOperation({ summary: 'Get a presigned S3 PUT URL for a proof file (recruiter only); PDF and images up to 10 MB' })
+  @ApiParam({ name: 'engagementId', description: 'Engagement ID' })
+  @ApiParam({ name: 'index', description: 'Milestone index' })
+  @ApiResponse({ status: 200, description: '{ uploadUrl, key, expiresIn }' })
+  @ApiResponse({ status: 400, description: 'Disallowed MIME type' })
+  @ApiResponse({ status: 403, description: 'Not the recruiter' })
+  @ApiResponse({ status: 404, description: 'Milestone not found' })
+  getProofUploadUrl(
+    @Param('engagementId') engagementId: string,
+    @Param('index', ParseIntPipe) index: number,
+    @CurrentUser() user: any,
+    @Body('contentType') contentType: string,
+  ) {
+    if (!contentType) throw new BadRequestException('contentType is required');
+    return this.proofVersions.getProofUploadUrl(engagementId, index, user, contentType);
+  }
+
+  @Post(':index/proof/confirm-upload')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Confirm a direct-to-S3 proof upload (recruiter only); verifies MIME type and size, then records proof version' })
+  @ApiParam({ name: 'engagementId', description: 'Engagement ID' })
+  @ApiParam({ name: 'index', description: 'Milestone index' })
+  @ApiResponse({ status: 201, description: 'Proof version recorded; milestone is PROOF_SUBMITTED' })
+  @ApiResponse({ status: 400, description: 'Disallowed Content-Type or file too large' })
+  @ApiResponse({ status: 403, description: 'Not the recruiter' })
+  @ApiResponse({ status: 422, description: 'Milestone is not PENDING' })
+  confirmProofUpload(
+    @Param('engagementId') engagementId: string,
+    @Param('index', ParseIntPipe) index: number,
+    @Body() dto: ConfirmProofUploadDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.proofVersions.confirmProofUpload(engagementId, index, user, dto.key);
+  }
 
   @Post(':index/proof')
   @HttpCode(HttpStatus.CREATED)
