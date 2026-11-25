@@ -41,7 +41,18 @@ export class ApiKeyScopesGuard implements CanActivate {
     const request = context.switchToHttp().getRequest();
     const user = request.user;
 
-    // Not authenticated via API key (e.g. JWT) — scopes don't apply.
+    // OAuth client tokens are always scope-restricted; an empty scope set grants nothing.
+    if (user?.authType === 'oauth_client') {
+      const tokenScopes: string[] = user.scopes ?? [];
+      if (!requiredScopes.some((s) => tokenScopes.includes(s))) {
+        throw new ForbiddenException(
+          `OAuth token lacks required scope. Required one of: ${requiredScopes.join(', ')}`,
+        );
+      }
+      return true;
+    }
+
+    // Not authenticated via API key (e.g. user JWT) — scopes don't apply.
     if (!user || user.authType !== 'api_key') {
       return true;
     }

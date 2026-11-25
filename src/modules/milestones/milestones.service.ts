@@ -9,6 +9,7 @@ import { DisputeActor, DisputesService } from '../disputes/disputes.service';
 import { BulkMilestoneItemDto } from './dto/bulk-create-milestones.dto';
 import { ProofVersionsService } from './proof-versions.service';
 import { FileScanService } from '../../common/file-scan/file-scan.service';
+import { buildProofChecklist, normalizeProofRequirements } from './proof-requirements';
 
 @Injectable()
 export class MilestonesService {
@@ -72,7 +73,11 @@ export class MilestonesService {
     const { engagement: _, ...milestone } = m as any;
     const approvals = await this.getApprovalCount(milestone.id);
     const proofVersions = await this.proofVersions.history(milestone.id);
-    return { ...milestone, approvals, proofVersions };
+    const proofChecklist = buildProofChecklist(
+      milestone.proofRequirements ?? [],
+      (proofVersions[0] as any)?.requirementEvidence,
+    );
+    return { ...milestone, approvals, proofVersions, proofChecklist };
   }
 
   async findById(id: string, user: any) {
@@ -85,7 +90,11 @@ export class MilestonesService {
     const { engagement: _, ...milestone } = m as any;
     const approvals = await this.getApprovalCount(milestone.id);
     const proofVersions = await this.proofVersions.history(milestone.id);
-    return { ...milestone, approvals, proofVersions };
+    const proofChecklist = buildProofChecklist(
+      milestone.proofRequirements ?? [],
+      (proofVersions[0] as any)?.requirementEvidence,
+    );
+    return { ...milestone, approvals, proofVersions, proofChecklist };
   }
 
   private checkPartyAccess(engagement: any, user: any): void {
@@ -748,6 +757,29 @@ export class MilestonesService {
         });
       }
       return tx.milestone.findMany({ where: { engagementId }, orderBy: { milestoneIndex: 'asc' } });
+    });
+  }
+
+  /**
+   * Company replaces a milestone's proof checklist. Only allowed before proof
+   * is under review, so a recruiter's submission is never judged against a
+   * list that changed after they submitted.
+   */
+  async setProofRequirements(engagementId: string, milestoneIndex: number, requirements: string[], user: any) {
+    const m = await this.prisma.milestone.findUnique({
+      where: { engagementId_milestoneIndex: { engagementId, milestoneIndex } },
+      include: { engagement: true },
+    });
+    if (!m) throw new NotFoundException(`Milestone ${milestoneIndex} not found on engagement ${engagementId}`);
+    if (user?.role !== 'ADMIN' && (m as any).engagement.companyAddress !== user?.stellarAddress) {
+      throw new ForbiddenException('Only the company can change proof requirements');
+    }
+    if (m.status !== MilestoneStatus.PENDING && m.status !== MilestoneStatus.LOCKED) {
+      throw new UnprocessableEntityException('Proof requirements can only be changed while the milestone is LOCKED or PENDING.');
+    }
+    return this.prisma.milestone.update({
+      where: { id: m.id },
+      data: { proofRequirements: normalizeProofRequirements(requirements) },
     });
   }
 

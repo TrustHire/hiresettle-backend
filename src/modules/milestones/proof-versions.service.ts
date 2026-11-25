@@ -9,12 +9,16 @@ import { MilestoneStatus, NotificationType, Prisma, ProofVersionStatus } from '@
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PartyUser, requirePartyRole } from './engagement-party';
+import { RequirementEvidence, assertRequirementsSatisfied } from './proof-requirements';
 
 export interface ProofInput {
   proofUrl?: string | null;
   content?: string | null;
   proofHash?: string | null;
   submittedById?: string | null;
+  /** Per-requirement evidence; must cover every milestone.proofRequirements item. */
+  requirements?: RequirementEvidence[];
+  requirementEvidence?: RequirementEvidence[] | null;
 }
 
 /**
@@ -71,6 +75,9 @@ export class ProofVersionsService {
           content: input.content ?? null,
           proofHash: input.proofHash || null,
           submittedById: input.submittedById ?? null,
+          ...(input.requirementEvidence?.length
+            ? { requirementEvidence: input.requirementEvidence as unknown as Prisma.InputJsonValue }
+            : {}),
         },
       });
     } catch (error) {
@@ -86,8 +93,9 @@ export class ProofVersionsService {
   async submitProof(engagementId: string, milestoneIndex: number, user: PartyUser, input: ProofInput) {
     const { milestone, engagement } = await this.load(engagementId, milestoneIndex);
     requirePartyRole(engagement, user, ['RECRUITER'], 'Only the recruiter can submit proof');
-    if (!input.proofUrl && !input.content && !input.proofHash) {
-      throw new BadRequestException('Provide at least one of proofUrl, content or proofHash.');
+    const proofRequirements: string[] = (milestone as any).proofRequirements ?? [];
+    if (!input.proofUrl && !input.content && !input.proofHash && !input.requirements?.length) {
+      throw new BadRequestException('Provide at least one of proofUrl, content, proofHash or requirements.');
     }
 
     if (milestone.status !== MilestoneStatus.PENDING) {
@@ -96,13 +104,17 @@ export class ProofVersionsService {
       );
     }
 
+    // Every checklist item must be satisfied before the proof is accepted for review.
+    const requirementEvidence = assertRequirementsSatisfied(proofRequirements, input.requirements);
+
     // A version left pending on a PENDING milestone (e.g. after an admin status
     // reset) is superseded rather than silently reused.
     await this.prisma.milestoneProofVersion.updateMany({
       where: { milestoneId: milestone.id, status: ProofVersionStatus.SUBMITTED },
       data: { status: ProofVersionStatus.REJECTED, reviewedAt: new Date(), rejectionReason: 'Superseded by a new submission' },
     });
-    const version = await this.recordVersion(milestone.id, { ...input, submittedById: user.id });
+    const { requirements: _requirements, ...proof } = input;
+    const version = await this.recordVersion(milestone.id, { ...proof, requirementEvidence, submittedById: user.id });
     const updated = await this.prisma.milestone.update({
       where: { id: milestone.id },
       data: {

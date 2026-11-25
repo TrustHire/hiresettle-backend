@@ -34,6 +34,6 @@ import { ApiKeysController } from './api-keys.controller';
   ],
   controllers: [AuthController, JwksController, ApiKeysController],
   providers: [AuthService, ApiKeysService, JwtStrategy, ApiKeyGuard, JwtOrApiKeyGuard, ApiKeyScopesGuard],
-  exports: [JwtKeysModule, AuthService, ApiKeysService, ApiKeyGuard, JwtOrApiKeyGuard, ApiKeyScopesGuard],
+  exports: [JwtModule, JwtKeysModule, AuthService, ApiKeysService, ApiKeyGuard, JwtOrApiKeyGuard, ApiKeyScopesGuard],
 })
 export class AuthModule {}

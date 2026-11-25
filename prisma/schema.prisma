@@ -300,6 +300,10 @@ model User {
   payouts              Payout[]
   claimableBalances    ClaimableBalance[]
   costCenters          CostCenter[]             @relation("CompanyCostCenters")
+  oauthClients         OAuthClient[]            @relation("CompanyOAuthClients")
+  accountingConnections AccountingConnection[]  @relation("CompanyAccountingConnections")
+  accountMappings      AccountMapping[]         @relation("CompanyAccountMappings")
+  atsIntegrations      AtsIntegration[]         @relation("CompanyAtsIntegrations")
   agencyMembership     AgencyMember?
 
   @@index([role, deactivatedAt])
@@ -552,6 +556,8 @@ model Milestone {
   approachingNotificationSent Boolean @default(false)
   placementDueAt   DateTime?      // optional expected proof-submission date for PLACEMENT milestones (#260)
   reminderSent     Boolean        @default(false) // true once the due-soon reminder has been sent (#260)
+  proofRequirements String[]      @default([]) // checklist every proof submission must satisfy, e.g. "Signed offer letter"
+  readyForProofAt  DateTime?      // set when an ATS reports the candidate as hired
   status           MilestoneStatus @default(PENDING)
   paymentReleased  BigInt?
   confirmedAt      DateTime?
