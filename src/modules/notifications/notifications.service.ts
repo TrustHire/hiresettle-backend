@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Inject,
   Injectable,
   Logger,
@@ -380,6 +381,8 @@ export class NotificationsService {
   ) {
     const where: any = { userId };
     if (unreadOnly) where.read = false;
+    // Exclude snoozed notifications (snoozedUntil is null or in the past)
+    where.OR = [{ snoozedUntil: null }, { snoozedUntil: { lte: new Date() } }];
 
     const notifications = await this.prisma.notification.findMany({
       where,
@@ -414,15 +417,32 @@ export class NotificationsService {
   }
 
   async getUnreadCount(userId: string) {
+    const now = new Date();
     return {
       unreadCount: await this.prisma.notification.count({
-        where: { userId, read: false },
+        where: {
+          userId,
+          read: false,
+          OR: [{ snoozedUntil: null }, { snoozedUntil: { lte: now } }],
+        },
       }),
     };
   }
 
-  async markRead(notificationId: string, userId: string) {
-    return this.prisma.notification.updateMany({
+  async snooze(notificationId: string, userId: string, until: string) {
+    const snoozedUntil = new Date(until);
+    if (isNaN(snoozedUntil.getTime()) || snoozedUntil <= new Date()) {
+      throw new BadRequestException('until must be a valid future datetime');
+    }
+    const { count } = await this.prisma.notification.updateMany({
+      where: { id: notificationId, userId },
+      data: { snoozedUntil },
+    });
+    if (count === 0) throw new NotFoundException(`Notification ${notificationId} not found`);
+    return { snoozedUntil };
+  }
+
+  async markRead(notificationId: string, userId: string) {    return this.prisma.notification.updateMany({
       where: { id: notificationId, userId },
       data: { read: true },
     });

@@ -7,6 +7,7 @@ import { EngagementNotesService } from './engagement-notes.service';
 import { EngagementWatchersService } from './engagement-watchers.service';
 import { EngagementImportService } from './engagement-import.service';
 import { EngagementCandidateDetailsService } from './engagement-candidate-details.service';
+import { EngagementAttachmentsService } from './engagement-attachments.service';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { AdminModule } from '../admin/admin.module';
 import { PrismaModule } from '../../common/prisma/prisma.module';
@@ -16,6 +17,7 @@ import { IdempotencyModule } from '../../common/idempotency/idempotency.module';
 import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
 import { AuthModule } from '../auth/auth.module';
 import { ExchangeRatesModule } from '../../common/exchange-rates/exchange-rates.module';
+import { S3Module } from '../../common/s3/s3.module';
 
 @Module({
   imports: [
@@ -25,6 +27,7 @@ import { ExchangeRatesModule } from '../../common/exchange-rates/exchange-rates.
     IdempotencyModule,
     AuthModule,
     ExchangeRatesModule,
+    S3Module,
     MulterModule.register({ limits: { fileSize: 5 * 1024 * 1024 } }), // max 5 MB CSV
   ],
   controllers: [EngagementsController],
@@ -38,6 +41,7 @@ import { ExchangeRatesModule } from '../../common/exchange-rates/exchange-rates.
     EngagementWatchersService,
     EngagementImportService,
     EngagementCandidateDetailsService,
+    EngagementAttachmentsService,
   ],
   exports: [
     EngagementsService,

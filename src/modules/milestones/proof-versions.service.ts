@@ -8,6 +8,7 @@ import {
 import { MilestoneStatus, NotificationType, Prisma, ProofVersionStatus } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { S3Service } from '../../common/s3/s3.service';
 import { PartyUser, requirePartyRole } from './engagement-party';
 
 export interface ProofInput {
@@ -29,6 +30,7 @@ export class ProofVersionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
+    private readonly s3: S3Service,
   ) {}
 
   latest(milestoneId: string) {
@@ -80,6 +82,46 @@ export class ProofVersionsService {
       }
       throw error;
     }
+  }
+
+  /**
+   * GET /engagements/:id/milestones/:index/proof/upload-url
+   * Returns a presigned S3 PUT URL restricted to allowed proof MIME types (PDF, JPEG, PNG, GIF, WEBP)
+   * and the 10 MB size limit. The recruiter must be a participant.
+   */
+  async getProofUploadUrl(
+    engagementId: string,
+    milestoneIndex: number,
+    user: PartyUser,
+    contentType: string,
+  ): Promise<{ uploadUrl: string; key: string; expiresIn: number }> {
+    const { engagement } = await this.load(engagementId, milestoneIndex);
+    requirePartyRole(engagement, user, ['RECRUITER'], 'Only the recruiter can upload proof files');
+
+    const ext = contentType.split('/')[1]?.replace('jpeg', 'jpg') ?? 'bin';
+    const key = `proofs/${engagementId}/${milestoneIndex}/${user.id}/${Date.now()}.${ext}`;
+    const expiresIn = 900; // 15 minutes
+    const uploadUrl = await this.s3.getPresignedProofUploadUrl(key, contentType, expiresIn);
+    return { uploadUrl, key, expiresIn };
+  }
+
+  /**
+   * POST /engagements/:id/milestones/:index/proof/confirm-upload
+   * Called after the client PUT the file directly to S3. Verifies Content-Type and size,
+   * then submits the proof using the S3 URL as proofUrl.
+   */
+  async confirmProofUpload(
+    engagementId: string,
+    milestoneIndex: number,
+    user: PartyUser,
+    key: string,
+  ) {
+    // Verify type and size; throws BadRequestException and auto-deletes on violation
+    await this.s3.verifyUpload(key, S3Service.PROOF_ALLOWED_MIME_TYPES, S3Service.MAX_UPLOAD_BYTES);
+
+    // Build a stable download URL (presigned, 1-hour expiry) to store as proofUrl
+    const proofUrl = await this.s3.getPresignedUrl(key, 3600);
+    return this.submitProof(engagementId, milestoneIndex, user, { proofUrl });
   }
 
   /** POST /engagements/:id/milestones/:index/proof — recruiter submits or resubmits proof. */
