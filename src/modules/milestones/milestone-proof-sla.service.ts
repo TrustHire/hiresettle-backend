@@ -1,4 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
+import { PayoutDeliveryService } from '../payouts/payout-delivery.service';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { MilestoneStatus, NotificationType, ProofSlaAction, ProofVersionStatus, UserRole } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -38,6 +39,7 @@ export class MilestoneProofSlaService {
     private readonly notifications: NotificationsService,
     private readonly milestones: MilestonesService,
     private readonly lock: DistributedLockService,
+    @Optional() private readonly payoutDelivery?: PayoutDeliveryService,
   ) {}
 
   static elapsedFraction(submittedAt: Date, slaDays: number, now: Date): number {
@@ -163,7 +165,11 @@ export class MilestoneProofSlaService {
   private async autoApprove(version: PendingVersion, now: Date) {
     const { milestone } = version;
     try {
-      await this.stellar.releaseMilestonePayment(milestone.engagementId, milestone.milestoneIndex);
+      if (this.payoutDelivery) {
+        await this.payoutDelivery.releaseMilestone(milestone.engagementId, milestone.milestoneIndex);
+      } else {
+        await this.stellar.releaseMilestonePayment(milestone.engagementId, milestone.milestoneIndex);
+      }
     } catch (error) {
       // Release the claim so the next run retries the payout.
       await this.prisma.milestoneProofVersion.update({ where: { id: version.id }, data: { slaExpiredAt: null } });

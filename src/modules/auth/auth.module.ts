@@ -17,6 +17,7 @@ import { ApiKeyScopesGuard } from '../../common/guards/api-key-scopes.guard';
 import { JwtKeysModule } from './jwt-keys/jwt-keys.module';
 import { JwtKeyStore } from './jwt-keys/jwt-key-store.service';
 import { JwksController } from './jwt-keys/jwks.controller';
+import { ApiKeysController } from './api-keys.controller';
 
 @Module({
   imports: [
@@ -31,7 +32,7 @@ import { JwksController } from './jwt-keys/jwks.controller';
         keyStore.jwtModuleOptions(config.get<string>('JWT_ACCESS_EXPIRES_IN', '15m')),
     }),
   ],
-  controllers: [AuthController, JwksController],
+  controllers: [AuthController, JwksController, ApiKeysController],
   providers: [AuthService, ApiKeysService, JwtStrategy, ApiKeyGuard, JwtOrApiKeyGuard, ApiKeyScopesGuard],
   exports: [JwtKeysModule, AuthService, ApiKeysService, ApiKeyGuard, JwtOrApiKeyGuard, ApiKeyScopesGuard],
 })

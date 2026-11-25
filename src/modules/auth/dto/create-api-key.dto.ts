@@ -4,7 +4,10 @@ import {
   IsArray,
   IsDateString,
   IsEnum,
+  IsInt,
   IsOptional,
+  Max,
+  Min,
   IsString,
   IsUUID,
   MaxLength,
@@ -47,4 +50,18 @@ export class CreateApiKeyDto {
   @ArrayUnique()
   @IsEnum(ApiKeyScope, { each: true })
   scopes?: ApiKeyScope[];
+
+  @ApiPropertyOptional({ description: 'Requests per throttle window for this key; omit for the global default', minimum: 1 })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(1_000_000)
+  rateLimit?: number;
+
+  @ApiPropertyOptional({ description: 'Requests per calendar month (UTC); omit for unlimited', minimum: 1 })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(2_000_000_000)
+  monthlyQuota?: number;
 }
