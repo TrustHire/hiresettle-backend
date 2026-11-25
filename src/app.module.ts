@@ -50,6 +50,8 @@ import stellarConfig from "./config/stellar.config";
 import { MaintenanceModeModule } from "./common/maintenance/maintenance-mode.module";
 import { FeatureFlagsModule } from "./modules/feature-flags/feature-flags.module";
 import { DevModuleFactory } from "./modules/dev/dev-module.factory";
+import { PayoutsModule } from "./modules/payouts/payouts.module";
+import { AuditChainModule } from "./modules/audit-chain/audit-chain.module";
 
 export function shouldSkipThrottle(req: { path?: string; url?: string; originalUrl?: string }): boolean {
   const path = req.path ?? req.originalUrl?.split('?')[0] ?? req.url?.split('?')[0] ?? '';
@@ -112,9 +114,8 @@ export function shouldSkipThrottle(req: { path?: string; url?: string; originalU
     CompaniesModule,
     CostCentersModule,
     AgenciesModule,
-    OAuthClientsModule,
-    AccountingModule,
-    AtsModule,
+    PayoutsModule,
+    AuditChainModule,
     EmailModule,
     GraphqlModule,
     FeatureFlagsModule,

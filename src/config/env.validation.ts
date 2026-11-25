@@ -118,4 +118,24 @@ export const envValidationSchema = Joi.object({
   // The application also force-disables dev endpoints when NODE_ENV=production or
   // STELLAR_NETWORK=mainnet, regardless of this value.
   ENABLE_DEV_ENDPOINTS: Joi.boolean().truthy('true', '1', 'yes').falsy('false', '0', 'no').default(false),
+
+  // SEP-24 fiat off-ramp anchors: JSON array of
+  // [{ "id": "moneygram", "name": "MoneyGram", "homeDomain": "stellar.moneygram.com", "assets": ["USDC"] }]
+  PAYOUT_ANCHORS: Joi.string().allow('').default('[]'),
+  PAYOUT_POLL_MAX_AGE_HOURS: Joi.number().integer().min(1).default(168),
+
+  // Claimable-balance fallback for recruiters without a trustline
+  CLAIMABLE_BALANCE_RECLAIM_DAYS: Joi.number().integer().min(1).default(90),
+  CLAIMABLE_BALANCE_REMINDER_DAYS: Joi.number().integer().min(1).default(3),
+  CLAIMABLE_BALANCE_MAX_REMINDERS: Joi.number().integer().min(0).default(5),
+
+  // Daily audit-chain root anchoring on Stellar (optional)
+  // Optional HMAC key for the audit chain; without it hashes are plain SHA-256
+  AUDIT_CHAIN_HMAC_KEY: Joi.string().min(32).allow('').optional(),
+
+  // Ceilings for API-key limits that key owners may set themselves (admins are not capped)
+  API_KEY_OWNER_MAX_RATE_LIMIT: Joi.number().integer().min(1).optional(),
+  API_KEY_OWNER_MAX_MONTHLY_QUOTA: Joi.number().integer().min(1).default(100000),
+
+  AUDIT_CHAIN_ANCHOR_ENABLED: Joi.boolean().truthy('true', '1', 'yes').falsy('false', '0', 'no').default(false),
 }).unknown(true);

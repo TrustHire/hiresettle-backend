@@ -1,5 +1,6 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { Logger } from '@nestjs/common';
+import { Logger, Optional } from '@nestjs/common';
+import { PayoutDeliveryService } from '../modules/payouts/payout-delivery.service';
 import { Job } from 'bullmq';
 import { StellarService } from '../common/stellar/stellar.service';
 import { QUEUE_STELLAR_TX } from './queues.module';
@@ -17,7 +18,10 @@ export interface StellarTxJobData {
 export class StellarTxProcessor extends WorkerHost {
   private readonly logger = new Logger(StellarTxProcessor.name);
 
-  constructor(private readonly stellar: StellarService) {
+  constructor(
+    private readonly stellar: StellarService,
+    @Optional() private readonly payoutDelivery?: PayoutDeliveryService,
+  ) {
     super();
   }
 
@@ -27,7 +31,11 @@ export class StellarTxProcessor extends WorkerHost {
 
     switch (action) {
       case 'release_payment':
-        await this.stellar.releaseMilestonePayment(engagementId, milestoneIndex);
+        if (this.payoutDelivery) {
+          await this.payoutDelivery.releaseMilestone(engagementId, milestoneIndex);
+        } else {
+          await this.stellar.releaseMilestonePayment(engagementId, milestoneIndex);
+        }
         break;
       case 'resolve_dispute':
         await this.stellar.resolveMilestoneDispute(engagementId, milestoneIndex, approved ?? false);
