@@ -17,6 +17,7 @@ This directory contains the technical documentation for the HireSettle backend.
 | [Database Schema](./database-schema.md) | Summary of all Prisma models, their purpose, key fields, and relationships. |
 | [Data Retention](./data-retention.md) | Retention windows, account deletion lifecycle, scheduled PII anonymization job, and env vars. |
 | [Deployment](./deployment.md) | Production deployment, build process, and migration ordering. |
+| [Email Deliverability](./email-deliverability.md) | Bounce and complaint handling, the `SuppressedEmail` model, admin suppression removal, and `List-Unsubscribe` behaviour. |
 | [Environment Variables](./environment-variables.md) | Complete reference for every environment variable, validation rules, and defaults. |
 | [Error Codes](./error-codes.md) | API error response envelope shape, status codes, and handling guidance. |
 | [Feature Flags](./feature-flags.md) | How to create, toggle, and check feature flags in code, plus admin API reference and naming conventions. |
