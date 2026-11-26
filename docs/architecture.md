@@ -66,6 +66,13 @@
 | `common/S3Module` | S3 file upload and presigned URL generation |
 | `common/CacheModule` | In-memory (or Redis-backed) cache-aside layer |
 
+## Engagement & Milestone Lifecycle
+
+See [Engagement Lifecycle](./engagement-lifecycle.md) for the `EngagementStatus`
+and `MilestoneStatus` state diagrams, the endpoints / chain events / cron jobs
+that drive each transition, and how the retention scheduler, auto-escalation,
+partial releases, and proof versions fit in.
+
 ## Data Flow: Request to On-Chain Event
 
 ```
@@ -99,6 +106,4 @@ Frontend                 Backend                         Stellar Network
 
 **Retention timer estimation** — Rather than querying the chain on every tick, the backend pre-calculates estimated unlock timestamps (`unlockAt`) when an engagement is created and stores them in `RetentionSchedule`. The scheduler uses these estimates to fire notifications and unlock checks without hammering the RPC.
 
-**No funded backend account** — The backend intentionally holds no funds. `unlock_milestone()` is called from the frontend (via Freighter wallet). The backend calls `is_milestone_unlockable()` to confirm the ledger has passed, then marks the milestone `PENDING` so the recruiter knows to submit proof.
-
-**Authentication** — Primary interactive auth is email/password (plus optional Google OAuth2), issuing access/refresh JWT pairs. Server-to-server callers may use hashed `X-Api-Key` credentials on selected routes (engagements, webhook subscriptions) as an alternative to a user JWT.
+**No funded backend account** — The backend intentionally holds no funds. `unlock_milestone()` is called from the frontend (via Freighter wallet). The backend calls `is_milestone_unlockable()` to confirm the ledger h
