@@ -1,6 +1,10 @@
 import {
+  Body,
   Controller,
   Get,
+  Param,
+  Patch,
+  Post,
   Query,
   Req,
   Res,
@@ -52,5 +56,34 @@ export class EngagementsController {
   @Get(':id')
   async detail(@Req() req, @Param('id') id: string) {
     return this.engagementsService.getDetail(req.user.companyId, id);
+  }
+
+  @Get(':id/candidates')
+  async listCandidates(@Req() req, @Param('id') id: string) {
+    return this.engagementsService.listCandidateSubmissions(req.user, id);
+  }
+
+  @Post(':id/candidates')
+  async submitCandidate(
+    @Req() req,
+    @Param('id') id: string,
+    @Body() body: SubmitCandidateDto,
+  ) {
+    return this.engagementsService.submitCandidate(req.user, id, body);
+  }
+
+  @Patch(':id/candidates/:candidateId/stage')
+  async updateCandidateStage(
+    @Req() req,
+    @Param('id') id: string,
+    @Param('candidateId') candidateId: string,
+    @Body() body: UpdateCandidateStageDto,
+  ) {
+    return this.engagementsService.updateCandidateStage(
+      req.user,
+      id,
+      candidateId,
+      body,
+    );
   }
 }
