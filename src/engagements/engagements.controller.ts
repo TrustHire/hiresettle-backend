@@ -1,6 +1,9 @@
 import {
+  Body,
   Controller,
   Get,
+  Param,
+  Post,
   Query,
   Req,
   Res,
@@ -10,6 +13,7 @@ import { Response } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { EngagementsService } from './engagements.service';
 import { ListEngagementsQueryDto } from './dto/list-engagements-query.dto';
+import { CreateEngagementProposalDto } from './dto/create-engagement-proposal.dto';
 
 @Controller('engagements')
 @UseGuards(JwtAuthGuard)
@@ -52,5 +56,32 @@ export class EngagementsController {
   @Get(':id')
   async detail(@Req() req, @Param('id') id: string) {
     return this.engagementsService.getDetail(req.user.companyId, id);
+  }
+
+  @Post(':id/proposals')
+  async createProposal(
+    @Req() req,
+    @Param('id') id: string,
+    @Body() dto: CreateEngagementProposalDto,
+  ) {
+    return this.engagementsService.createProposal(req.user, id, dto);
+  }
+
+  @Post(':id/proposals/:proposalId/accept')
+  async acceptProposal(
+    @Req() req,
+    @Param('id') id: string,
+    @Param('proposalId') proposalId: string,
+  ) {
+    return this.engagementsService.acceptProposal(req.user, id, proposalId);
+  }
+
+  @Post(':id/proposals/:proposalId/reject')
+  async rejectProposal(
+    @Req() req,
+    @Param('id') id: string,
+    @Param('proposalId') proposalId: string,
+  ) {
+    return this.engagementsService.rejectProposal(req.user, id, proposalId);
   }
 }
