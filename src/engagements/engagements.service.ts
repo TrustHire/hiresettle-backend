@@ -100,6 +100,8 @@ function escapeCsvValue(value: unknown): string {
 
 @Injectable()
 export class EngagementsService {
+  private readonly candidateSubmissions = new Map<string, CandidateSubmission>();
+
   constructor(
     @InjectRepository(Engagement)
     private readonly engagementRepository: Repository<Engagement>,
@@ -203,6 +205,195 @@ export class EngagementsService {
         const until = (row as any).exclusiveUntil;
         return until && new Date(until).getTime() <= horizon.getTime();
       }),
+    );
+  }
+
+  /**
+   * Submits a candidate to an engagement. Only the engagement's recruiter may
+   * submit candidates; the submission starts in the SUBMITTED stage.
+   */
+  async submitCandidate(
+    engagementId: string,
+    input: SubmitCandidateInput,
+  ): Promise<CandidateSubmission> {
+    const engagement = await this.findOne(engagementId);
+
+    if ((engagement as any).recruiterId !== input.recruiterId) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        error: 'ENGAGEMENT_CANDIDATE_FORBIDDEN',
+        message: 'Only the engagement recruiter can submit candidates',
+      });
+    }
+
+    const now = new Date();
+    const submission: CandidateSubmission = {
+      id: this.generateId(),
+      engagementId,
+      recruiterId: input.recruiterId,
+      name: input.name,
+      resumeKey: input.resumeKey,
+      stage: 'SUBMITTED',
+      notes: input.notes ?? null,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.candidateSubmissions.set(submission.id, submission);
+
+    await this.recordCandidateAudit(engagementId, 'candidate.submitted', {
+      candidateId: submission.id,
+      recruiterId: submission.recruiterId,
+      name: submission.name,
+      stage: submission.stage,
+    });
+
+    return submission;
+  }
+
+  /**
+   * Moves a candidate through the pipeline. Only the engagement's company may
+   * change stages. Every change is audited and the recruiter is notified.
+   * Marking a candidate HIRED pre-fills the placed-candidate details.
+   */
+  async changeCandidateStage(
+    engagementId: string,
+    candidateId: string,
+    input: ChangeCandidateStageInput,
+  ): Promise<CandidateSubmission> {
+    const engagement = await this.findOne(engagementId);
+
+    if ((engagement as any).companyId !== input.companyId) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        error: 'ENGAGEMENT_CANDIDATE_FORBIDDEN',
+        message: 'Only the engagement company can change candidate stages',
+      });
+    }
+
+    if (!CANDIDATE_STAGES.includes(input.stage)) {
+      throw new ConflictException({
+        statusCode: 409,
+        error: 'ENGAGEMENT_CANDIDATE_INVALID_STAGE',
+        message: `Invalid candidate stage: ${input.stage}`,
+      });
+    }
+
+    const submission = this.candidateSubmissions.get(candidateId);
+    if (!submission || submission.engagementId !== engagementId) {
+      throw new NotFoundException(`Candidate ${candidateId} not found`);
+    }
+
+    const previousStage = submission.stage;
+    submission.stage = input.stage;
+    submission.updatedAt = new Date();
+    this.candidateSubmissions.set(submission.id, submission);
+
+    await this.recordCandidateAudit(engagementId, 'candidate.stage_changed', {
+      candidateId: submission.id,
+      from: previousStage,
+      to: submission.stage,
+    });
+
+    await this.notifyRecruiterOfStageChange(engagement, submission, previousStage);
+
+    if (submission.stage === 'HIRED') {
+      await this.prefillPlacedCandidate(engagement, submission);
+    }
+
+    return submission;
+  }
+
+  /**
+   * Lists candidate submissions for an engagement. Only engagement parties
+   * (the recruiter or the company) may read submissions.
+   */
+  async findCandidates(
+    engagementId: string,
+    requesterId: string,
+  ): Promise<CandidateSubmission[]> {
+    const engagement = await this.findOne(engagementId);
+
+    const isParty =
+      (engagement as any).recruiterId === requesterId ||
+      (engagement as any).companyId === requesterId;
+
+    if (!isParty) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        error: 'ENGAGEMENT_CANDIDATE_FORBIDDEN',
+        message: 'Only engagement parties can read candidate submissions',
+      });
+    }
+
+    return Array.from(this.candidateSubmissions.values()).filter(
+      (submission) => submission.engagementId === engagementId,
+    );
+  }
+
+  private async recordCandidateAudit(
+    engagementId: string,
+    action: string,
+    data: Record<string, any>,
+  ): Promise<void> {
+    const engagement = await this.engagementRepository.findOne({
+      where: { id: engagementId },
+    });
+    if (!engagement) {
+      return;
+    }
+    const auditLog: any[] = ((engagement as any).auditLog as any[]) ?? [];
+    auditLog.push({
+      id: this.generateId(),
+      action,
+      timestamp: new Date().toISOString(),
+      data,
+    });
+    (engagement as any).auditLog = auditLog;
+    await this.engagementRepository.save(engagement);
+  }
+
+  private async notifyRecruiterOfStageChange(
+    engagement: Engagement,
+    submission: CandidateSubmission,
+    previousStage: CandidateStage,
+  ): Promise<void> {
+    const notifications: any[] =
+      ((engagement as any).notifications as any[]) ?? [];
+    notifications.push({
+      id: this.generateId(),
+      recipientId: submission.recruiterId,
+      type: 'candidate.stage_changed',
+      timestamp: new Date().toISOString(),
+      data: {
+        engagementId: engagement.id,
+        candidateId: submission.id,
+        candidateName: submission.name,
+        from: previousStage,
+        to: submission.stage,
+      },
+    });
+    (engagement as any).notifications = notifications;
+    await this.engagementRepository.save(engagement);
+  }
+
+  private async prefillPlacedCandidate(
+    engagement: Engagement,
+    submission: CandidateSubmission,
+  ): Promise<void> {
+    (engagement as any).placedCandidate = {
+      candidateId: submission.id,
+      name: submission.name,
+      resumeKey: submission.resumeKey,
+      recruiterId: submission.recruiterId,
+    };
+    await this.engagementRepository.save(engagement);
+  }
+
+  private generateId(): string {
+    return (
+      (globalThis as any).crypto?.randomUUID?.() ??
+      `${Date.now()}-${Math.random().toString(36).slice(2)}`
     );
   }
 
